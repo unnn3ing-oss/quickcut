@@ -62,6 +62,11 @@ body { padding-bottom: 20px; }
 .ed-theme-ic { font-size: 16px; line-height: 1; }
 .ed-theme-btn[aria-pressed="true"] { color: var(--accent); }
 
+/* ---- 頁首的「匯出影片」：主要動作，用主色 ---- */
+/* 用 id 選擇器：深色時 html[data-ed-theme] 的 .help-btn 規則比 class 規則優先 */
+.topbar-actions #edExportBtn { background: var(--ed-primary); color: var(--ed-on-primary); }
+.topbar-actions #edExportBtn:hover { background: var(--ed-primary-hover); color: var(--ed-on-primary); }
+
 /* ---- 深色時的頁面其他部分（頁首、主要按鈕） ---- */
 html[data-ed-theme="dark"] body { background: var(--bg); }   /* base.css 的柔和藍色光暈是給淺色用的 */
 html[data-ed-theme="dark"] header.topbar { background: rgba(28, 29, 32, 0.92); }

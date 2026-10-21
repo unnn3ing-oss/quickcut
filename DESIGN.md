@@ -73,7 +73,7 @@
 - 與手動的淡入淡出**相乘**；計畫不看軌道靜音／停用，那些照原本規則另外處理。［程式碼］
 - 時間軸的音訊片段上畫出交叉淡化曲線（`.ed-xfade`），看得出哪裡有自動淡化。［程式碼］
 
-### 匯出：WebCodecs＋自製 MP4
+### 匯出：WebCodecs＋自製 MP4（MOV、WebM 見第 5 節）
 - 編碼交給瀏覽器的 WebCodecs（`VideoEncoder`／`AudioEncoder`），封裝（ISO-BMFF）自己寫。［程式碼］
 - **不用外部函式庫**的原因：專案零依賴、不能載 CDN，而且要能在 `file://` 下用。［推論］
 - 封裝用 ffmpeg 交叉驗證過（`ffprobe` 串流與長度、`ffmpeg -f null` 無錯誤）。［程式碼：test/edit-mp4.test.js］
@@ -158,4 +158,26 @@
 - 「有改動但還沒匯出」的關頁提醒（`state.dirty`）在儲存專案後也會清掉。［程式碼］
 - IndexedDB 打不開（無痕、被封鎖）時所有讀寫都當作沒有，剪輯照常可用，只是沒有自動暫存與記住檔案位置。［程式碼］
 - `Q.project` 的 `ready`／`pendingCount` 要用 `Object.defineProperties` 定義：放進 `Object.assign` 的 getter 會被複製成當下的值（踩過這個坑）。［程式碼］
+
+## 5. 匯出面板與 MOV／WebM（`edit-export.js`）
+
+### 面板
+- 頁首「儲存專案」右邊的「匯出影片」（`#edExportBtn`，從檢視器上方搬過來；id 不變，`edit-ui.js` 只接點擊）打開全畫面的 `<dialog>`：左側快速匯出、右側設定、下方摘要／進度／按鈕。舊對話框的 id（`edExRange`、`edExQuality`、`edExName`、`edExSize`、`edExCodec`、`edExGo`、`edExClose`、`edExMsg`、`edExBar`）都保留，預設值（依專案尺寸、畫質高、自動編碼、MP4）的行為和以前一樣。［程式碼］
+- 設定（`ui.set`）存在 `localStorage` 的 `qc-export`；`plan(p)` 把設定換算成 `run()` 的參數（寬高、位元率、prefer、container、audio、gopSec）。［程式碼］
+- 尺寸只給「保持專案比例」的選項（短邊 2160／1440／1080／720／480）：`render.compose` 是把專案座標直接縮放到畫布，比例不同會被拉伸。平台建議的比例不同時提示，並提供「專案改成 X」（改的是 `#edAspect`，走原本的復原流程；只有匯出的是目前剪輯專案時才有這個按鈕）。［程式碼］［推論：比加黑邊或自動裁切更直覺，也不會偷偷改變構圖］
+- 選平台＝`applyPreset` 一次設定所有欄位（H.264＋AAC＋MP4、尺寸、位元率、聲音位元率、GOP）；之後改任何一項就回到「自訂」，GOP 回到預設 2 秒。［程式碼］
+- 選項狀態由 `pickCodecs` 的 `support`（不管封裝格式，這個瀏覽器能不能編）決定：不支援的、這個格式放不下的選項停用並寫原因；指定的編碼不能用時 `pickCodecs` 依偏好順序改用別的，`note` 說明改用了什麼。［程式碼］
+
+### 平台建議值（2026/10 查證）
+- YouTube：官方上傳建議（support.google.com/youtube/answer/1722171）— H.264 High、closed GOP 為影格率的一半、1080p 8 Mbps（24～30 fps）／12 Mbps（48～60 fps）、2160p 35～45／53～68 Mbps（取 40／60）、AAC-LC 48 kHz。官方頁現在沒寫聲音位元率，384 kbps 是舊版官方頁的立體聲建議。［事實：官方頁］［推論：音訊位元率沿用舊值］
+- Instagram：Meta 沒有公開的完整規格，第三方整理一致的是 1080×1920（9:16）、H.264＋AAC、30 fps 以下、AAC ≥ 128 kbps；位元率各家說法 3.5～8 Mbps，取 5 Mbps（平台會再壓縮，太高沒有幫助）。［推論］
+- Facebook：第三方整理（含 API 文件）— H.264、AAC-LC ≥ 128 kbps、48 kHz、closed GOP 2～5 秒；位元率沒有官方數字，取 8 Mbps。［推論］
+
+### MOV
+- 和 MP4 同一個 muxer，只把 `ftyp` 換成 QuickTime 的 `qt  ` brand（`mp4.mux({ brand: 'qt' })`），其餘 box 一樣。只允許 H.264＋AAC（QuickTime／Apple 裝置不支援 VP9／Opus in MOV）。ffmpeg 交叉驗證：H.264＋AAC 重新封裝成 MOV，解碼的畫面與聲音 md5 和參考檔一樣。［程式碼：test/edit-mp4.test.js］
+
+### WebM
+- 自己寫的 Matroska 子集（`webm.mux`）：EBML 檔頭 → Segment［SeekHead、Info、Tracks、Cluster…、Cues］。時間單位 1 ms（TimestampScale 1e6）；每個影像關鍵格開一個 Cluster（最長 30 秒，區塊時間是 16 位元相對毫秒）；Cues 記每個 Cluster 的位置，SeekHead 指到 Info／Tracks／Cues，位置都用 8 位元組固定長度，大小不受位置影響，只要算一次。［程式碼］
+- Opus：CodecPrivate＝OpusHead（WebCodecs 沒給時自己組），pre-skip 寫進 CodecDelay，SeekPreRoll 80 ms；尾端多出來的樣本用最後一個封包的 BlockGroup＋DiscardPadding 截掉。AV1：CodecPrivate＝av1C（和 MP4 共用 `buildAv1C`），樣本去掉 temporal delimiter。［程式碼］
+- 驗證：單元測試檢查 EBML 每層大小剛好填滿、SeekHead／Cues 的位置指到對的元素；ffmpeg 交叉驗證 VP9＋Opus、AV1＋Opus 重新封裝成 WebM，解碼 md5 和參考檔一樣；e2e 實際從瀏覽器匯出 WebM，聲音起點誤差 3 個樣本。ffprobe 對 Matroska 不回報各串流長度，所以 WebM 只檢查整個檔案的長度。［程式碼］
 
