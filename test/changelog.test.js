@@ -21,7 +21,7 @@ test('每一筆都有簡述與條列', () => {
   }
 });
 
-test('目前版本是 3.10', () => {
+test('目前版本是 3.11', () => {
   const latest = versions.map(Number).sort((a, b) => b - a)[0];
-  assert.equal(latest.toFixed(2), '3.10');
+  assert.equal(latest.toFixed(2), '3.11');
 });

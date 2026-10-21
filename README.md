@@ -163,7 +163,13 @@
 | `edit-fx.js` | 變形、轉場、字幕、詳細內容的欄位定義 |
 | `edit-render.js` | 媒體匯入、播放、畫面合成、音訊 |
 | `edit-stab.js` | 影像穩定（第二階段，目前是佔位） |
-| `edit-ui.js` | 介面與操作（媒體庫、檢視器、工具列、時間軸、詳細內容、快捷鍵） |
+| `edit-ui.js` | 介面共用的常數、狀態與小工具（各區塊拆在下面的 `edit-ui-*.js`） |
+| `edit-ui-media.js` | 左側面板：媒體、特效、字幕 |
+| `edit-ui-viewer.js` | 檢視器、播放控制、輸出比例、預覽框 |
+| `edit-ui-actions.js` | 編輯動作、工具列、快捷鍵 |
+| `edit-ui-timeline.js` | 時間軸（畫面與滑鼠操作） |
+| `edit-ui-inspector.js` | 右側詳細內容 |
+| `edit-ui-main.js` | 啟動與公開 API（最後載入） |
 | `edit-export.js` | 匯出影片：WebCodecs 編碼、MP4／MOV／WebM 封裝（自己寫）、全畫面匯出面板與社群平台快速設定 |
 | `edit-project.js` | 儲存／開啟專案檔（.qcut）、自動暫存（IndexedDB）、重新連結素材 |
 | `whz-heavy.ttf` | 字幕預設字型 WHZ-Heavy |
