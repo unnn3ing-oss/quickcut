@@ -377,7 +377,11 @@ test.after(() => { if (tmp && !process.env.ED_MP4_KEEP) fs.rmSync(tmp, { recursi
 
 const ff = args => execFileSync('ffmpeg', ['-hide_banner', '-nostdin', '-y', ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
 const probe = file => JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-count_frames', '-of', 'json', file]).toString());
-const decodeErrors = file => spawnSync('ffmpeg', ['-v', 'error', '-nostdin', '-i', file, '-f', 'null', '-'], { encoding: 'utf8' }).stderr.trim();
+// ffmpeg 8.0.x 的 Opus parser 在檔尾 flush 時會拿空 buffer 去解析，對所有 Matroska／WebM 的 Opus 都印這一行
+// （MP4 不開 parser 所以不會；8.1 已修：opus/parser.c 加了 buf_size 判斷）。只在 8.0.x 略過這一行，其他錯誤照算。
+const ff80 = hasFF && /^ffmpeg version n?8\.0\b/.test(spawnSync('ffmpeg', ['-version'], { encoding: 'utf8' }).stdout);
+const decodeErrors = file => spawnSync('ffmpeg', ['-v', 'error', '-nostdin', '-i', file, '-f', 'null', '-'], { encoding: 'utf8' }).stderr
+  .split('\n').filter(l => l.trim() && !(ff80 && /^\[opus @ 0x[0-9a-f]+\] Error parsing Opus packet header\.$/.test(l.trim()))).join('\n');
 const md5 = (file, sel) => execFileSync('ffmpeg', ['-v', 'error', '-nostdin', '-i', file, '-map', `0:${sel}:0`, '-fps_mode', 'passthrough', '-f', 'md5', '-']).toString().trim();
 const hasEncoder = name => execFileSync('ffmpeg', ['-hide_banner', '-encoders']).toString().includes(` ${name} `);
 
