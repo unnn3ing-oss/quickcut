@@ -1226,6 +1226,54 @@ async function runViewport(browser, base, fix, [W, H]) {
   const fit = await page.evaluate(() => { const Q = QPTEdit, p = Q.ui.state.project, sc = document.querySelector('.ed-tl-scroll'); return Q.core.projectDuration(p) * Q.ui.ppf <= sc.clientWidth - 150; });
   ok(fit, 'Shift+Z：全部顯示（整個時間軸剛好放進視窗）');
 
+  // ---------------------------------------------------------------- 點軌道標頭：選取整條軌
+  console.log('點軌道標頭：選取整條軌');
+  {
+    const ids = (page, name) => proj(page, (p, Q, n) => { const t = p.tracks.find(x => x.name === n); return Q.core.clipsOnTrack(p, t.id).map(c => c.id); }, name);
+    const sel = page => page.evaluate(() => [...QPTEdit.ui.state.selection].sort());
+    const a1Ids = await ids(page, 'A1'), v1Ids = await ids(page, 'V1');
+    ok(a1Ids.length >= 2 && v1Ids.length >= 2, `A1、V1 各有好幾個片段（${a1Ids.length}、${v1Ids.length}）`);
+    await page.keyboard.press('Escape'); await settle(page);
+    // 點標頭的空白處（不是名稱）
+    const thBox = await page.locator('.ed-th[data-track] >> text=A1').locator('xpath=ancestor::div[contains(@class,"ed-th")][1]').boundingBox();
+    await page.mouse.click(thBox.x + thBox.width - 6, thBox.y + 4);
+    await settle(page);
+    eq(await sel(page), [...a1Ids].sort(), '點 A1 標頭：選取 A1 上所有片段（不展開連結的影像）');
+    eq(await page.evaluate(() => QPTEdit.ui.state.primary), a1Ids[0], '詳細內容顯示這條軌最前面的片段');
+    ok(await page.evaluate(() => document.querySelector('.ed-th.audio.sel .ed-th-name').textContent === 'A1'), 'A1 標頭標示為「整條選取」');
+    ok(await page.evaluate(() => document.querySelector('.ed-th.audio.target .ed-th-name').textContent === 'A1'), 'A1 也設為目的軌道');
+    ok((await page.textContent('#edStatus')).includes(`已選取「A1」軌的 ${a1Ids.length} 個片段`), '狀態列說明選了幾個');
+    if (!(await page.isVisible('.ed-sec[data-sec="audio"]'))) await page.click('.ed-itab[data-itab="audio"]');
+    ok(await page.isVisible('.ed-sec[data-sec="audio"]'), '詳細內容出現音訊的調整項目');
+    ok((await page.textContent('#edInspHead')).includes(`已選取 ${a1Ids.length} 個片段`), `詳細內容標題寫出選了幾個（${await page.textContent('#edInspHead')}）`);
+    // 改一個數值：整條軌的片段一起改，而且只記一筆復原
+    const g = page.locator('.ed-sec[data-sec="audio"] input[aria-label="增益"]');
+    const before = await proj(page, (p, Q, xs) => xs.map(id => p.clips[id].audio.gainDb), a1Ids);
+    await g.fill('-3'); await g.press('Tab'); await settle(page);
+    eq(await proj(page, (p, Q, xs) => xs.map(id => p.clips[id].audio.gainDb), a1Ids), a1Ids.map(() => -3), '詳細內容改增益 -3 dB：A1 每個片段都改了');
+    await page.evaluate(() => document.activeElement && document.activeElement.blur());   // 焦點還在輸入框時 Ctrl+Z 是給文字用的
+    await page.keyboard.press('Control+z'); await settle(page);
+    eq(await proj(page, (p, Q, xs) => xs.map(id => p.clips[id].audio.gainDb), a1Ids), before, 'Ctrl+Z 一次：整條軌一起還原');
+    // Shift 加選、再按一次取消
+    await page.click('.ed-th-name:text-is("V1")', { modifiers: ['Shift'] }); await settle(page);
+    eq(await sel(page), [...a1Ids, ...v1Ids].sort(), 'Shift＋點 V1：加選 V1 的片段');
+    eq(await page.evaluate(() => QPTEdit.ui.state.primary), v1Ids[0], '加選後詳細內容換成 V1 的第一個片段');
+    await page.click('.ed-th-name:text-is("V1")', { modifiers: ['Shift'] }); await settle(page);
+    eq(await sel(page), [...a1Ids].sort(), '再 Shift＋點 V1：取消 V1，A1 保留');
+    ok(a1Ids.includes(await page.evaluate(() => QPTEdit.ui.state.primary)), '取消後詳細內容回到還被選取的片段');
+    // 標頭上的按鈕不會觸發選取
+    await page.keyboard.press('Escape'); await settle(page);
+    await page.click('.ed-th.audio .ed-thb.mute >> nth=0'); await settle(page);
+    eq((await sel(page)).length, 0, '按標頭的 M（靜音）：不會選取片段');
+    await page.click('.ed-th.audio .ed-thb.mute >> nth=0'); await settle(page);
+    // 右鍵選單也有
+    await page.click('.ed-th-name:text-is("V1")', { button: 'right' });
+    await page.click('.ed-menu-item:has-text("選取這條軌的所有片段")'); await settle(page);
+    eq(await sel(page), [...v1Ids].sort(), '右鍵「選取這條軌的所有片段」');
+    eq(await invariants(page), [], '不變式 OK');
+    await page.keyboard.press('Escape'); await settle(page);
+  }
+
   // ---------------------------------------------------------------- 軌道：鎖定、靜音、獨奏、新增、改名、刪除
   console.log('軌道控制');
   const v1id = await proj(page, p => p.tracks.find(t => t.name === 'V1').id);

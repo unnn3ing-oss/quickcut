@@ -2136,8 +2136,7 @@
     const isTarget = targetTrack(t.kind) && targetTrack(t.kind).id === t.id;
     if (isTarget) th.classList.add('target');
     const nm = el('button', 'ed-th-name', t.name); nm.type = 'button';
-    nm.title = `${t.name}：點一下設為目的軌道（插入／覆蓋會放到這條）；雙擊改名；右鍵更多`;
-    nm.addEventListener('click', () => setTarget(t.kind, t.id));
+    nm.title = `${t.name}：點一下選取這條軌的所有片段並設為目的軌道（插入／覆蓋會放到這條）；Shift／${MOD.replace('+', '')}＋點一下加選；雙擊改名；右鍵更多`;
     nm.addEventListener('dblclick', () => renameTrack(t.id, nm));
     const btns = el('div', 'ed-th-btns');
     const tg = (cls, content, title, on, patch) => {
@@ -2153,9 +2152,15 @@
       btns.appendChild(tg('solo', 'S', t.solo ? '取消獨奏' : '獨奏（只聽這條）', t.solo, { solo: !t.solo }));
     }
     th.append(nm, btns);
+    // 點標頭（名稱或空白處；鎖定／眼睛／M／S 按鈕與改名輸入框除外）：選取整條軌
+    th.addEventListener('click', e => {
+      if (e.target.closest('.ed-thb, .ed-th-input')) return;
+      selectTrack(t.id, e.shiftKey || e.ctrlKey || e.metaKey);
+    });
     th.addEventListener('contextmenu', e => {
       e.preventDefault();
       openMenu(e.clientX, e.clientY, [
+        { label: '選取這條軌的所有片段', run: () => selectTrack(t.id, false) },
         { label: '設為目的軌道', run: () => setTarget(t.kind, t.id) },
         { label: '重新命名', run: () => renameTrack(t.id, $('edTimeline').querySelector(`.ed-th[data-track="${t.id}"] .ed-th-name`)) },
         { sep: true },
@@ -2165,11 +2170,35 @@
     return th;
   }
   // 目的軌道：只換標頭的標示，不重畫整個時間軸（不然雙擊改名的第二下會點到已經被換掉的元素）
-  function setTarget(kind, id) {
+  function setTarget(kind, id, quiet) {
     state.targets[kind] = id;
     for (const th of tl.inner.querySelectorAll('.ed-th.' + kind)) th.classList.toggle('target', th.dataset.track === id);
     const t = trackOf(id);
-    say(`${kind === 'video' ? '影片' : '音訊'}目的軌道：${t ? t.name : ''}`, 'ok');
+    if (!quiet) say(`${kind === 'video' ? '影片' : '音訊'}目的軌道：${t ? t.name : ''}`, 'ok');
+  }
+  // 選取整條軌：只選這條軌上的片段（不展開連結，免得選到別條軌），同時設為目的軌道；詳細內容顯示第一個片段，改數值會套用到全部選取的片段。
+  // add＝Shift／Ctrl（⌘）：這條軌的片段已經全部選了就取消，不然加進目前的選取。
+  function selectTrack(id, add) {
+    const t = trackOf(id);
+    if (!t) return;
+    setTarget(t.kind, t.id, true);
+    const ids = C.clipsOnTrack(state.project, id).map(c => c.id);   // 已依開始時間排序
+    if (!ids.length) {
+      if (!add) selectClips([]);
+      say(`「${t.name}」軌沒有片段（已設為目的軌道）`);
+      return;
+    }
+    if (add) {
+      const all = ids.every(i => state.selection.has(i));
+      selectClips(ids, { add: true, toggle: all });
+      if (!all) state.primary = ids[0];
+      else if (!state.selection.has(state.primary)) state.primary = state.selection.size ? [...state.selection][0] : null;
+      refreshSelectionUI();
+      say(all ? `已取消選取「${t.name}」軌（還有 ${state.selection.size} 個片段被選取）` : `已加選「${t.name}」軌的 ${ids.length} 個片段（共 ${state.selection.size} 個）`, 'ok');
+    } else {
+      selectClips(ids);
+      say(`已選取「${t.name}」軌的 ${ids.length} 個片段${t.locked ? '（這條軌已鎖定，不能修改）' : ''}`, 'ok');
+    }
   }
   function renameTrack(id, nameBtn) {
     const t = trackOf(id);
@@ -2407,6 +2436,11 @@
     if (tl.inner) {
       for (const e of tl.inner.querySelectorAll('.ed-clip')) e.classList.toggle('sel', state.selection.has(e.dataset.clip));
       for (const e of tl.inner.querySelectorAll('.ed-trans')) e.classList.toggle('sel', state.selTransition === e.dataset.trans);
+      // 整條軌的片段都被選取時，標頭也標示出來
+      for (const th of tl.inner.querySelectorAll('.ed-th')) {
+        const cs = C.clipsOnTrack(state.project, th.dataset.track);
+        th.classList.toggle('sel', cs.length > 0 && cs.every(c => state.selection.has(c.id)));
+      }
     }
     scheduleInspector();
     if (state.history) updateToolbar();
@@ -3144,7 +3178,10 @@
     r.en.textContent = c.enabled === false ? '已停用' : '啟用中';
     insp.infoFlags.textContent = '';
     for (const f of c.flags || []) { const s = el('i', 'ed-flagdot'); s.style.background = MARKER_HEX[f]; s.title = MARKER_NAME[f] || f; insp.infoFlags.appendChild(s); }
-    $('edInspHead').textContent = `詳細內容　${clipTitle(c)}`;
+    // 多選（例如點軌道標頭選了整條軌）：標題寫出選了幾個，每個分頁都看得到改數值會套用到全部
+    const head = $('edInspHead');
+    head.textContent = n > 1 ? `詳細內容　已選取 ${n} 個片段（顯示：${clipTitle(c)}）` : `詳細內容　${clipTitle(c)}`;
+    head.title = n > 1 ? `修改數值會套用到全部 ${n} 個選取的片段` : '';
   }
 
   // ---- 音訊 ------------------------------------------------------------------------
@@ -3504,7 +3541,7 @@
   }
 
   Object.assign(Q.ui, {
-    init, importFiles, importSrt, exportSrt, markSubtitle, doEdit, selectClips, applyTitleStyle, applyTextFx, selectTransition, seekTimeline, setTool, undo, redo, openSource, setMode, addTitle, addTransitionAt, addTransitionToSelection,
+    init, importFiles, importSrt, exportSrt, markSubtitle, doEdit, selectClips, selectTrack, applyTitleStyle, applyTextFx, selectTransition, seekTimeline, setTool, undo, redo, openSource, setMode, addTitle, addTransitionAt, addTransitionToSelection,
     setZoom, zoomFit, renderNow, bladeAtPlayhead, deleteSelection, markIn, markOut, clearInOut, addMarkerHere, toggleLink, toggleSnap, ensureMediaInfo,
     openSpeedPop, openFreezePop, tl, tc, setTheme: t => applyTheme(t, true),
   });
