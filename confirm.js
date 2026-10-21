@@ -8,7 +8,7 @@
   const overlay = $('confirmOverlay'), okBtn = $('confirmOkBtn'), cancelBtn = $('confirmCancelBtn');
   const titleEl = $('confirmTitle'), msgEl = $('confirmMessage');
   if (!overlay) return;
-  let pending = null;
+  let pending = null, back = null;
 
   function askConfirm({ title = '確定嗎？', message = '', okText = '確定', cancelText = '取消' } = {}) {
     if (pending) close(false);              // 前一個還沒回答就當作取消
@@ -16,12 +16,15 @@
     msgEl.textContent = message;
     okBtn.textContent = okText;
     cancelBtn.textContent = cancelText;
+    back = doc.activeElement;                // 關閉後把焦點還回去
     overlay.classList.add('open');
     okBtn.focus();
     return new Promise(resolve => { pending = resolve; });
   }
   function close(result) {
     overlay.classList.remove('open');
+    if (back && typeof back.focus === 'function' && doc.contains(back)) back.focus();
+    back = null;
     if (pending) { const r = pending; pending = null; r(result); }
   }
   cancelBtn.addEventListener('click', () => close(false));
@@ -31,7 +34,12 @@
   doc.addEventListener('keydown', e => {
     if (!overlay.classList.contains('open')) return;
     e.stopImmediatePropagation();
-    if (e.key === 'Escape') { e.preventDefault(); close(false); }
+    if (e.key === 'Escape') { e.preventDefault(); close(false); return; }
+    // Tab 只在「取消」與「確定」之間循環（WCAG 2.4.3：焦點不能跑到被蓋住的頁面）
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      (doc.activeElement === okBtn ? cancelBtn : okBtn).focus();
+    }
   }, true);
 
   root.askConfirm = askConfirm;

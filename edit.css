@@ -589,3 +589,26 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
 .ed-relink-list li.more { list-style: none; margin-left: -18px; opacity: .8; }
 .ed-relink-n { margin-left: 6px; opacity: .75; }
 .ed-relink .ed-btnrow { flex-wrap: wrap; }
+
+/* ---- 點擊目標至少 24×24（WCAG 2.2 的 2.5.8）：只放大可點範圍，外觀幾乎不變 ---- */
+.ed-msg-x { width: 24px; height: 24px; }
+.ed-mdel { width: 24px; height: 24px; }
+.ed-thb { height: 24px; }
+.ed-th-name { min-height: 24px; }
+.ed-seg.small .ed-segbtn, .ed-btn.small, .ed-tl-bar .ed-btn { min-height: 24px; }
+.ed-app input[type=range] { height: 24px; }
+.ed-app input[type=checkbox] { width: 16px; height: 16px; margin: 4px; }
+
+/* ---- 矮螢幕（筆電 1366×768、1280×720、1024×700，或瀏覽器放大）：頁首與留白縮小，時間軸高度跟著視窗 ---- */
+@media (max-height: 860px) {
+  body { padding-top: 22px; padding-bottom: 12px; }
+  header.topbar { margin: -22px -32px 12px; padding: 6px 32px; }
+  .topbar-actions .help-btn { padding: 8px 16px; }
+  .ed-app { height: calc(100vh - 82px); min-height: 460px; --ed-tl-h: clamp(176px, 34vh, 300px); }   /* 時間軸維持 34vh（和一般尺寸一樣），省下來的高度給檢視器 */
+  .ed-top { min-height: 240px; }
+}
+@media (max-height: 640px) {
+  .ed-app { min-height: 420px; --ed-tl-h: clamp(150px, 30vh, 220px); }
+  .ed-mfoot, .ed-tl-foot .ed-keys { display: none; }
+}
+

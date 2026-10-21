@@ -1,0 +1,55 @@
+# 每個 PR（和推到 main）自動跑全部測試：單元測試＋瀏覽器流程測試（Playwright 的 Chromium＋ffmpeg）。
+# 瀏覽器和沙盒一樣用 Playwright 內建的 Chromium（沒有 H.264／AAC 編碼器），所以測試的預期結果兩邊一致。
+name: 測試
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安裝 ffmpeg
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+
+      - name: 單元測試
+        run: node --test test/*.test.js
+
+      - name: 安裝 Playwright（Chromium）
+        run: |
+          npm install --no-save --no-package-lock playwright@1.56.1
+          npx playwright install --with-deps chromium
+
+      - name: 匯出流程（edit-export.e2e）
+        run: node --test test/edit-export.e2e.js
+
+      - name: 剪輯介面（edit-ui.e2e）
+        run: node test/edit-ui.e2e.js
+
+      - name: 專案存檔（edit-project.e2e）
+        run: node test/edit-project.e2e.js
+
+      - name: 播放與合成（edit-render.e2e）
+        run: node test/edit-render.e2e.js
+
+      - name: 特效與字幕（edit-fx.e2e）
+        run: node test/edit-fx.e2e.js
+
+      - name: 介面可用性（ux.e2e）
+        run: node test/ux.e2e.js

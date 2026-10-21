@@ -28,7 +28,13 @@
       <input type="file" id="edProjFile" accept=".qcut,application/json" hidden>
       <!-- 匯出影片：全畫面面板（edit-export.js），可選畫質、尺寸、編碼、封裝格式與社群平台的快速設定 -->
       <button type="button" id="edExportBtn" class="help-btn ed-export-btn" title="匯出影片：選畫質、尺寸、編碼與格式，或用 YouTube／Instagram／Facebook 的建議設定">匯出影片</button>
+      <button type="button" id="edHelpBtn" class="help-btn" title="使用說明與快捷鍵（按 ? 也能打開）">說明</button>
       <button type="button" id="edThemeBtn" class="help-btn ed-theme-btn" aria-pressed="true" title="切換深色／淺色（目前：深色）"><span class="ed-theme-ic" aria-hidden="true">☾</span><span class="ed-theme-tx">深色</span></button>
+      <!-- 窄視窗：次要按鈕收進這個選單（topbar.js） -->
+      <div class="ed-more">
+        <button type="button" id="edMoreBtn" class="help-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="edMoreMenu" aria-label="更多：開啟／儲存專案、說明、深色" title="更多">⋯</button>
+        <div class="ed-more-menu" id="edMoreMenu" role="menu" aria-label="更多" hidden></div>
+      </div>
     </div>
   </div>
 </header>
@@ -75,7 +81,7 @@
 </div>
 
 <script src="confirm.js"></script>
-<!-- 載入順序有依賴關係：core → fx → render → stab → ui → export → project -->
+<!-- 載入順序有依賴關係：core → fx → render → stab → ui → export → project；topbar（頁首的說明與選單）最後 -->
 <script src="edit-core.js"></script>
 <script src="edit-fx.js"></script>
 <script src="edit-render.js"></script>
@@ -83,5 +89,6 @@
 <script src="edit-ui.js"></script>
 <script src="edit-export.js"></script>
 <script src="edit-project.js"></script>
+<script src="topbar.js"></script>
 </body>
 </html>

@@ -109,3 +109,40 @@ h1.topbar-title {
 .modal-body p { margin: 0; }
 .modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .modal-btns button { font-size: 16px; }
+
+/* ---- 頁首的「⋯」選單：窄視窗時才出現，次要按鈕收進來（topbar.js） ---- */
+.ed-more { position: relative; display: none; }
+.ed-more-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 60; min-width: 180px; padding: 6px; border-radius: 14px;
+  background: var(--ed-pop-bg, #fff); border: 1px solid var(--border); box-shadow: var(--shadow); display: grid; gap: 2px;
+}
+.ed-more-menu[hidden] { display: none; }
+.ed-more-item { text-align: left; border: none; background: transparent; border-radius: 10px; padding: 10px 14px; font-size: 14px; color: var(--text); }
+.ed-more-item:hover, .ed-more-item:focus-visible { background: var(--accent-soft); color: var(--accent); outline: none; }
+@media (max-width: 1000px) {
+  #edOpenBtn, #edSaveBtn, #edHelpBtn, #edThemeBtn { display: none; }
+  .ed-more { display: block; }
+  .topbar-actions { margin-left: auto; width: auto; }
+}
+
+/* ---- 說明面板（topbar.js） ---- */
+.ed-help { width: min(880px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--border); border-radius: 20px;
+  background: var(--ed-pop-bg, #fff); color: var(--text); box-shadow: var(--shadow); }
+.ed-help[open] { display: flex; flex-direction: column; }
+.ed-help::backdrop { background: rgba(10, 14, 22, .55); }
+.ed-help-head { display: flex; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+.ed-help-head h2 { margin: 0; font-size: 18px; }
+.ed-help-x { margin-left: auto; width: 36px; height: 36px; padding: 0; border-radius: 50%; }
+.ed-help-body { overflow-y: auto; padding: 16px 20px 22px; display: grid; gap: 18px; font-size: 14px; line-height: 1.6; }
+.ed-help-body h3 { margin: 0 0 8px; font-size: 15px; }
+.ed-help-steps { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
+.ed-help-steps b { margin-right: 8px; }
+.ed-help-keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px 24px; }
+.ed-help-group h4 { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
+.ed-help-group dl { margin: 0; display: grid; grid-template-columns: minmax(0, 150px) minmax(140px, 1fr); gap: 6px 12px; align-items: baseline; }
+.ed-help-group dt { font-size: 12px; line-height: 1.9; }
+.ed-help-group dd { margin: 0; font-size: 13px; }
+.ed-help kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--border); border-bottom-width: 2px;
+  background: var(--field-bg); font: 600 12px/1.5 var(--ui-font); text-align: center; color: var(--text); }
+.ed-help-tips { margin: 0; padding-left: 20px; color: var(--muted); }
+

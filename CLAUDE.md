@@ -31,7 +31,7 @@
 
 ## 測試
 - 單元測試：`node --test test/*.test.js`（要全過）。
-- 瀏覽器流程測試：`node test/edit-ui.e2e.js`、`edit-render.e2e.js`、`edit-export.e2e.js`、`edit-fx.e2e.js`、`edit-project.e2e.js`。沙盒用 `/opt/pw-browsers/chromium`（測試檔已預設），**不要**執行 `playwright install`。
+- 瀏覽器流程測試：`node test/edit-ui.e2e.js`、`edit-render.e2e.js`、`edit-export.e2e.js`、`edit-fx.e2e.js`、`edit-project.e2e.js`、`ux.e2e.js`。PR 會由 GitHub Actions（`.github/workflows/test.yml`）自動跑全部測試。沙盒用 `/opt/pw-browsers/chromium`（測試檔已預設），**不要**執行 `playwright install`。
 - 暫存腳本、截圖放 scratchpad，不要放進專案。
 
 ## 和 QuickPatterntool 的關係
