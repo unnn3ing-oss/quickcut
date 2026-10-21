@@ -103,13 +103,14 @@ const project = (w, h, frames, extra = {}) => Object.assign({
   transitions: {}, markers: [], inPoint: null, outPoint: null, nextId: 2,
 }, extra);
 
-async function openPage(t) {
+async function openPage(t, opts = {}) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
   t.after(() => ctx.close());
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.route('https://**', r => r.abort());
+  if (!opts.disk) await page.addInitScript(() => { Object.defineProperty(window, 'showSaveFilePicker', { value: undefined, configurable: true });   /* 這裡測「下載」的匯出流程（headless 沒有存檔視窗） */ });
   await page.goto(BASE + 'index.html');
   await page.evaluate(installStubs);
   return { page, errors };
@@ -440,4 +441,108 @@ test('MOV：瀏覽器沒有 H.264 時選項停用並說明；WebM＋AV1 用 run(
   fs.writeFileSync(file, Buffer.from(res.b64, 'base64'));
   const info = checkFile(t, file, { w: 640, h: 360, frames: 30, codec: 'av1' });
   assert.match(info.format.format_name, /webm/);
+});
+
+// =====================================================================================
+// 直接寫入硬碟：假的存檔視窗（showSaveFilePicker）收下寫入的位元組；暫存檔（OPFS）用完要刪掉
+// =====================================================================================
+async function installFakeDisk(page) {
+  await page.evaluate(() => {
+    window.__disk = { picks: [], writes: 0, closed: false, aborted: false, removed: false, chunks: [] };
+    window.showSaveFilePicker = async o => {
+      __disk.picks.push({ name: o.suggestedName, types: o.types });
+      return { name: o.suggestedName, remove: async () => { __disk.removed = true; }, createWritable: async () => ({
+        write: async d => { __disk.writes++; __disk.chunks.push(new Uint8Array(d.buffer ? d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength) : d)); },
+        close: async () => { __disk.closed = true; },
+        abort: async () => { __disk.aborted = true; },
+      }) };
+    };
+  });
+}
+async function diskFile(page, name) {
+  const b64 = await page.evaluate(async () => {
+    const b = new Uint8Array(await new Blob(__disk.chunks).arrayBuffer());
+    let s = '';
+    for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+    return btoa(s);
+  });
+  const file = path.join(OUT, name);
+  fs.writeFileSync(file, Buffer.from(b64, 'base64'));
+  return file;
+}
+const opfsFiles = page => page.evaluate(async () => { const d = await navigator.storage.getDirectory(), out = []; for await (const k of d.keys()) out.push(k); return out; });
+
+test('直接寫入硬碟：先選位置、邊編碼邊寫入；MP4 與 WebM 都正確，暫存檔會刪掉、不觸發下載', { skip, timeout: 300000 }, async t => {
+  const { page, errors } = await openPage(t, { disk: true });
+  const downloads = [];
+  page.on('download', d => downloads.push(d.suggestedFilename()));
+  for (const [ct, ext, fmt] of [['mp4', 'mp4', /mp4/], ['webm', 'webm', /webm/]]) {
+    await installFakeDisk(page);
+    await page.evaluate(p => window.QPTEdit.exporter.open({ project: p }), project(640, 360, 60));
+    await page.waitForFunction(() => !/偵測中/.test(document.getElementById('edExCodec').textContent));
+    assert.equal(await page.locator('#edExDiskRow').isVisible(), true, '有「直接寫入硬碟」選項');
+    assert.equal(await page.locator('#edExDisk').isChecked(), true, '預設開啟');
+    await page.selectOption('#edExContainer', ct);
+    await page.fill('#edExName', `e2e-disk-${ct}`);
+    await page.click('#edExGo');
+    await page.waitForFunction(() => !window.QPTEdit.exporter.busy && /已儲存|無法|失敗/.test(document.getElementById('edExMsg').textContent), null, { timeout: 120000 });
+    const msg = await page.locator('#edExMsg').textContent();
+    assert.match(msg, new RegExp(`^已儲存：e2e-disk-${ct}\\.${ext}`), msg);
+    const D = await page.evaluate(() => ({ picks: __disk.picks, closed: __disk.closed, aborted: __disk.aborted, writes: __disk.writes }));
+    assert.equal(D.picks.length, 1);
+    assert.equal(D.picks[0].name, `e2e-disk-${ct}.${ext}`);
+    assert.ok(D.closed && !D.aborted && D.writes > 2, JSON.stringify(D));
+    const file = await diskFile(page, `e2e-disk.${ext}`);
+    const info = checkFile(t, file, { w: 640, h: 360, frames: 60 });
+    assert.match(info.format.format_name, fmt);
+    for (const n of [0, 59]) assert.ok(near(pixel(file, n), colorOf(n)), `${ct} 第 ${n} 格顏色`);
+    assert.deepEqual((await opfsFiles(page)).filter(n => /^quickcut-export-/.test(n)), [], '暫存檔已刪除');
+    await page.evaluate(() => document.getElementById('edExportDialog').close());
+  }
+  assert.deepEqual(downloads, [], '寫入硬碟時不用瀏覽器下載');
+  // MP4 的 moov 在 mdat 前面（faststart），一樣可以邊下載邊播
+  const head = fs.readFileSync(path.join(OUT, 'e2e-disk.mp4')).subarray(0, 64).toString('latin1');
+  assert.ok(head.indexOf('moov') > 0 && (head.indexOf('mdat') < 0 || head.indexOf('moov') < head.indexOf('mdat')), 'moov 在前');
+  assert.deepEqual(errors, []);
+});
+
+test('直接寫入硬碟：AV1（第一個關鍵格留在記憶體給 av1C）；存檔視窗按取消就不匯出；匯出中取消會丟掉寫了一半的檔案', { skip, timeout: 300000 }, async t => {
+  const { page } = await openPage(t, { disk: true });
+  await installFakeDisk(page);
+  // AV1 直接走 run()＋sink
+  const r = await page.evaluate(async p => {
+    const chunks = [];
+    const res = await window.QPTEdit.exporter.run({ project: p, from: 0, to: 30, quality: 'small', prefer: { video: 'av1' },
+      sink: { writable: { write: async d => { chunks.push(new Uint8Array(d)); }, close: async () => {} } } });
+    const b = new Uint8Array(await new Blob(chunks).arrayBuffer());
+    let s = '';
+    for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+    return { b64: btoa(s), label: res.codecs.label, blob: res.blob, size: res.size, disk: res.savedToDisk };
+  }, project(640, 360, 30));
+  assert.equal(r.label, 'AV1＋Opus');
+  assert.equal(r.blob, null);
+  assert.equal(r.disk, true);
+  const file = path.join(OUT, 'e2e-disk-av1.mp4');
+  fs.writeFileSync(file, Buffer.from(r.b64, 'base64'));
+  assert.equal(fs.statSync(file).size, r.size);
+  checkFile(t, file, { w: 640, h: 360, frames: 30, codec: 'av1' });
+  // 存檔視窗按取消：什麼都不做
+  await page.evaluate(() => { window.showSaveFilePicker = async () => { throw new DOMException('使用者取消', 'AbortError'); }; });
+  await page.evaluate(p => window.QPTEdit.exporter.open({ project: p }), project(640, 360, 30));
+  await page.waitForFunction(() => !/偵測中/.test(document.getElementById('edExCodec').textContent));
+  await page.click('#edExGo');
+  await page.waitForTimeout(300);
+  assert.equal(await page.evaluate(() => window.QPTEdit.exporter.busy), false);
+  assert.equal(await page.locator('#edExProgress').isHidden(), true, '沒有開始匯出');
+  // 匯出中取消：writable.abort()、移除空檔案、暫存檔刪除
+  await installFakeDisk(page);
+  await page.evaluate(p => { const d = document.getElementById('edExportDialog'); d.close(); window.QPTEdit.exporter.open({ project: p }); }, project(1080, 1920, 600));
+  await page.waitForFunction(() => !/偵測中/.test(document.getElementById('edExCodec').textContent));
+  await page.click('#edExGo');
+  await page.waitForFunction(() => document.getElementById('edExBar').value > 0.08, null, { timeout: 120000 });
+  await page.click('#edExClose');
+  await page.waitForFunction(() => !window.QPTEdit.exporter.busy, null, { timeout: 30000 });
+  assert.equal(await page.locator('#edExMsg').textContent(), '已取消匯出');
+  assert.deepEqual(await page.evaluate(() => [__disk.aborted, __disk.closed, __disk.removed]), [true, false, true]);
+  assert.deepEqual((await opfsFiles(page)).filter(n => /^quickcut-export-/.test(n)), [], '暫存檔已刪除');
 });

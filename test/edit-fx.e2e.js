@@ -2,7 +2,8 @@
 // 執行：CHROMIUM=/opt/pw-browsers/chromium SHOTS=<截圖資料夾> node test/edit-fx.e2e.js
 // （沒設 CHROMIUM 就用 playwright 預設瀏覽器；CI 的 node --test 只跑 *.test.js，不會跑這支）
 const fs = require('fs'), os = require('os'), path = require('path');
-const { chromium } = require('/opt/node22/lib/node_modules/playwright');
+let chromium;
+try { ({ chromium } = require('playwright')); } catch (_) { ({ chromium } = require('/opt/node22/lib/node_modules/playwright')); }
 
 const ROOT = path.resolve(__dirname, '..');
 const SHOTS = process.env.SHOTS || fs.mkdtempSync(path.join(os.tmpdir(), 'edfx-'));

@@ -181,3 +181,20 @@
 - Opus：CodecPrivate＝OpusHead（WebCodecs 沒給時自己組），pre-skip 寫進 CodecDelay，SeekPreRoll 80 ms；尾端多出來的樣本用最後一個封包的 BlockGroup＋DiscardPadding 截掉。AV1：CodecPrivate＝av1C（和 MP4 共用 `buildAv1C`），樣本去掉 temporal delimiter。［程式碼］
 - 驗證：單元測試檢查 EBML 每層大小剛好填滿、SeekHead／Cues 的位置指到對的元素；ffmpeg 交叉驗證 VP9＋Opus、AV1＋Opus 重新封裝成 WebM，解碼 md5 和參考檔一樣；e2e 實際從瀏覽器匯出 WebM，聲音起點誤差 3 個樣本。ffprobe 對 Matroska 不回報各串流長度，所以 WebM 只檢查整個檔案的長度。［程式碼］
 
+### 直接寫入硬碟（大檔案不佔記憶體）
+- 有 `showSaveFilePicker` 和 OPFS（`navigator.storage.getDirectory`）時（Chrome／Edge），匯出面板預設勾「直接寫入硬碟」：按「匯出」先選位置（要在按鈕的使用者動作裡呼叫），拿到 `FileSystemWritableFileStream` 傳給 `run({ sink: { writable } })`。［程式碼］
+- 編碼時影像樣本接續寫進 OPFS 的暫存檔（`openTemp`），記憶體只留 `{ size, ref: { off, size } }`；還沒寫完的超過 32MB 就等（背壓）。聲音樣本很小，留在記憶體。［程式碼］
+- 編完後照原本的方式算檔頭：MP4 用 `muxHeader`（本來就支援只有大小的樣本），所以 **moov 一樣在前面（faststart）**；WebM 的 `muxParts` 對沒有資料的樣本輸出 `{ length, ref }` 佔位物件。`writeParts` 依序寫出，佔位的從暫存檔讀（相鄰的合併，一次最多 8MB）。［程式碼］
+- AV1：temporal delimiter 在寫進暫存檔前就拿掉（不然大小會對不上）；第一個關鍵格留在記憶體，`av1C` 要讀它的序列標頭。［程式碼］
+- 取消或失敗：`writable.abort()`（目的檔不會留下寫一半的內容）、`handle.remove()`（存檔視窗建立的空檔案，瀏覽器支援時）、刪掉暫存檔。存檔視窗按取消就不匯出。［程式碼］
+- 沒有這些 API（Firefox／Safari）或使用者取消勾選：走原本的「記憶體組好 → 下載」。e2e 用假的存檔視窗收下寫入的位元組，用 ffprobe 驗證；其他測試把 `showSaveFilePicker` 拿掉，測下載流程。［程式碼］
+
+## 6. 介面可用性與無障礙
+- 3.10 用 `design:accessibility-review` 的 WCAG 2.1 AA 清單檢查一次，量到的問題與處理：［程式碼：test/ux.e2e.js］
+  - **點擊目標**：33 個按鈕／拉桿小於 24px（WCAG 2.2 的 2.5.8）→ `edit.css` 最後一段把軌道標頭按鈕、媒體移除、訊息關閉、小按鈕、拉桿都放大到至少 24×24（外觀幾乎不變）；`ux.e2e` 檢查畫面上所有按鈕、下拉選單、拉桿。核取方塊都包在 `<label>` 裡，點文字也算，所以只放大到 16px。
+  - **確認框的焦點**：原本 Tab 會跑到被蓋住的頁面（2.4.3）→ `confirm.js` 讓 Tab 只在「取消」「確定」之間循環，關閉後焦點還給原本的元素。
+  - 對比在 `edit-ui.e2e` 本來就有檢查（≥ 4.5:1）。
+- **說明面板**（`topbar.js`）：`<dialog>`（瀏覽器自己處理焦點與 Esc），內容是基本流程、分類的快捷鍵（`Ctrl`／`⌘` 依系統顯示）、小提醒。快捷鍵表要和 `edit-ui.js` 的 `onKeyDown` 一致，改快捷鍵時兩邊一起改。按 ? 打開，但打字中或有其他對話框時不攔。
+- **窄視窗**（寬 ≤ 1000px）：開啟／儲存專案、說明、深色收進「⋯」選單（`role=menu`，↑↓ 移動、Esc 關閉並把焦點還給按鈕）；選單項目只是代按原本的按鈕，不重複實作功能。「匯出影片」一直顯示。
+- **矮螢幕**（高 ≤ 860px）：頁首與留白縮小，`.ed-app` 最小高度 460；時間軸維持 34vh（試過 31vh，1280×800 的 A2 軌就被擠出畫面，`edit-ui.e2e` 抓到）。1366×768、1280×720、1024×700 整頁不用捲動。瀏覽器放大到 200%（約 720×450）時需要捲動：剪輯介面屬於 WCAG 1.4.10 的「需要二維版面」例外。［推論］
+

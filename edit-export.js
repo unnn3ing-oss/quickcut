@@ -198,7 +198,7 @@
       const fc = fourcc(t.codec);
       const ts = Math.round(t.timescale || (kind === 'audio' ? t.sampleRate : 0));
       if (!(ts > 0)) throw new Error('timescale 必須是正整數');
-      let samples = t.samples.map(s => ({ data: s.data != null ? toU8(s.data) : null, size: s.data != null ? 0 : s.size, ts: Math.round(s.ts), dur: s.dur, key: kind === 'audio' ? true : !!s.key }));
+      let samples = t.samples.map(s => ({ data: s.data != null ? toU8(s.data) : null, size: s.data != null ? 0 : s.size, ref: s.ref, ts: Math.round(s.ts), dur: s.dur, key: kind === 'audio' ? true : !!s.key }));
       if (fc === 'av01') for (const s of samples) if (s.data) s.data = stripTemporalDelimiters(s.data);
       for (const s of samples) if (s.data) s.size = s.data.byteLength;
       const n = samples.length;
@@ -460,6 +460,7 @@
   // 一之二、WebM 封裝（純函式，Matroska 的子集）
   //   webm.mux({ video, audio }) → Uint8Array；webm.muxParts(...) → [位元組片段…]（樣本資料不複製）
   //   video / audio 的格式和 mp4.mux 一樣；只接受 VP9／AV1＋Opus（WebM 規範只允許這些）。
+  //   樣本也可以只給 { size, ref }（資料在暫存檔）：muxParts 回傳的片段裡會有 { length, ref } 佔位物件，由寫檔的一方去讀。
   //   結構：EBML 檔頭 → Segment［SeekHead、Info、Tracks、Cluster…、Cues］。每個影像關鍵格開一個 Cluster
   //   （最長 30 秒），Cues 記每個 Cluster 的位置，播放器才能快速跳轉。時間單位 1 毫秒（TimestampScale 1e6 ns）。
   //   Opus 的 pre-skip 寫在 CodecDelay；尾端多出來的樣本用最後一個 BlockGroup 的 DiscardPadding 截掉。
@@ -540,13 +541,13 @@
         const cid = codecId(V.codec), ts = V.timescale || 1000, num = tracks.length + 1;
         const firstKey = V.samples.find(x => x.key) || V.samples[0];
         const kids = [u(ID.TrackNumber, num), u(ID.TrackUID, num), u(ID.TrackType, 1), u(ID.FlagLacing, 0), str(ID.CodecID, cid)];
-        if (cid === 'V_AV1') kids.push(bin(ID.CodecPrivate, V.description ? toU8(V.description) : mp4.buildAv1C(V.codec, toU8(firstKey.data))));
+        if (cid === 'V_AV1') kids.push(bin(ID.CodecPrivate, V.description ? toU8(V.description) : mp4.buildAv1C(V.codec, firstKey.data != null ? toU8(firstKey.data) : null)));
         const fdur = V.samples[0].dur || 0;
         if (fdur > 0) kids.push(u(ID.DefaultDuration, Math.round(fdur / ts * 1e9)));
         kids.push(el(ID.Video, [u(ID.PixelWidth, V.width), u(ID.PixelHeight, V.height)]));
         tracks.push(el(ID.TrackEntry, kids));
         for (const x of V.samples) {
-          const data = cid === 'V_AV1' ? mp4.stripTemporalDelimiters(toU8(x.data)) : toU8(x.data);
+          const data = x.data == null ? { length: x.size, ref: x.ref } : cid === 'V_AV1' ? mp4.stripTemporalDelimiters(toU8(x.data)) : toU8(x.data);
           blocks.push({ track: num, ms: Math.round(x.ts / ts * 1000), key: !!x.key, video: true, data });
           durMs = Math.max(durMs, (x.ts + (x.dur || 0)) / ts * 1000);
         }
@@ -561,7 +562,7 @@
         // 尾端多出來的樣本（編碼器補的靜音）：最後一個封包標 DiscardPadding
         const extra = A.presentDuration != null ? Math.max(0, end - skip - Math.round(A.presentDuration * ts / sr)) : 0;
         A.samples.forEach((x, k) => {
-          const b = { track: num, ms: Math.round(x.ts / ts * 1000), key: true, video: false, data: toU8(x.data) };
+          const b = { track: num, ms: Math.round(x.ts / ts * 1000), key: true, video: false, data: x.data == null ? { length: x.size, ref: x.ref } : toU8(x.data) };
           if (k === A.samples.length - 1 && extra > 0 && extra <= (x.dur || 0)) b.discardNs = Math.round(extra / ts * 1e9);
           blocks.push(b);
         });
@@ -851,6 +852,9 @@
     if (!(total > 0)) throw new Error('匯出範圍是空的：時間軸上沒有內容，或 In／Out 範圍不正確');
     const signal = opts.signal;
     const check = () => { if (signal && signal.aborted) throw new Cancelled(); };
+    // opts.sink = { writable }：直接寫進使用者選的檔案（FileSystemWritableFileStream），不在記憶體組整個檔案
+    const sink = opts.sink && opts.sink.writable ? opts.sink : null;
+    let tmp = null;
     const quality = QUALITY[opts.quality] ? opts.quality : 'high';
     const report = info => { if (opts.onProgress) try { opts.onProgress(info); } catch (e) { /* 介面更新失敗不影響匯出 */ } };
 
@@ -902,6 +906,8 @@
     const vStart = hasAudio ? AUDIO_WEIGHT : 0;
 
     // ---- 影像 ----
+    if (sink) tmp = await openTemp();
+    try {
     let videoTrack = null, videoUsed = null, lastErr = null;
     for (const cand of picked.video) {
       try {
@@ -922,8 +928,15 @@
       const enc = new VideoEncoder({
         output(chunk, meta) {
           if (meta && meta.decoderConfig) { if (meta.decoderConfig.description) desc = meta.decoderConfig.description; if (meta.decoderConfig.colorSpace) cs = meta.decoderConfig.colorSpace; }
-          const d = new Uint8Array(chunk.byteLength); chunk.copyTo(d);
-          samples.push({ data: d, ts: Math.round(chunk.timestamp / frameUs) * 1000, dur: 1000, key: chunk.type === 'key' });
+          let d = new Uint8Array(chunk.byteLength); chunk.copyTo(d);
+          const smp = { ts: Math.round(chunk.timestamp / frameUs) * 1000, dur: 1000, key: chunk.type === 'key' };
+          if (tmp) {
+            // AV1 的 temporal delimiter 先拿掉（封裝時大小要對）；第一個關鍵格留在記憶體（av1C 要讀它的序列標頭）
+            if (cand.family === 'av1') d = mp4.stripTemporalDelimiters(d);
+            if (cand.family === 'av1' && smp.key && !samples.some(x => x.data)) smp.data = d;
+            else { smp.size = d.byteLength; smp.ref = tmp.append(d); }
+          } else smp.data = d;
+          samples.push(smp);
           outputs++;
           progress(vStart + (1 - vStart) * 0.98 * (outputs / total), `影片編碼中 ${outputs}／${total} 格`);
         },
@@ -942,6 +955,7 @@
           const vf = new VideoFrame(canvas, { timestamp: Math.round(i * frameUs), duration: Math.round(frameUs) });
           try { enc.encode(vf, { keyFrame: i % gop === 0 }); } finally { vf.close(); }
           while (enc.encodeQueueSize > MAX_VQUEUE && !err) { await waitDequeue(enc); check(); }
+          if (tmp && tmp.pending > TMP_PENDING_MAX) { await tmp.drain(); check(); }
         }
         if (err) throw fail(err);
         await enc.flush();
@@ -957,14 +971,69 @@
 
     // ---- 封裝 ----
     check();
-    progress(0.99, '封裝中…');
-    const parts = CT === CONTAINERS.webm ? webm.muxParts({ video: videoTrack, audio: audioTrack })
-      : mp4.muxParts({ video: videoTrack, audio: audioTrack, brand: CT === CONTAINERS.mov ? 'qt' : undefined });
-    const blob = new Blob(parts, { type: CT.mime });
+    progress(sink ? 0.95 : 0.99, '封裝中…');
+    const muxOpts = { video: videoTrack, audio: audioTrack, brand: CT === CONTAINERS.mov ? 'qt' : undefined };
+    let parts;
+    if (CT === CONTAINERS.webm) parts = webm.muxParts(muxOpts);
+    else if (sink) { const h = mp4.muxHeader(muxOpts); parts = [h.header, ...h.samples.map(x => (x.data ? x.data : { length: x.size, ref: x.ref }))]; }
+    else parts = mp4.muxParts(muxOpts);
+    let blob = null, size = 0;
+    if (sink) {
+      const tmpFile = await tmp.finish();
+      check();
+      size = await writeParts(sink.writable, parts, tmpFile, check, f => progress(0.95 + 0.05 * f, '寫入檔案中…'));
+      await sink.writable.close();
+    } else { blob = new Blob(parts, { type: CT.mime }); size = blob.size; }
     const codecs = { video: videoUsed.name, audio: audioUsed ? audioUsed.name : null, container: CT.name,
       label: audioUsed ? `${videoUsed.name}＋${audioUsed.name}` : `${videoUsed.name}（${opts.audio === 'none' ? '不含聲音' : '沒有聲音'}）` };
     report({ phase: 'done', fraction: 1, elapsed: (performance.now() - t0) / 1000, text: '完成' });
-    return { blob, filename: opts.filename || `剪輯.${CT.ext}`, codecs, frames: total, seconds: total / fps, width: W, height: H, videoBitrate: vb, audioBitrate: hasAudio ? ab : 0 };
+    return { blob, size, savedToDisk: !!sink, filename: opts.filename || `剪輯.${CT.ext}`, codecs, frames: total, seconds: total / fps, width: W, height: H, videoBitrate: vb, audioBitrate: hasAudio ? ab : 0 };
+    } finally { if (tmp) await tmp.remove(); }
+  }
+
+  // ---- 直接寫入硬碟（大檔案不佔記憶體）--------------------------------------------------
+  // 編碼出來的影像樣本先接續寫進瀏覽器的私有暫存區（OPFS）的暫存檔，記憶體只留大小與位置；
+  // 全部編完後算出檔頭（MP4 一樣把 moov 放前面），再依序把樣本從暫存檔搬到使用者選的檔案。
+  const TMP_PENDING_MAX = 32 << 20;      // 還沒寫進暫存檔的資料超過 32MB 就等一下（背壓）
+  const COPY_BLOCK = 8 << 20;            // 搬到目的檔時一次最多讀 8MB
+  async function openTemp() {
+    if (!(root.navigator && navigator.storage && typeof navigator.storage.getDirectory === 'function')) throw new Error('這個瀏覽器沒有暫存區（OPFS）');
+    const dir = await navigator.storage.getDirectory();
+    const name = `quickcut-export-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tmp`;
+    const fh = await dir.getFileHandle(name, { create: true });
+    const w = await fh.createWritable();
+    let off = 0, pending = 0, chain = Promise.resolve(), err = null;
+    return {
+      get pending() { return pending; },
+      append(d) {
+        const ref = { off, size: d.byteLength };
+        off += d.byteLength; pending += d.byteLength;
+        chain = chain.then(() => w.write(d)).then(() => { pending -= d.byteLength; }, e => { err = err || e; });
+        return ref;
+      },
+      async drain() { await chain; if (err) throw err; },
+      async finish() { await chain; if (err) throw err; await w.close(); return fh.getFile(); },
+      async remove() { try { await chain; } catch (e) { /* 無妨 */ } try { await w.abort(); } catch (e) { /* 已關閉 */ } try { await dir.removeEntry(name); } catch (e) { /* 無妨 */ } },
+    };
+  }
+  // 依序寫出片段：Uint8Array 直接寫；{ length, ref } 從暫存檔讀（相鄰的合併成一次讀）
+  async function writeParts(writable, parts, tmpFile, check, onFrac) {
+    const total = parts.reduce((s, p) => s + p.length, 0);
+    let done = 0;
+    for (let i = 0; i < parts.length;) {
+      check();
+      const p = parts[i];
+      if (p instanceof Uint8Array) { await writable.write(p); done += p.length; i++; }
+      else {
+        const start = p.ref.off;
+        let end = start + p.length, j = i + 1;
+        while (j < parts.length && !(parts[j] instanceof Uint8Array) && parts[j].ref.off === end && end - start < COPY_BLOCK) { end += parts[j].length; j++; }
+        await writable.write(new Uint8Array(await tmpFile.slice(start, end).arrayBuffer()));
+        done += end - start; i = j;
+      }
+      onFrac(done / total);
+    }
+    return total;
   }
 
   // 匯出用的 <video>（render.seekSource 開的）用完就釋放
@@ -1042,6 +1111,8 @@
 .ed-ex-name { display: flex; align-items: center; gap: 6px; }
 .ed-ex-name input { flex: 1; min-width: 0; }
 .ed-ex-name span { color: var(--muted); font-size: 14px; }
+.ed-ex-check { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; min-height: 24px; }
+.ed-ex-check input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
 .ed-ex-mbps { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
 .ed-ex-mbps input { max-width: 120px; }
 .ed-ex-seg { margin-bottom: 0; display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 999px; background: var(--ed-tint, rgba(0, 74, 173, .07)); }
@@ -1086,7 +1157,9 @@
   const ASPECT_RATIO = { '16:9': 16 / 9, '9:16': 9 / 16, '4:5': 4 / 5 };
   const SIZES = [2160, 1440, 1080, 720, 480];
   const AUDIO_KBPS = [128, 192, 256, 320, 384];
-  const DEFAULTS = { preset: 'custom', size: 'project', quality: 'high', mbps: 8, video: 'auto', audio: 'auto', akbps: 'auto', container: 'mp4', gop: null };
+  const DEFAULTS = { preset: 'custom', size: 'project', quality: 'high', mbps: 8, video: 'auto', audio: 'auto', akbps: 'auto', container: 'mp4', gop: null, toDisk: true };
+  // 能不能「直接寫入硬碟」：要有存檔視窗（showSaveFilePicker）和暫存區（OPFS）；Chrome／Edge 有，Firefox／Safari 沒有
+  const canDisk = () => typeof root.showSaveFilePicker === 'function' && !!(root.navigator && navigator.storage && navigator.storage.getDirectory);
   const SETTINGS_KEY = 'qc-export';
 
   const ui = { built: false, busy: false, ctrl: null, range: 'all', name: '', project: null, pickToken: 0, set: Object.assign({}, DEFAULTS) };
@@ -1211,6 +1284,10 @@
           <label class="ed-ex-label" for="edExAkbps">聲音位元率</label>
           <select id="edExAkbps">${opt('auto', '依畫質')}${AUDIO_KBPS.map(k => opt(k, `${k} kbps`)).join('')}</select>
         </div>
+        <div class="ed-ex-field wide" id="edExDiskRow">
+          <label class="ed-ex-check"><input type="checkbox" id="edExDisk"> 直接寫入硬碟（先選存檔位置，邊編碼邊寫入，不佔記憶體；長片、4K 建議開啟）</label>
+          <div class="ed-ex-hint" id="edExDiskHint"></div>
+        </div>
       </div>
     </section>
   </div>
@@ -1258,6 +1335,7 @@
     $('edExVideo').addEventListener('change', e => { ui.set.video = e.target.value; touch(); });
     $('edExAudio').addEventListener('change', e => { ui.set.audio = e.target.value; touch(); });
     $('edExAkbps').addEventListener('change', e => { ui.set.akbps = e.target.value === 'auto' ? 'auto' : +e.target.value; touch(); });
+    $('edExDisk').addEventListener('change', e => { ui.set.toDisk = e.target.checked; saveSettings(); refresh(); });   // 存檔方式不算改「平台設定」
     $('edExPresets').addEventListener('click', e => { const b = e.target.closest('[data-preset]'); if (b && !ui.busy) applyPreset(b.dataset.preset); });
     $('edExName').addEventListener('input', () => { ui.name = $('edExName').value; });
     $('edExName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); start(); } });
@@ -1315,7 +1393,10 @@
     for (const b of $('edExRange').children) { b.classList.toggle('active', b.dataset.v === ui.range); b.disabled = ui.busy || (b.dataset.v === 'io' && !hasIO); }
     for (const b of $('edExQuality').children) { b.classList.toggle('active', b.dataset.v === S.quality); b.disabled = ui.busy; }
     for (const b of $('edExPresets').children) { b.classList.toggle('active', b.dataset.preset === S.preset); b.disabled = ui.busy; b.setAttribute('aria-pressed', String(b.dataset.preset === S.preset)); }
-    for (const id of ['edExName', 'edExSizeSel', 'edExContainer', 'edExVideo', 'edExAudio', 'edExAkbps', 'edExMbps']) $(id).disabled = ui.busy;
+    for (const id of ['edExName', 'edExSizeSel', 'edExContainer', 'edExVideo', 'edExAudio', 'edExAkbps', 'edExMbps', 'edExDisk']) $(id).disabled = ui.busy;
+    $('edExDiskRow').hidden = !canDisk();
+    $('edExDisk').checked = ui.set.toDisk !== false;
+    $('edExDiskHint').textContent = ui.set.toDisk !== false ? '按「匯出」會先問要存在哪裡' : '匯出完成後從瀏覽器下載（整個檔案會先放在記憶體）';
     $('edExMbpsRow').hidden = S.quality !== 'custom';
     if (doc().activeElement !== $('edExMbps')) $('edExMbps').value = S.mbps;
     $('edExContainer').value = S.container; $('edExVideo').value = S.video; $('edExAudio').value = S.audio; $('edExAkbps').value = String(S.akbps);
@@ -1448,6 +1529,16 @@
     $('edExName').value = ui.name = base;
     const P = plan(p);
     const filename = `${base}.${P.ext}`;
+    // 直接寫入硬碟：先選位置（要在按鈕的使用者動作裡呼叫）；按取消就不匯出
+    let handle = null, writable = null;
+    if (canDisk() && ui.set.toDisk !== false) {
+      const CT = CONTAINERS[P.container];
+      try { handle = await root.showSaveFilePicker({ suggestedName: filename, types: [{ description: `${CT.name} 影片`, accept: { [CT.mime]: [`.${CT.ext}`] } }] }); }
+      catch (e) { if (e && e.name === 'AbortError') return; handle = null; }     // 其他錯誤（例如被瀏覽器擋）：改用下載
+      if (handle) {
+        try { writable = await handle.createWritable(); } catch (e) { setMsg(`無法寫入「${handle.name}」：${(e && e.message) || e}`, 'error'); return; }
+      }
+    }
     ui.busy = true;
     ui.ctrl = new AbortController();
     setMsg('');
@@ -1456,12 +1547,17 @@
     const t0 = performance.now();
     try {
       const res = await run({ project: p, from: r.from, to: r.to, quality: ui.set.quality === 'custom' ? 'high' : ui.set.quality, filename, signal: ui.ctrl.signal, onProgress: showProgress,
-        width: P.w, height: P.h, videoBitrate: P.vb, audioBitrate: P.ab || undefined, prefer: P.prefer, container: P.container, audio: P.audio, gopSec: P.gopSec });
-      saveBlob(res.blob, filename);
-      api.lastExport = { filename, size: res.blob.size, at: Date.now(), codecs: res.codecs };
+        width: P.w, height: P.h, videoBitrate: P.vb, audioBitrate: P.ab || undefined, prefer: P.prefer, container: P.container, audio: P.audio, gopSec: P.gopSec,
+        sink: writable ? { writable } : null });
+      if (res.blob) saveBlob(res.blob, filename);
+      const savedName = handle ? handle.name : filename;
+      api.lastExport = { filename: savedName, size: res.size, at: Date.now(), codecs: res.codecs, toDisk: !!handle };
       if (Q.core && Q.core.bus && typeof CustomEvent !== 'undefined') Q.core.bus.dispatchEvent(new CustomEvent('exported', { detail: api.lastExport }));
-      setMsg(`已匯出：${filename}（${fmtSize(res.blob.size)}，${res.width}×${res.height}，${res.codecs.label}，用時 ${fmtTime((performance.now() - t0) / 1000)}）`, 'ok');
+      setMsg(`${handle ? '已儲存' : '已匯出'}：${savedName}（${fmtSize(res.size)}，${res.width}×${res.height}，${res.codecs.label}，用時 ${fmtTime((performance.now() - t0) / 1000)}）`, 'ok');
     } catch (e) {
+      // 寫到一半失敗或取消：丟掉寫了一半的內容；存檔視窗建立的空檔案也移除（瀏覽器支援時）
+      if (writable) { try { await writable.abort(); } catch (x) { /* 已關閉 */ } }
+      if (handle && typeof handle.remove === 'function') { try { await handle.remove(); } catch (x) { /* 無妨 */ } }
       if (e && e.cancelled) { setMsg('已取消匯出'); $('edExProgress').hidden = true; }
       else {
         console.error(e);

@@ -118,7 +118,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   const problems = [];
   page.on('pageerror', e => problems.push('pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error') problems.push('console.error: ' + m.text()); });
-  await page.addInitScript(() => { window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective + ' ' + e.blockedURI)); });
+  await page.addInitScript(() => { window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective + ' ' + e.blockedURI)); Object.defineProperty(window, 'showSaveFilePicker', { value: undefined, configurable: true });   /* 這裡測「下載」的匯出流程（headless 沒有存檔視窗） */ });
   await page.goto(base);
 
   // ---------------------------------------------------------------- 空狀態

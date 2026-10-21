@@ -86,6 +86,7 @@ function watch(page, problems) {
   page.on('pageerror', e => problems.push('pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error') problems.push('console.error: ' + m.text()); });
   return page.addInitScript(() => {
+    Object.defineProperty(window, 'showSaveFilePicker', { value: undefined, configurable: true });   /* 這裡測「下載」的匯出流程（headless 沒有存檔視窗） */
     window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective + ' ' + e.blockedURI));
     // headless Chromium 對非 ASCII 的下載檔名一律回報「download」：改記 <a download> 的值
     window.__dl = []; const click = HTMLAnchorElement.prototype.click;
