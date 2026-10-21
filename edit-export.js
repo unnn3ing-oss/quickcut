@@ -1018,6 +1018,14 @@
     if (!p) { setMsg('還沒有專案可以匯出', 'error'); return; }
     const r = rangeOf(p, ui.range);
     if (!(r.to > r.from)) { setMsg('匯出範圍是空的', 'error'); return; }
+    // 開啟專案後還沒重新連結的素材：匯出範圍裡有用到就不能匯出（不然那幾段會是黑畫面／沒聲音）
+    const M = Q.render && Q.render.media;
+    const lost = M ? Object.values(p.clips).filter(c => c.type === 'media' && c.mediaId && !M.get(c.mediaId) && c.start < r.to && c.start + c.duration > r.from) : [];
+    if (lost.length) {
+      const names = [...new Set(lost.map(c => (p.mediaInfo && p.mediaInfo[c.mediaId] && p.mediaInfo[c.mediaId].name) || '未知素材'))];
+      setMsg(`還有 ${names.length} 個素材沒有重新連結（${names.slice(0, 3).join('、')}${names.length > 3 ? '…' : ''}），請先在左側媒體庫重新連結再匯出`, 'error');
+      return;
+    }
     const base = safeBase($('edExName').value) || `剪輯_${stampNow()}`;
     $('edExName').value = ui.name = base;
     const filename = `${base}.mp4`;

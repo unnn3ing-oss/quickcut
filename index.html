@@ -22,6 +22,10 @@
   <div class="topbar-inner">
     <h1 class="topbar-title"><img class="brand-ic" src="favicon.svg" alt="" width="30" height="30">QuickCut 影片剪輯</h1>
     <div class="topbar-actions">
+      <!-- 專案檔（.qcut）：只存剪輯資料，不含素材（edit-project.js） -->
+      <button type="button" id="edOpenBtn" class="help-btn" title="開啟專案檔（.qcut）；也可以直接把專案檔拖進畫面（快捷鍵 Ctrl／⌘＋O）">開啟專案</button>
+      <button type="button" id="edSaveBtn" class="help-btn" title="下載目前的剪輯進度（.qcut，只有幾 KB，不含素材）（快捷鍵 Ctrl／⌘＋S）">儲存專案</button>
+      <input type="file" id="edProjFile" accept=".qcut,application/json" hidden>
       <button type="button" id="edThemeBtn" class="help-btn ed-theme-btn" aria-pressed="true" title="切換深色／淺色（目前：深色）"><span class="ed-theme-ic" aria-hidden="true">☾</span><span class="ed-theme-tx">深色</span></button>
     </div>
   </div>
@@ -69,12 +73,13 @@
 </div>
 
 <script src="confirm.js"></script>
-<!-- 載入順序有依賴關係：core → fx → render → stab → ui → export -->
+<!-- 載入順序有依賴關係：core → fx → render → stab → ui → export → project -->
 <script src="edit-core.js"></script>
 <script src="edit-fx.js"></script>
 <script src="edit-render.js"></script>
 <script src="edit-stab.js"></script>
 <script src="edit-ui.js"></script>
 <script src="edit-export.js"></script>
+<script src="edit-project.js"></script>
 </body>
 </html>
