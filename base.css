@@ -74,7 +74,9 @@ header.topbar {
 h1.topbar-title {
   margin: 0; font-family: var(--ui-font); font-size: 18px; font-weight: 700; font-synthesis: weight;
   letter-spacing: 0; color: var(--text); white-space: nowrap;
+  display: flex; align-items: center; gap: 10px;
 }
+.brand-ic { display: block; width: 30px; height: 30px; flex: none; }
 .topbar-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
 .topbar-actions .help-btn {
   margin: 0; border: none; border-radius: 999px; padding: 11px 22px;
