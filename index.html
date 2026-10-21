@@ -81,12 +81,18 @@
 </div>
 
 <script src="confirm.js"></script>
-<!-- 載入順序有依賴關係：core → fx → render → stab → ui → export → project；topbar（頁首的說明與選單）最後 -->
+<!-- 載入順序有依賴關係：core → fx → render → stab → ui（edit-ui.js 共用 → media → viewer → actions → timeline → inspector → main）→ export → project；topbar（頁首的說明與選單）最後 -->
 <script src="edit-core.js"></script>
 <script src="edit-fx.js"></script>
 <script src="edit-render.js"></script>
 <script src="edit-stab.js"></script>
 <script src="edit-ui.js"></script>
+<script src="edit-ui-media.js"></script>
+<script src="edit-ui-viewer.js"></script>
+<script src="edit-ui-actions.js"></script>
+<script src="edit-ui-timeline.js"></script>
+<script src="edit-ui-inspector.js"></script>
+<script src="edit-ui-main.js"></script>
 <script src="edit-export.js"></script>
 <script src="edit-project.js"></script>
 <script src="topbar.js"></script>

@@ -35,5 +35,7 @@
 - 暫存腳本、截圖放 scratchpad，不要放進專案。
 
 ## 和 QuickPatterntool 的關係
-- 程式邏輯（`edit-*.js`）沿用原專案，刻意保留 `QPTEdit` 命名空間與 `app.hidden` 判斷，方便兩邊互相移植修正。差異見 `DESIGN.md` 第 1 節。
+- QuickPatterntool 的「剪輯」已停用，使用者都導到這裡；**不用再和原專案保持可互相移植**，可以自由重構。
+- 全域命名空間仍叫 `QPTEdit`（內部名稱，改名牽動所有檔案與測試，沒有實際好處）。
 - `localStorage` 的 key 用 `qc-*`（原專案是 `qpt-edit-*`，兩個網站同一個來源，不能撞名）。
+- 介面程式拆成 `edit-ui.js`（共用）＋`edit-ui-*.js`（各區塊），拆檔方式見 `edit-ui.js` 檔頭與 `DESIGN.md` 第 7 節。
