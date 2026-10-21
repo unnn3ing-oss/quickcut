@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 內容安全政策：只允許本站的腳本與字型；不連任何網路（素材都在本機處理）；沒有任何第三方資源。
+     style-src 保留 unsafe-inline 是因為介面會用 style="…" 設定位置與大小。 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<title>QuickCut 影片剪輯</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="favicon-16x16.png" sizes="16x16" type="image/png">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="edit.css">
+</head>
+<body>
+<!-- 上排：名稱靠左、右側深色／淺色開關（edit-ui.js 接上） -->
+<header class="topbar">
+  <div class="topbar-inner">
+    <h1 class="topbar-title">QuickCut 影片剪輯</h1>
+    <div class="topbar-actions">
+      <button type="button" id="edThemeBtn" class="help-btn ed-theme-btn" aria-pressed="true" title="切換深色／淺色（目前：深色）"><span class="ed-theme-ic" aria-hidden="true">☾</span><span class="ed-theme-tx">深色</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- 多軌時間軸影片剪輯，匯出 MP4（邏輯在 edit-*.js）。
+       版面：上排 媒體庫｜檢視器｜詳細內容，中間工具列，下方時間軸。內容由 edit-ui.js 在載入時產生，
+       匯出對話框（#edExportDialog）由 edit-export.js 填入。 -->
+  <div class="ed-app" id="editApp">
+    <div class="ed-top" id="edTop">
+      <section class="ed-media" id="edMedia" aria-label="媒體庫"></section>
+      <div class="ed-colsplit" id="edColL" data-col="l" role="separator" aria-orientation="vertical" title="左右拖曳可以調整欄寬（雙擊恢復預設）"></div>
+      <section class="ed-viewer" id="edViewer" aria-label="檢視器">
+        <div class="ed-vbar" id="edVBar"></div>
+        <div class="ed-stage" id="edStage">
+          <canvas id="edCanvas" aria-label="預覽畫面"></canvas>
+          <div class="ed-empty" id="edEmpty"></div>
+        </div>
+        <div class="ed-scrubwrap" id="edScrubWrap"></div>
+        <div class="ed-transport" id="edTransport"></div>
+      </section>
+      <div class="ed-colsplit" id="edColR" data-col="r" role="separator" aria-orientation="vertical" title="左右拖曳可以調整欄寬（雙擊恢復預設）"></div>
+      <section class="ed-inspector" id="edInspector" aria-label="詳細內容"></section>
+    </div>
+    <div class="ed-split" id="edSplit" role="separator" aria-orientation="horizontal" title="上下拖曳可以調整時間軸的高度"></div>
+    <div class="ed-toolbar" id="edToolbar" role="toolbar" aria-label="剪輯工具"></div>
+    <section class="ed-timeline" id="edTimeline" aria-label="時間軸"></section>
+    <dialog class="ed-export" id="edExportDialog"></dialog>
+  </div>
+</div>
+
+<!-- 確認對話框（confirm.js） -->
+<div class="modal-overlay" id="confirmOverlay">
+  <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
+    <div class="modal-head"><h2 id="confirmTitle">確定嗎？</h2></div>
+    <div class="modal-body">
+      <p id="confirmMessage"></p>
+      <div class="modal-btns">
+        <button type="button" id="confirmCancelBtn">取消</button>
+        <button type="button" id="confirmOkBtn" class="primary">確定</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="confirm.js"></script>
+<!-- 載入順序有依賴關係：core → fx → render → stab → ui → export -->
+<script src="edit-core.js"></script>
+<script src="edit-fx.js"></script>
+<script src="edit-render.js"></script>
+<script src="edit-stab.js"></script>
+<script src="edit-ui.js"></script>
+<script src="edit-export.js"></script>
+</body>
+</html>
