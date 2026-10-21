@@ -1,5 +1,5 @@
 // =====================================================================================
-// 剪輯：匯出 MP4
+// 剪輯：匯出影片（MP4／MOV／WebM）
 //
 // 流程：逐格 render.seekSource → render.compose（畫到 OffscreenCanvas）→ VideoFrame → VideoEncoder；
 //       聲音用 render.renderAudio 一次混好 → 切成 AudioData → AudioEncoder；最後用下面自己寫的 mp4 封裝成檔案下載。
@@ -25,6 +25,7 @@
   //             presentDuration /* 實際要播的長度（截掉尾端補的靜音）*/, samples: [...] }
   //   mp4.muxParts(...) 回傳 [檔頭, 樣本資料…]，直接丟給 new Blob() 不用再複製一次（大檔省記憶體）。
   //   mp4.muxHeader(...) 只算檔頭；樣本可以只給 { size } 不給 data（測試 4GB 以上的 co64 用）。
+  //   opts.brand = 'qt' → MOV（QuickTime 的 ftyp，其餘結構一樣）。
   // ===================================================================================
   const mp4 = (function () {
     const U32 = 4294967296;
@@ -388,7 +389,12 @@
       return w.done();
     }
 
-    function writeFtyp(tracks) {
+    function writeFtyp(tracks, brand) {
+      if (brand === 'qt') {                          // MOV（QuickTime）：其餘 box 和 MP4 一樣
+        const q = writer(32);
+        q.box('ftyp', () => { q.str('qt  ').u32(0x20050300).str('qt  '); });
+        return q.done();
+      }
       const brands = ['isom', 'iso2', 'mp41'];
       if (tracks.some(t => t.fc === 'avc1')) brands.push('avc1');
       if (tracks.some(t => t.fc === 'av01')) brands.push('av01');
@@ -407,7 +413,7 @@
       // 依開始時間交錯排 chunk（同時間影像在前）
       const order = tracks.flatMap(t => t.chunks).sort((a, b) => a.t0 - b.t0 || (a.tr.kind === 'video' ? -1 : 1));
       const payload = order.reduce((s, c) => s + c.bytes, 0);
-      const ftyp = writeFtyp(tracks);
+      const ftyp = writeFtyp(tracks, opts.brand);
       const largeMdat = payload + 8 > 0xffffffff;
       const mdatHead = largeMdat ? 16 : 8;
       const o = { co64: !!opts.forceCo64, time: opts.time != null ? opts.time : Math.floor(Date.now() / 1000) + 2082844800 };
@@ -448,6 +454,166 @@
     }
 
     return { mux, muxParts, muxHeader, buildAv1C, buildVpcC, buildEsds, buildAsc, parseOpusHead, stripTemporalDelimiters, fourcc, colorCodes };
+  })();
+
+  // ===================================================================================
+  // 一之二、WebM 封裝（純函式，Matroska 的子集）
+  //   webm.mux({ video, audio }) → Uint8Array；webm.muxParts(...) → [位元組片段…]（樣本資料不複製）
+  //   video / audio 的格式和 mp4.mux 一樣；只接受 VP9／AV1＋Opus（WebM 規範只允許這些）。
+  //   結構：EBML 檔頭 → Segment［SeekHead、Info、Tracks、Cluster…、Cues］。每個影像關鍵格開一個 Cluster
+  //   （最長 30 秒），Cues 記每個 Cluster 的位置，播放器才能快速跳轉。時間單位 1 毫秒（TimestampScale 1e6 ns）。
+  //   Opus 的 pre-skip 寫在 CodecDelay；尾端多出來的樣本用最後一個 BlockGroup 的 DiscardPadding 截掉。
+  // ===================================================================================
+  const webm = (function () {
+    const ID = {
+      EBML: 0x1A45DFA3, EBMLVersion: 0x4286, EBMLReadVersion: 0x42F7, EBMLMaxIDLength: 0x42F2, EBMLMaxSizeLength: 0x42F3,
+      DocType: 0x4282, DocTypeVersion: 0x4287, DocTypeReadVersion: 0x4285,
+      Segment: 0x18538067, SeekHead: 0x114D9B74, Seek: 0x4DBB, SeekID: 0x53AB, SeekPosition: 0x53AC,
+      Info: 0x1549A966, TimestampScale: 0x2AD7B1, Duration: 0x4489, MuxingApp: 0x4D80, WritingApp: 0x5741,
+      Tracks: 0x1654AE6B, TrackEntry: 0xAE, TrackNumber: 0xD7, TrackUID: 0x73C5, TrackType: 0x83, FlagLacing: 0x9C,
+      CodecID: 0x86, CodecPrivate: 0x63A2, CodecDelay: 0x56AA, SeekPreRoll: 0x56BB, DefaultDuration: 0x23E383,
+      Video: 0xE0, PixelWidth: 0xB0, PixelHeight: 0xBA, Audio: 0xE1, SamplingFrequency: 0xB5, Channels: 0x9F,
+      Cluster: 0x1F43B675, Timestamp: 0xE7, SimpleBlock: 0xA3, BlockGroup: 0xA0, Block: 0xA1, DiscardPadding: 0x75A2,
+      Cues: 0x1C53BB6B, CuePoint: 0xBB, CueTime: 0xB3, CueTrackPositions: 0xB7, CueTrack: 0xF7, CueClusterPosition: 0xF1,
+    };
+    const toU8 = a => (a instanceof Uint8Array ? a : ArrayBuffer.isView(a) ? new Uint8Array(a.buffer, a.byteOffset, a.byteLength) : new Uint8Array(a));
+    const idBytes = id => { const out = []; for (let v = id; v > 0; v = Math.floor(v / 256)) out.unshift(v & 255); return out; };
+    // 長度的 vint：n 個位元組最多表示 2^(7n)−2（全 1 保留給「未知長度」）
+    const vintLen = v => { let n = 1; while (n < 8 && v >= 2 ** (7 * n) - 1) n++; return n; };
+    function vint(v, n) {
+      n = n || vintLen(v);
+      const out = new Array(n);
+      for (let i = n - 1; i >= 0; i--) { out[i] = v % 256; v = Math.floor(v / 256); }
+      out[0] |= 0x80 >> (n - 1);
+      return out;
+    }
+    const uintBytes = (v, n) => { const out = []; do { out.unshift(v % 256); v = Math.floor(v / 256); } while (v > 0); while (n && out.length < n) out.unshift(0); return out; };
+    const intBytes = v => { const b = new DataView(new ArrayBuffer(8)); b.setBigInt64(0, BigInt(v)); const a = Array.from(new Uint8Array(b.buffer)); while (a.length > 1 && ((a[0] === 0 && !(a[1] & 0x80)) || (a[0] === 255 && (a[1] & 0x80)))) a.shift(); return a; };
+    const floatBytes = v => { const b = new DataView(new ArrayBuffer(8)); b.setFloat64(0, v); return Array.from(new Uint8Array(b.buffer)); };
+    const strBytes = s => Array.from(new TextEncoder().encode(s));
+
+    // 節點：{ id, kids: [...] } 或 { id, data: Uint8Array|number[] } 或 { id, parts: [Uint8Array…] }（片段不複製）
+    const el = (id, kids) => ({ id, kids });
+    const u = (id, v, n) => ({ id, data: uintBytes(v, n) });
+    const i = (id, v) => ({ id, data: intBytes(v) });
+    const f = (id, v) => ({ id, data: floatBytes(v) });
+    const str = (id, v) => ({ id, data: strBytes(v) });
+    const bin = (id, v) => ({ id, data: toU8(v) });
+    function payloadSize(n) {
+      if (n.kids) return n.kids.reduce((s, k) => s + nodeSize(k), 0);
+      if (n.parts) return n.parts.reduce((s, p) => s + p.length, 0);
+      return n.data.length;
+    }
+    function nodeSize(n) { const p = payloadSize(n); return idBytes(n.id).length + vintLen(p) + p; }
+    function emit(n, out) {
+      const p = payloadSize(n);
+      out.push(Uint8Array.from([...idBytes(n.id), ...vint(p)]));
+      if (n.kids) for (const k of n.kids) emit(k, out);
+      else if (n.parts) for (const x of n.parts) out.push(x);
+      else out.push(n.data instanceof Uint8Array ? n.data : Uint8Array.from(n.data));
+    }
+
+    const codecId = c => {
+      const x = String(c || '').toLowerCase();
+      if (x.startsWith('vp09') || x === 'vp9') return 'V_VP9';
+      if (x.startsWith('av01')) return 'V_AV1';
+      if (x === 'opus') return 'A_OPUS';
+      throw new Error(`WebM 不能放 ${c}（只支援 VP9／AV1＋Opus）`);
+    };
+    function opusHead(t) {
+      const d = t.description ? toU8(t.description) : null;
+      if (d && d.length >= 19 && String.fromCharCode(...d.subarray(0, 8)) === 'OpusHead') return d;
+      const h = new Uint8Array(19), dv = new DataView(h.buffer);
+      h.set([79, 112, 117, 115, 72, 101, 97, 100, 1, t.channels || 2]);
+      dv.setUint16(10, t.skip != null ? t.skip : 312, true); dv.setUint32(12, t.sampleRate || 48000, true);
+      return h;
+    }
+
+    function muxParts(opts) {
+      opts = opts || {};
+      const V = opts.video && opts.video.samples && opts.video.samples.length ? opts.video : null;
+      const A = opts.audio && opts.audio.samples && opts.audio.samples.length ? opts.audio : null;
+      if (!V && !A) throw new Error('沒有任何影音樣本可以封裝');
+      const tracks = [], blocks = [];
+      let durMs = 0;
+      if (V) {
+        const cid = codecId(V.codec), ts = V.timescale || 1000, num = tracks.length + 1;
+        const firstKey = V.samples.find(x => x.key) || V.samples[0];
+        const kids = [u(ID.TrackNumber, num), u(ID.TrackUID, num), u(ID.TrackType, 1), u(ID.FlagLacing, 0), str(ID.CodecID, cid)];
+        if (cid === 'V_AV1') kids.push(bin(ID.CodecPrivate, V.description ? toU8(V.description) : mp4.buildAv1C(V.codec, toU8(firstKey.data))));
+        const fdur = V.samples[0].dur || 0;
+        if (fdur > 0) kids.push(u(ID.DefaultDuration, Math.round(fdur / ts * 1e9)));
+        kids.push(el(ID.Video, [u(ID.PixelWidth, V.width), u(ID.PixelHeight, V.height)]));
+        tracks.push(el(ID.TrackEntry, kids));
+        for (const x of V.samples) {
+          const data = cid === 'V_AV1' ? mp4.stripTemporalDelimiters(toU8(x.data)) : toU8(x.data);
+          blocks.push({ track: num, ms: Math.round(x.ts / ts * 1000), key: !!x.key, video: true, data });
+          durMs = Math.max(durMs, (x.ts + (x.dur || 0)) / ts * 1000);
+        }
+      }
+      if (A) {
+        const cid = codecId(A.codec), sr = A.sampleRate || 48000, ts = A.timescale || sr, num = tracks.length + 1;
+        const head = opusHead(A), skip = A.skip != null ? A.skip : new DataView(head.buffer, head.byteOffset).getUint16(10, true);
+        tracks.push(el(ID.TrackEntry, [u(ID.TrackNumber, num), u(ID.TrackUID, num), u(ID.TrackType, 2), u(ID.FlagLacing, 0), str(ID.CodecID, cid),
+          bin(ID.CodecPrivate, head), u(ID.CodecDelay, Math.round(skip / sr * 1e9)), u(ID.SeekPreRoll, 80000000),
+          el(ID.Audio, [f(ID.SamplingFrequency, sr), u(ID.Channels, A.channels || 2)])]));
+        const last = A.samples[A.samples.length - 1], end = last.ts + (last.dur || 0);
+        // 尾端多出來的樣本（編碼器補的靜音）：最後一個封包標 DiscardPadding
+        const extra = A.presentDuration != null ? Math.max(0, end - skip - Math.round(A.presentDuration * ts / sr)) : 0;
+        A.samples.forEach((x, k) => {
+          const b = { track: num, ms: Math.round(x.ts / ts * 1000), key: true, video: false, data: toU8(x.data) };
+          if (k === A.samples.length - 1 && extra > 0 && extra <= (x.dur || 0)) b.discardNs = Math.round(extra / ts * 1e9);
+          blocks.push(b);
+        });
+        const present = A.presentDuration != null ? A.presentDuration / sr * 1000 : (end - skip) / ts * 1000;
+        durMs = Math.max(durMs, present);
+      }
+      // 依時間交錯（同時間影像在前）
+      blocks.sort((a, b) => a.ms - b.ms || (a.video === b.video ? 0 : a.video ? -1 : 1));
+      // 切 Cluster：有影像時每個關鍵格開新的；最長 30 秒（區塊時間是 16 位元的相對毫秒）
+      const clusters = [];
+      let cur = null;
+      for (const b of blocks) {
+        const brk = !cur || (V ? b.video && b.key : false) || b.ms - cur.ms > 30000;
+        if (brk) { cur = { ms: b.ms, blocks: [], cue: !V || (b.video && b.key) }; clusters.push(cur); }
+        cur.blocks.push(b);
+      }
+      const clusterNodes = clusters.map(c => el(ID.Cluster, [u(ID.Timestamp, c.ms), ...c.blocks.map(b => {
+        const head = Uint8Array.from([...vint(b.track), ...(() => { const r = b.ms - c.ms; return [(r >> 8) & 255, r & 255]; })(), b.discardNs ? 0 : (b.key ? 0x80 : 0)]);
+        if (b.discardNs) return el(ID.BlockGroup, [{ id: ID.Block, parts: [head, b.data] }, i(ID.DiscardPadding, b.discardNs)]);
+        return { id: ID.SimpleBlock, parts: [head, b.data] };
+      })]));
+      const info = el(ID.Info, [u(ID.TimestampScale, 1000000), f(ID.Duration, durMs), str(ID.MuxingApp, 'QuickCut'), str(ID.WritingApp, 'QuickCut')]);
+      const tracksNode = el(ID.Tracks, tracks);
+      // SeekHead 與 Cues 的位置都用 8 位元組的固定長度整數，大小不會因為位置而變，算一次就好
+      const seekHead = pos => el(ID.SeekHead, [[ID.Info, pos.info], [ID.Tracks, pos.tracks], [ID.Cues, pos.cues]].map(([id, p]) =>
+        el(ID.Seek, [bin(ID.SeekID, idBytes(id)), u(ID.SeekPosition, p, 8)])));
+      const shSize = nodeSize(seekHead({ info: 0, tracks: 0, cues: 0 }));
+      const pos = { info: shSize };
+      pos.tracks = pos.info + nodeSize(info);
+      let p = pos.tracks + nodeSize(tracksNode);
+      const cuePoints = [];
+      clusterNodes.forEach((n, k) => {
+        if (clusters[k].cue) cuePoints.push(el(ID.CuePoint, [u(ID.CueTime, clusters[k].ms), el(ID.CueTrackPositions, [u(ID.CueTrack, 1), u(ID.CueClusterPosition, p, 8)])]));
+        p += nodeSize(n);
+      });
+      pos.cues = p;
+      const segKids = [seekHead(pos), info, tracksNode, ...clusterNodes, el(ID.Cues, cuePoints)];
+      const header = el(ID.EBML, [u(ID.EBMLVersion, 1), u(ID.EBMLReadVersion, 1), u(ID.EBMLMaxIDLength, 4), u(ID.EBMLMaxSizeLength, 8),
+        str(ID.DocType, 'webm'), u(ID.DocTypeVersion, 4), u(ID.DocTypeReadVersion, 2)]);
+      const out = [];
+      emit(header, out);
+      emit(el(ID.Segment, segKids), out);
+      return out;
+    }
+    function mux(opts) {
+      const parts = muxParts(opts);
+      const out = new Uint8Array(parts.reduce((s, x) => s + x.length, 0));
+      let q = 0;
+      for (const x of parts) { out.set(x, q); q += x.length; }
+      return out;
+    }
+    return { mux, muxParts, ID, vint, codecId };
   })();
 
   // ===================================================================================
@@ -508,29 +674,53 @@
   }, c.extra || {});
   const audioConfig = (c, bitrate) => ({ codec: c.codec, sampleRate: SAMPLE_RATE, numberOfChannels: CHANNELS, bitrate });
 
-  // 回傳這個瀏覽器能用的候選清單（依偏好排序）；prefer 可指定 'vp9'／'av1'…（測試用）
-  async function pickCodecs({ width, height, fps, quality = 'high', prefer } = {}) {
-    const res = { video: [], audio: [], label: '', note: '' };
+  // 封裝格式能放哪些編碼：MOV 只放 H.264＋AAC（QuickTime／Apple 裝置相容）；WebM 規範只允許 VP9／AV1＋Opus
+  const CONTAINERS = {
+    mp4: { name: 'MP4', ext: 'mp4', mime: 'video/mp4', video: ['h264', 'vp9', 'av1'], audio: ['aac', 'opus'] },
+    mov: { name: 'MOV', ext: 'mov', mime: 'video/quicktime', video: ['h264'], audio: ['aac'] },
+    webm: { name: 'WebM', ext: 'webm', mime: 'video/webm', video: ['vp9', 'av1'], audio: ['opus'] },
+  };
+  const FAMILY_NAME = { h264: 'H.264', vp9: 'VP9', av1: 'AV1', aac: 'AAC', opus: 'Opus' };
+
+  // 回傳這個瀏覽器能用的候選清單（依偏好排序）。
+  //   prefer.video／prefer.audio：優先用的編碼（'h264'|'vp9'|'av1'／'aac'|'opus'）；audio: 'none' → 不含聲音
+  //   container：'mp4'|'mov'|'webm'，只留這個格式放得下的編碼；videoBitrate／audioBitrate（bps）可直接指定
+  //   res.support：每種編碼這個瀏覽器能不能用（不管封裝格式），對話框用來停用選項
+  async function pickCodecs({ width, height, fps, quality = 'high', prefer, container = 'mp4', audio, videoBitrate: vbIn, audioBitrate: abIn } = {}) {
+    const res = { video: [], audio: [], label: '', note: '', support: {} };
     if (typeof VideoEncoder === 'undefined') return res;
-    const vb = videoBitrate(width, height, fps, quality), ab = audioBitrate(quality);
+    const C = CONTAINERS[container] || CONTAINERS.mp4;
+    const vb = vbIn || videoBitrate(width, height, fps, quality), ab = abIn || audioBitrate(quality);
     const ok = async (E, cfg) => { try { return !!(await E.isConfigSupported(cfg)).supported; } catch (e) { return false; } };
     const sortBy = (list, fam) => (fam ? list.filter(c => c.family === fam).concat(list.filter(c => c.family !== fam)) : list);
     for (const c of sortBy(videoCandidates(width, height, fps), prefer && prefer.video)) {
-      if (await ok(VideoEncoder, videoConfig(c, width, height, fps, vb))) res.video.push(c);
+      if (!(await ok(VideoEncoder, videoConfig(c, width, height, fps, vb)))) continue;
+      res.support[c.family] = true;
+      if (C.video.includes(c.family)) res.video.push(c);
     }
     if (typeof AudioEncoder !== 'undefined') {
       for (const c of sortBy(audioCandidates(), prefer && prefer.audio)) {
-        if (await ok(AudioEncoder, audioConfig(c, ab))) res.audio.push(c);
+        if (!(await ok(AudioEncoder, audioConfig(c, ab)))) continue;
+        res.support[c.family] = true;
+        if (C.audio.includes(c.family) && audio !== 'none') res.audio.push(c);
       }
     }
     const v = res.video[0], a = res.audio[0];
     if (v) {
-      res.label = a ? `${v.name}＋${a.name}` : `${v.name}（沒有聲音）`;
-      const miss = [];
-      if (v.family !== 'h264') miss.push('H.264');
-      if (a && a.family !== 'aac') miss.push('AAC');
-      if (!a) res.note = '此瀏覽器不支援聲音編碼，匯出的影片不會有聲音';
-      else if (miss.length && !(prefer && (prefer.video || prefer.audio))) res.note = `此瀏覽器不支援 ${miss.join('／')} 編碼`;
+      res.label = a ? `${v.name}＋${a.name}` : `${v.name}（${audio === 'none' ? '不含聲音' : '沒有聲音'}）`;
+      const notes = [];
+      // 指定的編碼不能用：說明改用了什麼
+      const want = prefer || {};
+      if (want.video && v.family !== want.video) notes.push(`此瀏覽器不支援 ${FAMILY_NAME[want.video]} 編碼，改用 ${v.name}`);
+      if (want.audio && audio !== 'none' && a && a.family !== want.audio) notes.push(`此瀏覽器不支援 ${FAMILY_NAME[want.audio]} 編碼，改用 ${a.name}`);
+      if (!a && audio !== 'none') notes.push(C.audio.some(x => res.support[x]) || container === 'mp4' ? '此瀏覽器不支援聲音編碼，匯出的影片不會有聲音' : `此瀏覽器沒有 ${C.name} 能用的聲音編碼（${C.audio.map(x => FAMILY_NAME[x]).join('／')}），匯出的影片不會有聲音`);
+      else if (!want.video && !want.audio && container === 'mp4') {
+        const miss = [];
+        if (v.family !== 'h264') miss.push('H.264');
+        if (a && a.family !== 'aac') miss.push('AAC');
+        if (miss.length) notes.push(`此瀏覽器不支援 ${miss.join('／')} 編碼`);
+      }
+      res.note = notes.join('；');
     }
     return res;
   }
@@ -633,7 +823,9 @@
     return [L, Rr];
   }
 
-  // 主流程。opts = { project, from, to（影格，半開區間）, quality, filename, onProgress(info), signal, prefer }
+  // 主流程。opts = { project, from, to（影格，半開區間）, quality, filename, onProgress(info), signal, prefer,
+  //   width, height（輸出尺寸，預設＝專案；比例不同會被拉伸，對話框只給同比例的尺寸）,
+  //   videoBitrate, audioBitrate（bps，預設依 quality）, audio: 'none'（不含聲音）, container: 'mp4'|'mov'|'webm', gopSec（關鍵格間隔秒數） }
   // 回傳 { blob, filename, codecs: { video, audio, label }, frames, seconds }
   async function run(opts) {
     try { return await runExport(opts || {}); } finally { releaseSeekers(); }
@@ -649,8 +841,9 @@
     }
     if (!p) throw new Error('還沒有專案可以匯出');
     if (!R || typeof R.compose !== 'function' || typeof R.seekSource !== 'function') throw new Error('剪輯模組還沒載入完成，請稍候再試');
-    const fps = Math.round(p.fps) || 30, W = p.width, H = p.height;
+    const fps = Math.round(p.fps) || 30, W = Math.round(opts.width || p.width), H = Math.round(opts.height || p.height);
     if (!(W > 0 && H > 0)) throw new Error('專案的輸出尺寸不正確');
+    const CT = CONTAINERS[opts.container] || CONTAINERS.mp4;
     if (W % 2 || H % 2) throw new Error(`輸出尺寸 ${W}×${H} 需要是偶數`);
     const from = Math.max(0, Math.floor(opts.from || 0));
     const to = Math.floor(opts.to != null ? opts.to : (C && C.projectDuration ? C.projectDuration(p) : 0));
@@ -668,14 +861,18 @@
     if (root.document && document.fonts && document.fonts.ready) await withTimeout(document.fonts.ready, 8000);
     check();
 
-    const picked = opts.codecs || await pickCodecs({ width: W, height: H, fps, quality, prefer: opts.prefer });
-    if (!picked.video.length) throw new Error('這個瀏覽器沒有可用的影片編碼器（H.264／VP9／AV1 都不支援），請改用最新版 Chrome 或 Edge');
+    const vb = opts.videoBitrate > 0 ? Math.round(opts.videoBitrate) : videoBitrate(W, H, fps, quality);
+    const ab = opts.audioBitrate > 0 ? Math.round(opts.audioBitrate) : audioBitrate(quality);
+    const picked = opts.codecs || await pickCodecs({ width: W, height: H, fps, quality, prefer: opts.prefer, container: opts.container, audio: opts.audio, videoBitrate: vb, audioBitrate: ab });
+    if (!picked.video.length) {
+      throw new Error(CT === CONTAINERS.mp4 ? '這個瀏覽器沒有可用的影片編碼器（H.264／VP9／AV1 都不支援），請改用最新版 Chrome 或 Edge'
+        : `這個瀏覽器沒有 ${CT.name} 能用的影片編碼器（需要 ${CT.video.map(x => FAMILY_NAME[x]).join('／')}），請改用其他封裝格式`);
+    }
     check();
 
-    const vb = videoBitrate(W, H, fps, quality), ab = audioBitrate(quality);
     const vts = fps * 1000, frameUs = 1e6 / fps;
     const audioLen = Math.round(total / fps * SAMPLE_RATE);
-    const hasAudio = picked.audio.length > 0 && R && typeof R.renderAudio === 'function';
+    const hasAudio = opts.audio !== 'none' && picked.audio.length > 0 && R && typeof R.renderAudio === 'function';
     const t0 = performance.now();
     let frac = 0;
     const progress = (f, text) => {
@@ -737,7 +934,7 @@
       const fail = e => { const x = e instanceof Error ? e : new Error(String(e && e.message || e)); x.retryable = outputs === 0; return x; };
       try {
         enc.configure(videoConfig(cand, W, H, fps, vb));
-        const gop = fps * GOP_SEC;
+        const gop = Math.max(1, Math.round(fps * (opts.gopSec > 0 ? opts.gopSec : GOP_SEC)));
         for (let i = 0; i < total; i++) {
           check();
           if (err) throw fail(err);
@@ -761,11 +958,13 @@
     // ---- 封裝 ----
     check();
     progress(0.99, '封裝中…');
-    const parts = mp4.muxParts({ video: videoTrack, audio: audioTrack });
-    const blob = new Blob(parts, { type: 'video/mp4' });
-    const codecs = { video: videoUsed.name, audio: audioUsed ? audioUsed.name : null, label: audioUsed ? `${videoUsed.name}＋${audioUsed.name}` : `${videoUsed.name}（沒有聲音）` };
+    const parts = CT === CONTAINERS.webm ? webm.muxParts({ video: videoTrack, audio: audioTrack })
+      : mp4.muxParts({ video: videoTrack, audio: audioTrack, brand: CT === CONTAINERS.mov ? 'qt' : undefined });
+    const blob = new Blob(parts, { type: CT.mime });
+    const codecs = { video: videoUsed.name, audio: audioUsed ? audioUsed.name : null, container: CT.name,
+      label: audioUsed ? `${videoUsed.name}＋${audioUsed.name}` : `${videoUsed.name}（${opts.audio === 'none' ? '不含聲音' : '沒有聲音'}）` };
     report({ phase: 'done', fraction: 1, elapsed: (performance.now() - t0) / 1000, text: '完成' });
-    return { blob, filename: opts.filename || '剪輯.mp4', codecs, frames: total, seconds: total / fps };
+    return { blob, filename: opts.filename || `剪輯.${CT.ext}`, codecs, frames: total, seconds: total / fps, width: W, height: H, videoBitrate: vb, audioBitrate: hasAudio ? ab : 0 };
   }
 
   // 匯出用的 <video>（render.seekSource 開的）用完就釋放
@@ -813,22 +1012,48 @@
   // 四、對話框
   // ===================================================================================
   const $ = id => document.getElementById(id);
+  // 全畫面的匯出面板：左邊「快速匯出」（社群平台的建議設定），右邊各項設定，下方是摘要、進度與按鈕。
+  // 平台建議值的來源見 DESIGN.md 第 5 節；選了平台後再改任何一項就變回「自訂」。
   const STYLE = `
-.ed-ex-dialog { border: 1px solid var(--border); border-radius: 14px; padding: 0; width: min(460px, calc(100vw - 32px));
-  background: var(--field-bg); color: var(--text); box-shadow: var(--shadow); font-family: var(--ui-font); }
-.ed-ex-dialog::backdrop { background: rgba(15, 30, 60, .38); }
-.ed-ex { padding: 20px 22px 18px; display: grid; gap: 14px; margin: 0; }
+.ed-ex-dialog { border: none; border-radius: 0; padding: 0; margin: 0; width: 100vw; height: 100vh; max-width: none; max-height: none;
+  background: var(--bg); color: var(--text); font-family: var(--ui-font); }
+.ed-ex-dialog::backdrop { background: rgba(10, 14, 22, .55); }
+.ed-ex { height: 100%; margin: 0; display: grid; grid-template-rows: auto 1fr auto; }
+.ed-ex-head { display: flex; align-items: center; gap: 12px; padding: 14px 24px; border-bottom: 1px solid var(--border); background: var(--card-bg); }
 .ed-ex-title { margin: 0; font-size: 18px; }
+.ed-ex-head .ed-ex-x { margin-left: auto; width: 36px; height: 36px; padding: 0; border-radius: 50%; font-size: 16px; line-height: 1; }
+.ed-ex-main { min-height: 0; overflow: auto; display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 24px; padding: 20px 24px; align-content: start; }
+.ed-ex-col > h3 { margin: 0 0 10px; font-size: 13px; color: var(--muted); font-weight: 700; letter-spacing: .02em; }
+.ed-ex-presets { display: grid; gap: 8px; }
+.ed-ex-preset { text-align: left; display: grid; gap: 2px; padding: 10px 14px; border-radius: 14px; border: 1px solid var(--border);
+  background: var(--card-bg); color: var(--text); cursor: pointer; font: inherit; }
+.ed-ex-preset:hover:not(:disabled) { border-color: var(--accent); }
+.ed-ex-preset.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: var(--accent-soft); }
+.ed-ex-preset b { font-size: 14px; }
+.ed-ex-preset span { font-size: 12px; color: var(--muted); }
+.ed-ex-src { font-size: 11.5px; color: var(--muted); margin: 10px 2px 0; line-height: 1.5; }
+.ed-ex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px 20px; }
 .ed-ex-field > .ed-ex-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.ed-ex-field.wide { grid-column: 1 / -1; }
+.ed-ex-field select, .ed-ex-field input[type=number], .ed-ex-name input { width: 100%; font: inherit; font-size: 14px; padding: 8px 10px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--field-bg); color: var(--text); }
+.ed-ex-field select:focus, .ed-ex-field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.ed-ex-field option:disabled { color: var(--muted); }
 .ed-ex-name { display: flex; align-items: center; gap: 6px; }
-.ed-ex-name input { flex: 1; min-width: 0; font: inherit; font-size: 14px; padding: 8px 10px; border-radius: 8px;
-  border: 1px solid var(--border); background: var(--bg); color: var(--text); }
-.ed-ex-name input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.ed-ex-name input { flex: 1; min-width: 0; }
 .ed-ex-name span { color: var(--muted); font-size: 14px; }
-.ed-ex-seg { margin-bottom: 0; }
-.ed-ex-hint { font-size: 12px; color: var(--muted); margin-top: 6px; min-height: 1em; }
-.ed-ex-info { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: 13px;
-  background: var(--accent-soft); border-radius: 10px; padding: 10px 12px; }
+.ed-ex-mbps { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.ed-ex-mbps input { max-width: 120px; }
+.ed-ex-seg { margin-bottom: 0; display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 999px; background: var(--ed-tint, rgba(0, 74, 173, .07)); }
+.ed-ex-seg button { border: none; background: transparent; color: var(--muted); border-radius: 999px; padding: 7px 16px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.ed-ex-seg button:hover:not(:disabled):not(.active) { color: var(--text); }
+.ed-ex-seg button.active { background: var(--ed-tab-on-bg, var(--field-bg)); color: var(--ed-tab-on-fg, var(--accent)); box-shadow: 0 0 0 1px var(--ed-tab-on-ring, transparent), 0 4px 12px -6px rgba(0, 0, 0, .45); }
+.ed-ex-seg button:disabled { opacity: .45; cursor: not-allowed; }
+.ed-ex-hint { font-size: 12px; color: var(--muted); margin-top: 6px; min-height: 1em; line-height: 1.5; }
+.ed-ex-advice { grid-column: 1 / -1; font-size: 13px; line-height: 1.6; padding: 10px 14px; border-radius: 12px; background: var(--ed-warn-bg, #fff5dd); color: var(--ed-warn-fg, #8a5a00); }
+.ed-ex-advice button { margin-left: 8px; padding: 3px 12px; font-size: 12px; }
+.ed-ex-foot { border-top: 1px solid var(--border); background: var(--card-bg); padding: 14px 24px; display: grid; gap: 10px; }
+.ed-ex-info { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 6px 14px; margin: 0; font-size: 13px; }
 .ed-ex-info dt { color: var(--muted); }
 .ed-ex-info dd { margin: 0; font-weight: 600; }
 .ed-ex-info .ed-ex-note { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
@@ -838,23 +1063,50 @@
 .ed-ex-progress progress::-webkit-progress-value { background: var(--accent); border-radius: 99px; transition: width .2s; }
 .ed-ex-progress progress::-moz-progress-bar { background: var(--accent); }
 .ed-ex-stat { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.ed-ex-msg { font-size: 13px; min-height: 1.2em; }
+.ed-ex-bottom { display: flex; align-items: center; gap: 12px; }
+.ed-ex-msg { flex: 1; font-size: 13px; min-height: 1.2em; }
 .ed-ex-msg.is-error { color: var(--ed-err-fg, #c0262d); }
 .ed-ex-msg.is-ok { color: var(--success); }
-.ed-ex-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.ed-ex-actions button { padding: 9px 18px; }
+.ed-ex-actions { display: flex; gap: 8px; }
+.ed-ex-actions button { padding: 10px 22px; }
+@media (max-width: 900px) { .ed-ex-main { grid-template-columns: 1fr; } .ed-ex-info { grid-template-columns: auto 1fr; } }
 @media (prefers-reduced-motion: reduce) { .ed-ex-progress progress::-webkit-progress-value { transition: none; } }
 `;
 
-  const ui = { built: false, busy: false, ctrl: null, range: 'all', quality: 'high', name: '', project: null, pickToken: 0 };
+  // 社群平台的建議設定。size＝短邊（保持專案比例）；mbps 依 fps；aspect＝平台建議的畫面比例（和專案不同時提示）
+  const PRESETS = [
+    { id: 'yt1080', name: 'YouTube', sub: '1080p 橫式（16:9）', aspect: '16:9', size: 1080, mbps: fps => (fps > 30 ? 12 : 8), akbps: 384, gop: 'half' },
+    { id: 'yt4k', name: 'YouTube 4K', sub: '2160p 橫式（16:9）', aspect: '16:9', size: 2160, mbps: fps => (fps > 30 ? 60 : 40), akbps: 384, gop: 'half' },
+    { id: 'shorts', name: 'YouTube Shorts', sub: '1080×1920 直式（9:16）', aspect: '9:16', size: 1080, mbps: fps => (fps > 30 ? 12 : 8), akbps: 384, gop: 'half' },
+    { id: 'igreels', name: 'Instagram Reels', sub: '1080×1920 直式（9:16）', aspect: '9:16', size: 1080, mbps: () => 5, akbps: 192, maxFps: 30 },
+    { id: 'igpost', name: 'Instagram 貼文', sub: '1080×1350（4:5）', aspect: '4:5', size: 1080, mbps: () => 5, akbps: 192, maxFps: 30 },
+    { id: 'fb', name: 'Facebook 影片', sub: '1080p 橫式（16:9）', aspect: '16:9', size: 1080, mbps: () => 8, akbps: 192 },
+    { id: 'fbreels', name: 'Facebook Reels', sub: '1080×1920 直式（9:16）', aspect: '9:16', size: 1080, mbps: () => 8, akbps: 192 },
+  ];
+  const ASPECT_RATIO = { '16:9': 16 / 9, '9:16': 9 / 16, '4:5': 4 / 5 };
+  const SIZES = [2160, 1440, 1080, 720, 480];
+  const AUDIO_KBPS = [128, 192, 256, 320, 384];
+  const DEFAULTS = { preset: 'custom', size: 'project', quality: 'high', mbps: 8, video: 'auto', audio: 'auto', akbps: 'auto', container: 'mp4', gop: null };
+  const SETTINGS_KEY = 'qc-export';
+
+  const ui = { built: false, busy: false, ctrl: null, range: 'all', name: '', project: null, pickToken: 0, set: Object.assign({}, DEFAULTS) };
+  Object.defineProperty(ui, 'quality', { get: () => ui.set.quality, set: v => { ui.set.quality = v; } });
   const pad2 = n => String(n).padStart(2, '0');
   const stampNow = () => { const d = new Date(); return `${pad2(d.getFullYear() % 100)}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}${pad2(d.getHours())}${pad2(d.getMinutes())}`; };
-  const safeBase = name => (String(name || '').replace(/\.mp4$/i, '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim().slice(0, 80));
+  const safeBase = name => (String(name || '').replace(/\.(mp4|mov|webm)$/i, '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim().slice(0, 80));
   const fmtTime = s => { s = Math.max(0, Math.round(s)); const m = Math.floor(s / 60); return m ? `${m} 分 ${pad2(s % 60)} 秒` : `${s} 秒`; };
   const fmtDur = s => (s < 60 ? `${+s.toFixed(1)} 秒` : fmtTime(s));
   const fmtTc = (f, fps) => { const s = Math.floor(f / fps); return `${pad2(Math.floor(s / 3600))}:${pad2(Math.floor(s / 60) % 60)}:${pad2(s % 60)}:${pad2(f % fps)}`; };
   const fmtSize = b => (b >= 1e9 ? `${(b / 1e9).toFixed(2)} GB` : b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1e3))} KB`);
   const fmtRate = b => (b >= 1e6 ? `${(b / 1e6).toFixed(1)} Mbps` : `${Math.round(b / 1e3)} kbps`);
+  const even = n => Math.max(2, Math.round(n / 2) * 2);
+
+  function loadSettings() {
+    try { const o = JSON.parse(root.localStorage.getItem(SETTINGS_KEY)); if (o && typeof o === 'object') for (const k of Object.keys(DEFAULTS)) if (o[k] !== undefined) ui.set[k] = o[k]; } catch (e) { /* 讀不到就用預設 */ }
+    if (!CONTAINERS[ui.set.container]) ui.set.container = 'mp4';
+    if (!QUALITY[ui.set.quality] && ui.set.quality !== 'custom') ui.set.quality = 'high';
+  }
+  function saveSettings() { try { root.localStorage.setItem(SETTINGS_KEY, JSON.stringify(ui.set)); } catch (e) { /* 不能存就算了 */ } }
 
   const currentProject = () => ui.project || (Q.ui && Q.ui.state && Q.ui.state.project) || null;
   const duration = p => { try { return Q.core && Q.core.projectDuration ? Q.core.projectDuration(p) : 0; } catch (e) { return 0; } };
@@ -866,6 +1118,23 @@
       return { from: a, to: Math.max(a, b) };
     }
     return { from: 0, to: dur };
+  }
+  // 輸出尺寸：size＝'project' 用專案尺寸，否則是短邊（保持專案比例，偶數化）
+  function outSize(p, size) {
+    if (size === 'project' || !(size > 0)) return { w: p.width, h: p.height };
+    if (p.width <= p.height) return { w: even(size), h: even(size * p.height / p.width) };
+    return { w: even(size * p.width / p.height), h: even(size) };
+  }
+  // 目前設定換算成 run() 的參數
+  function plan(p) {
+    const fps = Math.round(p.fps) || 30, S = ui.set, { w, h } = outSize(p, S.size);
+    const vb = S.quality === 'custom' ? Math.round(Math.max(0.2, Math.min(200, +S.mbps || 8)) * 1e6) : videoBitrate(w, h, fps, S.quality);
+    const ab = S.audio === 'none' ? 0 : (S.akbps === 'auto' ? audioBitrate(S.quality === 'custom' ? 'high' : S.quality) : +S.akbps * 1000);
+    const prefer = {};
+    if (S.video !== 'auto') prefer.video = S.video;
+    if (S.audio !== 'auto' && S.audio !== 'none') prefer.audio = S.audio;
+    return { fps, w, h, vb, ab, prefer: (prefer.video || prefer.audio) ? prefer : undefined, container: S.container, audio: S.audio === 'none' ? 'none' : undefined,
+      gopSec: S.gop === 'half' ? 0.5 : undefined, ext: CONTAINERS[S.container].ext };
   }
 
   function injectStyle() {
@@ -879,55 +1148,155 @@
   function build(dlg) {
     dlg.classList.add('ed-ex-dialog');
     dlg.setAttribute('aria-labelledby', 'edExTitle');
+    const opt = (v, t) => `<option value="${v}">${t}</option>`;
     dlg.innerHTML = `
 <form class="ed-ex" method="dialog" novalidate>
-  <h2 class="ed-ex-title" id="edExTitle">匯出影片</h2>
-  <div class="ed-ex-field">
-    <label class="ed-ex-label" for="edExName">檔名</label>
-    <div class="ed-ex-name"><input id="edExName" type="text" autocomplete="off" spellcheck="false" maxlength="80"><span>.mp4</span></div>
+  <header class="ed-ex-head">
+    <h2 class="ed-ex-title" id="edExTitle">匯出影片</h2>
+    <button type="button" class="ed-ex-x" id="edExX" aria-label="關閉" title="關閉（Esc）">✕</button>
+  </header>
+  <div class="ed-ex-main">
+    <section class="ed-ex-col" aria-labelledby="edExPresetsLabel">
+      <h3 id="edExPresetsLabel">快速匯出</h3>
+      <div class="ed-ex-presets" id="edExPresets">
+        <button type="button" class="ed-ex-preset" data-preset="custom"><b>自訂</b><span>自己選畫質、尺寸與格式</span></button>
+        ${PRESETS.map(x => `<button type="button" class="ed-ex-preset" data-preset="${x.id}"><b>${x.name}</b><span>${x.sub}．H.264＋AAC．MP4</span></button>`).join('')}
+      </div>
+      <p class="ed-ex-src">平台建議值依 YouTube 官方上傳建議與 Meta／Instagram 常見規格整理；平台收到後都會再壓縮一次。比例和專案不同時會提醒你。</p>
+    </section>
+    <section class="ed-ex-col" aria-labelledby="edExSetLabel">
+      <h3 id="edExSetLabel">設定</h3>
+      <div class="ed-ex-grid">
+        <div class="ed-ex-advice" id="edExAdvice" hidden></div>
+        <div class="ed-ex-field wide">
+          <label class="ed-ex-label" for="edExName">檔名</label>
+          <div class="ed-ex-name"><input id="edExName" type="text" autocomplete="off" spellcheck="false" maxlength="80"><span id="edExExt">.mp4</span></div>
+        </div>
+        <div class="ed-ex-field">
+          <span class="ed-ex-label" id="edExRangeLabel">範圍</span>
+          <div class="bg-toggle ed-ex-seg" id="edExRange" role="group" aria-labelledby="edExRangeLabel">
+            <button type="button" data-v="all">整段</button><button type="button" data-v="io">In～Out</button>
+          </div>
+          <div class="ed-ex-hint" id="edExRangeHint"></div>
+        </div>
+        <div class="ed-ex-field">
+          <label class="ed-ex-label" for="edExSizeSel">尺寸</label>
+          <select id="edExSizeSel"></select>
+          <div class="ed-ex-hint" id="edExSizeHint"></div>
+        </div>
+        <div class="ed-ex-field">
+          <span class="ed-ex-label" id="edExQualityLabel">畫質</span>
+          <div class="bg-toggle ed-ex-seg" id="edExQuality" role="group" aria-labelledby="edExQualityLabel">
+            <button type="button" data-v="high">高</button><button type="button" data-v="medium">中</button><button type="button" data-v="small">小</button><button type="button" data-v="custom">自訂</button>
+          </div>
+          <div class="ed-ex-mbps" id="edExMbpsRow" hidden><input id="edExMbps" type="number" min="0.2" max="200" step="0.5" aria-label="影像位元率（Mbps）"><span>Mbps</span></div>
+          <div class="ed-ex-hint" id="edExQualityHint"></div>
+        </div>
+        <div class="ed-ex-field">
+          <label class="ed-ex-label" for="edExContainer">封裝格式</label>
+          <select id="edExContainer">${opt('mp4', 'MP4（最通用）')}${opt('mov', 'MOV（QuickTime／Apple）')}${opt('webm', 'WebM（網頁用）')}</select>
+          <div class="ed-ex-hint" id="edExContainerHint"></div>
+        </div>
+        <div class="ed-ex-field">
+          <label class="ed-ex-label" for="edExVideo">影像編碼</label>
+          <select id="edExVideo">${opt('auto', '自動（建議）')}${opt('h264', 'H.264（相容性最好）')}${opt('vp9', 'VP9')}${opt('av1', 'AV1（檔案最小、較新）')}</select>
+          <div class="ed-ex-hint" id="edExVideoHint"></div>
+        </div>
+        <div class="ed-ex-field">
+          <label class="ed-ex-label" for="edExAudio">聲音</label>
+          <select id="edExAudio">${opt('auto', '自動（建議）')}${opt('aac', 'AAC')}${opt('opus', 'Opus')}${opt('none', '不含聲音')}</select>
+          <div class="ed-ex-hint" id="edExAudioHint"></div>
+        </div>
+        <div class="ed-ex-field">
+          <label class="ed-ex-label" for="edExAkbps">聲音位元率</label>
+          <select id="edExAkbps">${opt('auto', '依畫質')}${AUDIO_KBPS.map(k => opt(k, `${k} kbps`)).join('')}</select>
+        </div>
+      </div>
+    </section>
   </div>
-  <div class="ed-ex-field">
-    <span class="ed-ex-label" id="edExRangeLabel">範圍</span>
-    <div class="bg-toggle ed-ex-seg" id="edExRange" role="group" aria-labelledby="edExRangeLabel">
-      <button type="button" data-v="all">整段</button><button type="button" data-v="io">In～Out</button>
+  <footer class="ed-ex-foot">
+    <dl class="ed-ex-info">
+      <dt>輸出</dt><dd id="edExSize"></dd>
+      <dt>編碼</dt><dd id="edExCodec"></dd>
+      <dt>位元率</dt><dd id="edExRate"></dd>
+      <dt>預估大小</dt><dd id="edExEst"></dd>
+    </dl>
+    <div class="ed-ex-progress" id="edExProgress" hidden>
+      <progress id="edExBar" max="1" value="0"></progress>
+      <div class="ed-ex-stat"><span id="edExStatus"></span><span id="edExEta"></span></div>
     </div>
-    <div class="ed-ex-hint" id="edExRangeHint"></div>
-  </div>
-  <div class="ed-ex-field">
-    <span class="ed-ex-label" id="edExQualityLabel">畫質</span>
-    <div class="bg-toggle ed-ex-seg" id="edExQuality" role="group" aria-labelledby="edExQualityLabel">
-      <button type="button" data-v="high">高</button><button type="button" data-v="medium">中</button><button type="button" data-v="small">小</button>
+    <div class="ed-ex-bottom">
+      <div class="ed-ex-msg" id="edExMsg" role="status" aria-live="polite"></div>
+      <div class="ed-ex-actions">
+        <button type="button" id="edExClose">關閉</button>
+        <button type="button" class="primary" id="edExGo">匯出</button>
+      </div>
     </div>
-    <div class="ed-ex-hint" id="edExQualityHint"></div>
-  </div>
-  <dl class="ed-ex-info">
-    <dt>輸出</dt><dd id="edExSize"></dd>
-    <dt>編碼</dt><dd id="edExCodec"></dd>
-  </dl>
-  <div class="ed-ex-progress" id="edExProgress" hidden>
-    <progress id="edExBar" max="1" value="0"></progress>
-    <div class="ed-ex-stat"><span id="edExStatus"></span><span id="edExEta"></span></div>
-  </div>
-  <div class="ed-ex-msg" id="edExMsg" role="status" aria-live="polite"></div>
-  <div class="ed-ex-actions">
-    <button type="button" id="edExClose">關閉</button>
-    <button type="button" class="primary" id="edExGo">匯出</button>
-  </div>
+  </footer>
 </form>`;
-    const seg = (id, key) => $(id).addEventListener('click', e => {
+    // 改了任何一項（不是點平台）就變回「自訂」
+    const touch = () => { ui.set.preset = 'custom'; ui.set.gop = null; saveSettings(); refresh(); };
+    $('edExRange').addEventListener('click', e => { const b = e.target.closest('button'); if (!b || b.disabled || ui.busy) return; ui.range = b.dataset.v; refresh(); });
+    $('edExQuality').addEventListener('click', e => {
       const b = e.target.closest('button');
       if (!b || b.disabled || ui.busy) return;
-      ui[key] = b.dataset.v;
-      refresh();
+      // 切到「自訂」時，先帶入目前畫質換算出來的位元率
+      const p = currentProject();
+      if (b.dataset.v === 'custom' && ui.set.quality !== 'custom' && p) ui.set.mbps = +(plan(p).vb / 1e6).toFixed(1);
+      ui.set.quality = b.dataset.v;
+      touch();
     });
-    seg('edExRange', 'range');
-    seg('edExQuality', 'quality');
+    $('edExMbps').addEventListener('change', () => { const v = +$('edExMbps').value; if (v > 0) ui.set.mbps = Math.max(0.2, Math.min(200, v)); touch(); });
+    $('edExSizeSel').addEventListener('change', e => { const v = e.target.value; ui.set.size = v === 'project' ? 'project' : +v; touch(); });
+    $('edExContainer').addEventListener('change', e => {
+      ui.set.container = e.target.value;
+      const C = CONTAINERS[ui.set.container];
+      if (ui.set.video !== 'auto' && !C.video.includes(ui.set.video)) ui.set.video = 'auto';
+      if (ui.set.audio !== 'auto' && ui.set.audio !== 'none' && !C.audio.includes(ui.set.audio)) ui.set.audio = 'auto';
+      touch();
+    });
+    $('edExVideo').addEventListener('change', e => { ui.set.video = e.target.value; touch(); });
+    $('edExAudio').addEventListener('change', e => { ui.set.audio = e.target.value; touch(); });
+    $('edExAkbps').addEventListener('change', e => { ui.set.akbps = e.target.value === 'auto' ? 'auto' : +e.target.value; touch(); });
+    $('edExPresets').addEventListener('click', e => { const b = e.target.closest('[data-preset]'); if (b && !ui.busy) applyPreset(b.dataset.preset); });
     $('edExName').addEventListener('input', () => { ui.name = $('edExName').value; });
     $('edExName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); start(); } });
     $('edExGo').addEventListener('click', start);
     $('edExClose').addEventListener('click', () => { if (ui.busy) { if (ui.ctrl) ui.ctrl.abort(); } else dlg.close(); });
+    $('edExX').addEventListener('click', () => { if (!ui.busy) dlg.close(); });
     dlg.addEventListener('cancel', e => { if (ui.busy) e.preventDefault(); });     // 匯出中按 Esc 不關
     ui.built = true;
+  }
+
+  // 套用平台建議：H.264＋AAC＋MP4、指定尺寸與位元率（瀏覽器沒有 H.264／AAC 時會自動改用別的，並在編碼欄說明）
+  function applyPreset(id) {
+    const x = PRESETS.find(q => q.id === id);
+    if (!x) { ui.set.preset = 'custom'; ui.set.gop = null; saveSettings(); refresh(); return; }
+    const p = currentProject(), fps = p ? Math.round(p.fps) || 30 : 30;
+    Object.assign(ui.set, { preset: id, size: x.size, quality: 'custom', mbps: x.mbps(fps), video: 'h264', audio: 'aac', akbps: x.akbps, container: 'mp4', gop: x.gop || null });
+    saveSettings();
+    refresh();
+  }
+  // 平台建議比例和專案不同：提示，並提供一鍵改專案的輸出比例（只有匯出的是目前的剪輯專案時）
+  function adviceFor(p, fps) {
+    const x = PRESETS.find(q => q.id === ui.set.preset);
+    if (!x) return null;
+    const tips = [];
+    let fix = null;
+    const want = ASPECT_RATIO[x.aspect], have = p.width / p.height;
+    if (want && Math.abs(have - want) / want > 0.01) {
+      tips.push(`${x.name} 建議 ${x.aspect}，目前專案是 ${p.width}×${p.height}，匯出後平台可能會加黑邊或裁切。`);
+      if (!ui.project && $('edAspect')) fix = x.aspect;
+    }
+    if (x.maxFps && fps > x.maxFps) tips.push(`${x.name} 建議 ${x.maxFps} fps 以下，目前專案是 ${fps} fps（影格率依專案設定）。`);
+    return tips.length ? { text: tips.join(' '), fix } : null;
+  }
+  function applyAspect(a) {
+    const sel = $('edAspect');
+    if (!sel || ui.busy) return;
+    sel.value = a;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    refresh();
   }
 
   function setMsg(text, kind) {
@@ -937,61 +1306,110 @@
     m.classList.toggle('is-ok', kind === 'ok');
   }
 
-  // 依目前專案與選項更新對話框（不含進度）
+  // 依目前專案與選項更新面板（不含進度）
   function refresh() {
-    const p = currentProject();
+    const p = currentProject(), S = ui.set;
     const go = $('edExGo');
     const hasIO = !!p && (p.inPoint != null || p.outPoint != null);
     if (!hasIO && ui.range === 'io') ui.range = 'all';
     for (const b of $('edExRange').children) { b.classList.toggle('active', b.dataset.v === ui.range); b.disabled = ui.busy || (b.dataset.v === 'io' && !hasIO); }
-    for (const b of $('edExQuality').children) { b.classList.toggle('active', b.dataset.v === ui.quality); b.disabled = ui.busy; }
-    $('edExName').disabled = ui.busy;
+    for (const b of $('edExQuality').children) { b.classList.toggle('active', b.dataset.v === S.quality); b.disabled = ui.busy; }
+    for (const b of $('edExPresets').children) { b.classList.toggle('active', b.dataset.preset === S.preset); b.disabled = ui.busy; b.setAttribute('aria-pressed', String(b.dataset.preset === S.preset)); }
+    for (const id of ['edExName', 'edExSizeSel', 'edExContainer', 'edExVideo', 'edExAudio', 'edExAkbps', 'edExMbps']) $(id).disabled = ui.busy;
+    $('edExMbpsRow').hidden = S.quality !== 'custom';
+    if (doc().activeElement !== $('edExMbps')) $('edExMbps').value = S.mbps;
+    $('edExContainer').value = S.container; $('edExVideo').value = S.video; $('edExAudio').value = S.audio; $('edExAkbps').value = String(S.akbps);
+    $('edExAkbps').disabled = ui.busy || S.audio === 'none';
+    $('edExExt').textContent = `.${CONTAINERS[S.container].ext}`;
     go.disabled = ui.busy;
     $('edExClose').textContent = ui.busy ? '取消匯出' : '關閉';
+    $('edExX').disabled = ui.busy;
     if (!p) {
-      $('edExSize').textContent = '—';
-      $('edExRangeHint').textContent = '';
-      $('edExQualityHint').textContent = '';
-      $('edExCodec').textContent = '—';
+      for (const id of ['edExSize', 'edExCodec', 'edExRate', 'edExEst']) $(id).textContent = '—';
+      $('edExRangeHint').textContent = ''; $('edExQualityHint').textContent = ''; $('edExSizeHint').textContent = '';
+      $('edExAdvice').hidden = true;
       go.disabled = true;
       if (!ui.busy) setMsg('還沒有專案可以匯出', 'error');
       return;
     }
-    const fps = Math.round(p.fps) || 30;
+    // 尺寸選單：依專案比例算出每個選項的實際寬高
+    const sizeSel = $('edExSizeSel');
+    sizeSel.textContent = '';
+    const addSize = (v, t) => { const o = document.createElement('option'); o.value = String(v); o.textContent = t; sizeSel.appendChild(o); };
+    addSize('project', `依專案（${p.width}×${p.height}）`);
+    for (const s of SIZES) { const d = outSize(p, s); addSize(s, `${s}p（${d.w}×${d.h}）`); }
+    sizeSel.value = String(S.size);
+    if (sizeSel.value !== String(S.size)) { S.size = 'project'; sizeSel.value = 'project'; }
+
+    const P = plan(p), fps = P.fps;
     const r = rangeOf(p, ui.range), frames = r.to - r.from, secs = frames / fps;
-    $('edExSize').textContent = `${p.width}×${p.height}．${fps} fps（依專案設定）`;
+    $('edExSize').textContent = S.size === 'project' ? `${P.w}×${P.h}．${fps} fps（依專案設定）` : `${P.w}×${P.h}．${fps} fps（從專案 ${p.width}×${p.height} ${P.w > p.width ? '放大' : P.w < p.width ? '縮小' : '輸出'}）`;
+    $('edExSizeHint').textContent = P.w > p.width ? '比專案尺寸大：畫面會放大，細節不會變多' : '保持專案的畫面比例';
     $('edExRangeHint').textContent = frames > 0
       ? `${fmtTc(r.from, fps)} ～ ${fmtTc(r.to, fps)}，共 ${fmtDur(secs)}（${frames} 格）`
       : (ui.range === 'io' ? 'In／Out 範圍是空的' : '時間軸上還沒有內容');
-    const vb = videoBitrate(p.width, p.height, fps, ui.quality), ab = audioBitrate(ui.quality);
-    $('edExQualityHint').textContent = `影像約 ${fmtRate(vb)}${frames > 0 ? `，檔案約 ${fmtSize((vb + ab) / 8 * secs)}` : ''}`;
+    $('edExQualityHint').textContent = S.quality === 'custom' ? '直接指定影像位元率（越高越清楚、檔案越大）' : `影像約 ${fmtRate(P.vb)}（依尺寸與影格率自動計算）`;
+    $('edExRate').textContent = `影像 ${fmtRate(P.vb)}${P.ab ? `．聲音 ${fmtRate(P.ab)}` : ''}${P.gopSec ? '．關鍵格每 0.5 秒' : ''}`;
+    $('edExEst').textContent = frames > 0 ? `約 ${fmtSize((P.vb + P.ab) / 8 * secs)}（${fmtDur(secs)}）` : '—';
+    $('edExContainerHint').textContent = { mp4: '幾乎所有平台與播放器都能用', mov: '剪輯軟體、Apple 裝置常用；只能放 H.264＋AAC', webm: '網頁播放用；只能放 VP9／AV1＋Opus' }[S.container];
+    const adv = adviceFor(p, fps), box = $('edExAdvice');
+    box.hidden = !adv;
+    box.textContent = '';
+    if (adv) {
+      box.append(adv.text);
+      if (adv.fix) { const b = document.createElement('button'); b.type = 'button'; b.id = 'edExFixAspect'; b.textContent = `專案改成 ${adv.fix}`; b.disabled = ui.busy; b.addEventListener('click', () => applyAspect(adv.fix)); box.append(b); }
+    }
     if (frames <= 0) go.disabled = true;
-    updateCodecLabel(p, fps);
+    updateCodecLabel(p, P);
   }
+  const doc = () => document;
 
-  // 實際會用的編碼格式（非同步查詢；尺寸、fps、畫質一樣就不重查）
+  // 實際會用的編碼格式（非同步查詢；設定一樣就不重查）
   let codecKey = '', codecInfo = null;
-  async function updateCodecLabel(p, fps) {
+  async function updateCodecLabel(p, P) {
     const el = $('edExCodec');
-    const k = `${p.width}x${p.height}@${fps}/${ui.quality}`;
+    const k = JSON.stringify([P.w, P.h, P.fps, P.vb, P.ab, P.container, P.prefer, P.audio]);
     if (k === codecKey && codecInfo) { paintCodec(el, codecInfo); return; }
     codecKey = k; codecInfo = null;
     const token = ++ui.pickToken;
     el.textContent = '偵測中…';
     let info;
-    try { info = await pickCodecs({ width: p.width, height: p.height, fps, quality: ui.quality }); } catch (e) { info = { video: [], audio: [] }; }
+    try { info = await pickCodecs({ width: P.w, height: P.h, fps: P.fps, prefer: P.prefer, container: P.container, audio: P.audio, videoBitrate: P.vb, audioBitrate: P.ab || 128000 }); } catch (e) { info = { video: [], audio: [], support: {} }; }
     if (token !== ui.pickToken) return;
     codecInfo = info;
     paintCodec(el, info);
   }
   function paintCodec(el, info) {
     el.textContent = '';
+    const sup = info.support || {}, C = CONTAINERS[ui.set.container];
+    // 選項狀態：這個瀏覽器不支援的、這個封裝格式放不下的都停用並寫原因
+    const mark = (sel, fam, base, allowed) => {
+      const o = $(sel).querySelector(`option[value="${fam}"]`);
+      if (!o) return;
+      const why = typeof VideoEncoder === 'undefined' ? '' : !sup[fam] ? '此瀏覽器不支援' : !allowed ? `${C.name} 不能放` : '';
+      o.disabled = !!why;
+      o.textContent = why ? `${base}（${why}）` : base;
+    };
+    mark('edExVideo', 'h264', 'H.264（相容性最好）', C.video.includes('h264'));
+    mark('edExVideo', 'vp9', 'VP9', C.video.includes('vp9'));
+    mark('edExVideo', 'av1', 'AV1（檔案最小、較新）', C.video.includes('av1'));
+    mark('edExAudio', 'aac', 'AAC', C.audio.includes('aac'));
+    mark('edExAudio', 'opus', 'Opus', C.audio.includes('opus'));
+    for (const [k, base] of [['mov', 'MOV（QuickTime／Apple）'], ['webm', 'WebM（網頁用）']]) {
+      const o = $('edExContainer').querySelector(`option[value="${k}"]`), D = CONTAINERS[k];
+      const vOk = D.video.some(f => sup[f]);
+      o.disabled = typeof VideoEncoder !== 'undefined' && !vOk;
+      o.textContent = o.disabled ? `${base}（此瀏覽器沒有 ${D.video.map(f => FAMILY_NAME[f]).join('／')} 編碼）` : base;
+    }
+    $('edExVideoHint').textContent = ui.set.video === 'auto' ? `自動選這個格式能用的最佳編碼（${C.video.map(f => FAMILY_NAME[f]).join(' → ')}）` : '';
+    $('edExAudioHint').textContent = ui.set.audio === 'none' ? '匯出的影片沒有聲音' : '';
     if (!info.video.length) {
-      el.textContent = typeof VideoEncoder === 'undefined' ? '此瀏覽器不支援影片編碼' : '找不到可用的影片編碼器';
-      if (!ui.busy) { $('edExGo').disabled = true; setMsg('這個瀏覽器不能匯出影片，請改用最新版 Chrome 或 Edge', 'error'); }
+      el.textContent = typeof VideoEncoder === 'undefined' ? '此瀏覽器不支援影片編碼' : `找不到 ${C.name} 能用的影片編碼器`;
+      if (!ui.busy) { $('edExGo').disabled = true; setMsg(typeof VideoEncoder === 'undefined' ? '這個瀏覽器不能匯出影片，請改用最新版 Chrome 或 Edge' : `這個瀏覽器不能匯出 ${C.name}，請改用其他封裝格式`, 'error'); }
       return;
     }
-    el.append(info.label);
+    if (!ui.busy && /不能匯出/.test($('edExMsg').textContent)) setMsg('');
+    el.append(`${info.label}．${C.name}`);
     if (info.note) { const n = document.createElement('span'); n.className = 'ed-ex-note'; n.textContent = info.note; el.append(n); }
   }
 
@@ -1028,7 +1446,8 @@
     }
     const base = safeBase($('edExName').value) || `剪輯_${stampNow()}`;
     $('edExName').value = ui.name = base;
-    const filename = `${base}.mp4`;
+    const P = plan(p);
+    const filename = `${base}.${P.ext}`;
     ui.busy = true;
     ui.ctrl = new AbortController();
     setMsg('');
@@ -1036,11 +1455,12 @@
     showProgress({ fraction: 0, text: '準備中…' });
     const t0 = performance.now();
     try {
-      const res = await run({ project: p, from: r.from, to: r.to, quality: ui.quality, filename, signal: ui.ctrl.signal, onProgress: showProgress });
+      const res = await run({ project: p, from: r.from, to: r.to, quality: ui.set.quality === 'custom' ? 'high' : ui.set.quality, filename, signal: ui.ctrl.signal, onProgress: showProgress,
+        width: P.w, height: P.h, videoBitrate: P.vb, audioBitrate: P.ab || undefined, prefer: P.prefer, container: P.container, audio: P.audio, gopSec: P.gopSec });
       saveBlob(res.blob, filename);
       api.lastExport = { filename, size: res.blob.size, at: Date.now(), codecs: res.codecs };
       if (Q.core && Q.core.bus && typeof CustomEvent !== 'undefined') Q.core.bus.dispatchEvent(new CustomEvent('exported', { detail: api.lastExport }));
-      setMsg(`已匯出：${filename}（${fmtSize(res.blob.size)}，${res.codecs.label}，用時 ${fmtTime((performance.now() - t0) / 1000)}）`, 'ok');
+      setMsg(`已匯出：${filename}（${fmtSize(res.blob.size)}，${res.width}×${res.height}，${res.codecs.label}，用時 ${fmtTime((performance.now() - t0) / 1000)}）`, 'ok');
     } catch (e) {
       if (e && e.cancelled) { setMsg('已取消匯出'); $('edExProgress').hidden = true; }
       else {
@@ -1060,7 +1480,7 @@
     const dlg = typeof document !== 'undefined' && $('edExportDialog');
     if (!dlg) return false;
     injectStyle();
-    if (!ui.built) build(dlg);
+    if (!ui.built) { loadSettings(); build(dlg); }
     if (!ui.busy) ui.project = (opts && opts.project) || null;   // 沒指定就回到目前的剪輯專案（不要黏著上次指定的專案）
     if (!ui.busy) {
       setMsg('');
@@ -1078,11 +1498,11 @@
   function cancel() { if (ui.ctrl) ui.ctrl.abort(); }
 
   const api = {
-    open, cancel, run, pickCodecs, mp4,
+    open, cancel, run, pickCodecs, mp4, webm,
     get busy() { return ui.busy; },
     lastExport: null,
     // 測試／除錯用
-    _internal: { videoBitrate, audioBitrate, avcLevel, vp9Level, av1Level, videoCandidates, rangeOf, QUALITY },
+    _internal: { videoBitrate, audioBitrate, avcLevel, vp9Level, av1Level, videoCandidates, rangeOf, QUALITY, CONTAINERS, PRESETS, outSize, applyPreset, ui },
   };
   Q.exporter = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

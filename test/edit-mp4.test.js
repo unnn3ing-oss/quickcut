@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 
-const { mp4 } = require('../edit-export.js');
+const { mp4, webm } = require('../edit-export.js');
 
 // ---- 簡單的 box 解析器（同時檢查每一層的大小剛好填滿上一層）------------------------------
 const CONTAINERS = new Set(['moov', 'trak', 'edts', 'mdia', 'minf', 'dinf', 'stbl', 'udta']);
@@ -381,10 +381,11 @@ const decodeErrors = file => spawnSync('ffmpeg', ['-v', 'error', '-nostdin', '-i
 const md5 = (file, sel) => execFileSync('ffmpeg', ['-v', 'error', '-nostdin', '-i', file, '-map', `0:${sel}:0`, '-fps_mode', 'passthrough', '-f', 'md5', '-']).toString().trim();
 const hasEncoder = name => execFileSync('ffmpeg', ['-hide_banner', '-encoders']).toString().includes(` ${name} `);
 
-// 從參考檔拆出樣本，交給我們的 muxer 重新封裝
-function remux(ref, { forceCo64 = false, av1NoDesc = false } = {}) {
+// 從參考檔拆出樣本，交給我們的 muxer 重新封裝（mux 可換成 webm.mux）
+function remux(ref, o = {}) { return (o.mux || mp4.mux)(remuxOpts(ref, o)); }
+function remuxOpts(ref, { forceCo64 = false, av1NoDesc = false, brand } = {}) {
   const tracks = demux(ref);
-  const opts = { time: 0, forceCo64 };
+  const opts = { time: 0, forceCo64, brand };
   for (const t of tracks) {
     const skip = t.elst ? t.elst[t.elst.length - 1][1] : 0;
     const present = t.elst ? Math.round(t.elst[t.elst.length - 1][0] * t.timescale / u32(ref, find(parseFile(ref), 'moov/mvhd').body + 12)) : undefined;
@@ -408,17 +409,18 @@ function remux(ref, { forceCo64 = false, av1NoDesc = false } = {}) {
       opts.audio = { codec, sampleRate: t.sampleRate, channels: t.channels, timescale: t.timescale, description, skip, presentDuration: present, samples: t.samples };
     }
   }
-  return mp4.mux(opts);
+  return opts;
 }
 
 function crossCheck(t, name, encArgs, extra = {}) {
-  const ref = path.join(tmp, `${name}-ref.mp4`), out = path.join(tmp, `${name}-ours.mp4`);
+  const ext = extra.ext || 'mp4';
+  const ref = path.join(tmp, `${name}-ref.mp4`), out = path.join(tmp, `${name}-ours.${ext}`);
   ff(['-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=30:duration=3', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=3',
     '-ac', '2', ...encArgs, '-shortest', ref]);
   const refBuf = new Uint8Array(fs.readFileSync(ref));
   const ours = remux(refBuf, extra);
   fs.writeFileSync(out, ours);
-  parseFile(ours);                                         // 結構檢查
+  if (extra.check) extra.check(ours); else parseFile(ours);   // 結構檢查
   const a = probe(ref), b = probe(out);
   const vs = b.streams.find(s => s.codec_type === 'video'), as = b.streams.find(s => s.codec_type === 'audio');
   const rvs = a.streams.find(s => s.codec_type === 'video'), ras = a.streams.find(s => s.codec_type === 'audio');
@@ -427,8 +429,9 @@ function crossCheck(t, name, encArgs, extra = {}) {
   assert.equal(vs.nb_read_frames, rvs.nb_read_frames);
   assert.equal(vs.codec_name, rvs.codec_name);
   assert.equal(as.codec_name, ras.codec_name);
-  assert.ok(Math.abs(+vs.duration - 3) < 0.01, `影像長度 ${vs.duration}`);
-  assert.ok(Math.abs(+as.duration - +ras.duration) < 0.03, `聲音長度 ${as.duration} vs ${ras.duration}`);
+  // WebM（Matroska）的 ffprobe 不回報各串流的長度，只看整個檔案；畫面與聲音的內容由下面的 md5 比對
+  if (vs.duration !== undefined) assert.ok(Math.abs(+vs.duration - 3) < 0.01, `影像長度 ${vs.duration}`);
+  if (as.duration !== undefined) assert.ok(Math.abs(+as.duration - +ras.duration) < 0.03, `聲音長度 ${as.duration} vs ${ras.duration}`);
   assert.ok(Math.abs(+b.format.duration - 3) < 0.05, `檔案長度 ${b.format.duration}`);
   assert.equal(decodeErrors(out), '', 'ffmpeg 解碼有錯誤');
   // 解出來的畫面與聲音要和參考檔完全一樣
@@ -455,4 +458,98 @@ test('ffmpeg 交叉驗證：VP9＋Opus', { skip: ffSkip }, t => {
 test('ffmpeg 交叉驗證：AV1＋Opus（av1C 由我們從 codec 字串和序列標頭組）', { skip: ffSkip || (!hasEncoder('libaom-av1') && !hasEncoder('libsvtav1') && '沒有 AV1 編碼器') }, t => {
   const enc = hasEncoder('libsvtav1') ? ['-c:v', 'libsvtav1', '-preset', '12'] : ['-c:v', 'libaom-av1', '-cpu-used', '8', '-row-mt', '1'];
   crossCheck(t, 'av1-opus', [...enc, '-g', '60', '-b:v', '500k', '-c:a', 'libopus'], { av1NoDesc: true });
+});
+
+// =====================================================================================
+// MOV（QuickTime）：同一個 muxer，ftyp 換成 qt
+// =====================================================================================
+test('MOV：ftyp 是 QuickTime 的 qt brand，其餘 box 和 MP4 一樣', () => {
+  const b = mp4.mux({ video: fakeVideo(10), audio: fakeOpus(16, 14000), time: 0, brand: 'qt' });
+  const top = parseFile(b);
+  assert.deepEqual(top.map(x => x.type), ['ftyp', 'moov', 'mdat']);
+  assert.equal(str4(b, top[0].body), 'qt  ');
+  assert.equal(str4(b, top[0].body + 8), 'qt  ');
+});
+
+test('ffmpeg 交叉驗證：MOV（H.264＋AAC）', { skip: ffSkip }, t => {
+  const { out } = crossCheck(t, 'h264-aac-mov', ['-c:v', 'libx264', '-preset', 'veryfast', '-bf', '0', '-pix_fmt', 'yuv420p', '-c:a', 'aac'], { brand: 'qt', ext: 'mov' });
+  assert.match(probe(out).format.format_name, /mov/);
+});
+
+// =====================================================================================
+// WebM：EBML 結構與 ffmpeg 交叉驗證
+// =====================================================================================
+const W = webm.ID;
+const MASTER = new Set([W.EBML, W.Segment, W.SeekHead, W.Seek, W.Info, W.Tracks, W.TrackEntry, W.Video, W.Audio, W.Cluster, W.BlockGroup, W.Cues, W.CuePoint, W.CueTrackPositions]);
+function readVint(b, p, keepMarker) {
+  const first = b[p];
+  let n = 1;
+  while (n <= 8 && !(first & (0x80 >> (n - 1)))) n++;
+  assert.ok(n <= 8, `vint 錯誤 @${p}`);
+  let v = keepMarker ? first : first & (0xff >> n);
+  for (let k = 1; k < n; k++) v = v * 256 + b[p + k];
+  return { v, n };
+}
+// 解析 EBML，同時檢查每個 master 元素的子元素剛好填滿它
+function parseEbml(b, start = 0, end = b.length) {
+  const out = [];
+  for (let p = start; p < end;) {
+    const id = readVint(b, p, true), size = readVint(b, p + id.n);
+    const body = p + id.n + size.n, stop = body + size.v;
+    assert.ok(stop <= end, `元素 0x${id.v.toString(16)} 超出範圍`);
+    const n = { id: id.v, start: p, body, end: stop };
+    if (MASTER.has(id.v)) n.kids = parseEbml(b, body, stop);
+    out.push(n);
+    p = stop;
+  }
+  return out;
+}
+const kid = (n, id) => n.kids.find(k => k.id === id);
+const uintAt = (b, n) => { let v = 0; for (let p = n.body; p < n.end; p++) v = v * 256 + b[p]; return v; };
+
+test('WebM：EBML 結構、Segment 子元素、Cues 指到每個關鍵格的 Cluster', () => {
+  const samples = Array.from({ length: 90 }, (_, k) => ({ data: new Uint8Array([k, 1, 2]), ts: k * 1000, dur: 1000, key: k % 30 === 0 }));
+  const audio = Array.from({ length: 150 }, (_, k) => ({ data: new Uint8Array([9, k & 255]), ts: k * 960, dur: 960, key: true }));
+  const b = webm.mux({ video: { codec: 'vp09.00.10.08', width: 320, height: 240, timescale: 30000, samples },
+    audio: { codec: 'opus', sampleRate: 48000, channels: 2, skip: 312, presentDuration: 143500, samples: audio } });
+  const top = parseEbml(b);
+  assert.deepEqual(top.map(n => n.id), [W.EBML, W.Segment]);
+  const seg = top[1], ids = seg.kids.map(n => n.id);
+  assert.deepEqual([ids[0], ids[1], ids[2], ids[ids.length - 1]], [W.SeekHead, W.Info, W.Tracks, W.Cues]);
+  const clusters = seg.kids.filter(n => n.id === W.Cluster);
+  assert.equal(clusters.length, 3, '每 30 格一個關鍵格 → 3 個 Cluster');
+  // SeekHead 的位置（相對 Segment 資料起點）指到對的元素
+  for (const s of seg.kids[0].kids) {
+    const target = uintAt(b, kid(s, W.SeekPosition)) + seg.body, idn = kid(s, W.SeekID);
+    assert.deepEqual(Array.from(b.subarray(target, target + idn.end - idn.body)), Array.from(b.subarray(idn.body, idn.end)));
+  }
+  const cues = seg.kids[seg.kids.length - 1].kids;
+  assert.deepEqual(cues.map(c => uintAt(b, kid(c, W.CueTime))), [0, 1000, 2000]);
+  cues.forEach((c, k) => assert.equal(uintAt(b, kid(kid(c, W.CueTrackPositions), W.CueClusterPosition)) + seg.body, clusters[k].start));
+  // Opus 的 CodecDelay＝pre-skip；最後一個聲音封包是 BlockGroup＋DiscardPadding
+  const tr = kid(seg, W.Tracks).kids;
+  assert.equal(uintAt(b, kid(tr[1], W.CodecDelay)), Math.round(312 / 48000 * 1e9));
+  const lastCluster = clusters[clusters.length - 1];
+  const bg = lastCluster.kids.filter(n => n.id === W.BlockGroup);
+  assert.equal(bg.length, 1, '只有最後一個封包要截尾');
+  // 每個 Cluster 的第一個影像區塊是關鍵格
+  for (const c of clusters) {
+    const first = c.kids.find(n => n.id === W.SimpleBlock && b[n.body] === 0x81);
+    assert.equal(b[first.body + 3] & 0x80, 0x80);
+  }
+});
+
+test('WebM：不接受 H.264／AAC', () => {
+  assert.throws(() => webm.mux({ video: { codec: 'avc1.640028', width: 2, height: 2, timescale: 1000, samples: [{ data: new Uint8Array(1), ts: 0, dur: 1, key: true }] } }), /WebM 不能放/);
+});
+
+test('ffmpeg 交叉驗證：WebM（VP9＋Opus）', { skip: ffSkip }, t => {
+  const { out } = crossCheck(t, 'vp9-opus-webm', ['-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', '1M', '-c:a', 'libopus', '-b:a', '96k'],
+    { mux: webm.mux, ext: 'webm', check: b => parseEbml(b) });
+  assert.match(probe(out).format.format_name, /webm/);
+});
+
+test('ffmpeg 交叉驗證：WebM（AV1＋Opus）', { skip: ffSkip || (!hasEncoder('libaom-av1') && !hasEncoder('libsvtav1') && '沒有 AV1 編碼器') }, t => {
+  const enc = hasEncoder('libsvtav1') ? ['-c:v', 'libsvtav1', '-preset', '12'] : ['-c:v', 'libaom-av1', '-cpu-used', '8', '-row-mt', '1'];
+  crossCheck(t, 'av1-opus-webm', [...enc, '-g', '60', '-b:v', '500k', '-c:a', 'libopus'], { mux: webm.mux, ext: 'webm', check: b => parseEbml(b), av1NoDesc: true });
 });

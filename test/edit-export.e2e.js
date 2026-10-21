@@ -116,11 +116,12 @@ async function openPage(t) {
 }
 
 // 透過對話框匯出，回傳下載檔路徑與對話框訊息
-async function exportViaDialog(page, proj, name, { quality, shot } = {}) {
+async function exportViaDialog(page, proj, name, { quality, shot, ext = 'mp4', setup } = {}) {
   await page.evaluate(p => window.QPTEdit.exporter.open({ project: p }), proj);
   await page.waitForFunction(() => !/偵測中/.test(document.getElementById('edExCodec').textContent));
   await page.fill('#edExName', name);
   if (quality) await page.click(`#edExQuality button[data-v="${quality}"]`);
+  if (setup) { await setup(page); await page.waitForFunction(() => !/偵測中/.test(document.getElementById('edExCodec').textContent)); }
   const dl = page.waitForEvent('download', { timeout: 180000 });
   await page.click('#edExGo');
   if (shot) {
@@ -128,8 +129,8 @@ async function exportViaDialog(page, proj, name, { quality, shot } = {}) {
     await page.locator('#edExportDialog').screenshot({ path: path.join(OUT, `${shot}-progress.png`) });
   }
   const d = await dl;
-  assert.equal(d.suggestedFilename(), `${name}.mp4`);
-  const file = path.join(OUT, `${name}.mp4`);
+  assert.equal(d.suggestedFilename(), `${name}.${ext}`);
+  const file = path.join(OUT, `${name}.${ext}`);
   await d.saveAs(file);
   await page.waitForFunction(() => !window.QPTEdit.exporter.busy);
   const msg = await page.locator('#edExMsg').textContent();
@@ -146,7 +147,7 @@ function pixel(file, n) {
     '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
   return Array.from(raw.subarray(0, 3));
 }
-function checkFile(t, file, { w, h, frames, codec = 'vp9' }) {
+function checkFile(t, file, { w, h, frames, codec = 'vp9', audio = 'opus' }) {
   const info = probe(file);
   const v = info.streams.find(s => s.codec_type === 'video'), a = info.streams.find(s => s.codec_type === 'audio');
   const secs = frames / 30;
@@ -156,11 +157,13 @@ function checkFile(t, file, { w, h, frames, codec = 'vp9' }) {
   assert.equal(v.height, h);
   assert.equal(v.r_frame_rate, '30/1');
   assert.equal(+v.nb_read_frames, frames);
-  assert.ok(Math.abs(+v.duration - secs) < 0.01, `影像長度 ${v.duration}`);
+  // WebM（Matroska）的 ffprobe 不回報各串流長度，只看整個檔案的長度
+  if (v.duration !== undefined) assert.ok(Math.abs(+v.duration - secs) < 0.01, `影像長度 ${v.duration}`);
+  if (audio === null) { assert.equal(a, undefined, '不該有聲音'); assert.equal(decodeErrors(file), ''); return info; }
   assert.ok(a, '沒有音訊串流');
-  assert.equal(a.codec_name, 'opus');
+  assert.equal(a.codec_name, audio);
   assert.equal(a.channels, 2);
-  assert.ok(Math.abs(+a.duration - secs) < 0.03, `聲音長度 ${a.duration}`);
+  if (a.duration !== undefined) assert.ok(Math.abs(+a.duration - secs) < 0.03, `聲音長度 ${a.duration}`);
   assert.ok(Math.abs(+info.format.duration - secs) < 0.03, `檔案長度 ${info.format.duration}`);
   assert.equal(decodeErrors(file), '', 'ffmpeg 解碼有錯誤');
   return info;
@@ -329,4 +332,112 @@ test('失敗：compose 出錯 → 繁中錯誤訊息、介面恢復，可以再�
   const { file, ok, msg } = await exportViaDialog(page, project(320, 240, 30), 'e2e-retry');
   assert.ok(ok, msg);
   checkFile(t, file, { w: 320, h: 240, frames: 30 });
+});
+
+// =====================================================================================
+// 匯出面板：封裝格式、尺寸、自訂位元率、不含聲音、快速匯出（社群平台）
+// =====================================================================================
+const pick = (sel, v) => async page => { await page.selectOption(sel, v); };
+
+test('WebM：選封裝格式 WebM → VP9＋Opus 的 .webm，畫面與聲音正確', { skip, timeout: 300000 }, async t => {
+  const { page, errors } = await openPage(t);
+  const proj = project(640, 360, 60);
+  const { file, msg, ok } = await exportViaDialog(page, proj, 'e2e-webm', { ext: 'webm', setup: pick('#edExContainer', 'webm') });
+  assert.ok(ok, msg);
+  assert.match(msg, /已匯出：e2e-webm\.webm/);
+  const info = checkFile(t, file, { w: 640, h: 360, frames: 60 });
+  assert.match(info.format.format_name, /webm/);
+  for (const n of [0, 30, 59]) assert.ok(near(pixel(file, n), colorOf(n)), `第 ${n} 格顏色`);
+  const onset = audioOnset(file);
+  t.diagnostic(`WebM 聲音起點：第 ${onset} 個樣本（預期 24000）`);
+  assert.ok(Math.abs(onset - 24000) < 48, `聲音起點 ${onset}（Opus 的 CodecDelay 有沒有生效）`);
+  assert.match(await page.locator('#edExCodec').textContent(), /^VP9＋Opus．WebM/);
+  assert.equal(await page.locator('#edExExt').textContent(), '.webm');
+  assert.deepEqual(errors, []);
+});
+
+test('尺寸：1080×1920 的專案選 720p → 720×1280；自訂 2 Mbps＋不含聲音', { skip, timeout: 300000 }, async t => {
+  const { page, errors } = await openPage(t);
+  const proj = project(1080, 1920, 45);
+  const { file, msg, ok } = await exportViaDialog(page, proj, 'e2e-720', { setup: async pg => {
+    await pg.selectOption('#edExSizeSel', '720');
+    await pg.click('#edExQuality button[data-v="custom"]');
+    await pg.fill('#edExMbps', '2'); await pg.press('#edExMbps', 'Tab');
+    await pg.selectOption('#edExAudio', 'none');
+  } });
+  assert.ok(ok, msg);
+  assert.match(await page.locator('#edExSize').textContent(), /^720×1280．30 fps（從專案 1080×1920 縮小）/);
+  assert.match(await page.locator('#edExRate').textContent(), /^影像 2\.0 Mbps$/);
+  assert.match(await page.locator('#edExCodec').textContent(), /不含聲音/);
+  checkFile(t, file, { w: 720, h: 1280, frames: 45, audio: null });
+  assert.deepEqual(await page.evaluate(() => window.__t.audioCalls), [], '不含聲音時不混音');
+  assert.ok(near(pixel(file, 20), colorOf(20)), '第 20 格顏色');
+  assert.deepEqual(errors, []);
+});
+
+test('快速匯出：選 Instagram Reels 帶入建議值；改任何一項變回自訂；設定會記住', { skip, timeout: 300000 }, async t => {
+  const { page, errors } = await openPage(t);
+  await page.evaluate(p => window.QPTEdit.exporter.open({ project: p }), project(1920, 1080, 30));
+  await page.click('[data-preset="igreels"]');
+  await page.waitForFunction(() => !/偵測中/.test(document.getElementById('edExCodec').textContent));
+  const v = await page.evaluate(() => ({ size: edExSizeSel.value, mbps: edExMbps.value, ak: edExAkbps.value, ct: edExContainer.value, vid: edExVideo.value, au: edExAudio.value,
+    active: document.querySelector('.ed-ex-preset.active').dataset.preset, q: document.querySelector('#edExQuality .active').dataset.v }));
+  assert.deepEqual(v, { size: '1080', mbps: '5', ak: '192', ct: 'mp4', vid: 'h264', au: 'aac', active: 'igreels', q: 'custom' });
+  assert.match(await page.locator('#edExSize').textContent(), /^1920×1080/);
+  // 專案是 16:9：提示建議 9:16；指定了別的專案時不提供「改專案比例」的按鈕
+  assert.match(await page.locator('#edExAdvice').textContent(), /Instagram Reels 建議 9:16，目前專案是 1920×1080/);
+  assert.equal(await page.locator('#edExFixAspect').count(), 0);
+  // 沙盒的 Chromium 沒有 H.264／AAC：說明改用了什麼
+  const codec = await page.locator('#edExCodec').textContent();
+  const hasH264 = await page.evaluate(async () => (await VideoEncoder.isConfigSupported({ codec: 'avc1.640028', width: 1920, height: 1080, bitrate: 5e6, framerate: 30 })).supported);
+  if (!hasH264) assert.match(codec, /此瀏覽器不支援 H\.264 編碼，改用 VP9/);
+  else assert.match(codec, /^H\.264/);
+  // 改一項 → 自訂
+  await page.selectOption('#edExSizeSel', '720');
+  assert.equal(await page.locator('.ed-ex-preset.active').getAttribute('data-preset'), 'custom');
+  assert.equal(await page.locator('#edExAdvice').isHidden(), true);
+  // 記在 localStorage，重新整理再打開還是一樣
+  await page.reload();
+  await page.evaluate(installStubs);
+  await page.evaluate(p => window.QPTEdit.exporter.open({ project: p }), project(1920, 1080, 30));
+  assert.equal(await page.locator('#edExSizeSel').inputValue(), '720');
+  assert.equal(await page.locator('#edExMbps').inputValue(), '5');
+  assert.deepEqual(errors, []);
+});
+
+test('快速匯出：比例不同時一鍵把目前的剪輯專案改成建議比例', { skip, timeout: 120000 }, async t => {
+  const { page, errors } = await openPage(t);
+  // 用真的剪輯介面（不指定專案）：預設 1920×1080
+  await page.evaluate(() => window.QPTEdit.exporter.open());
+  await page.click('[data-preset="fbreels"]');
+  assert.match(await page.locator('#edExAdvice').textContent(), /Facebook Reels 建議 9:16/);
+  await page.click('#edExFixAspect');
+  assert.deepEqual(await page.evaluate(() => { const p = window.QPTEdit.ui.state.project; return [p.aspect, p.width, p.height]; }), ['9:16', 1080, 1920]);
+  assert.equal(await page.locator('#edExAdvice').isHidden(), true);
+  assert.match(await page.locator('#edExSize').textContent(), /^1080×1920/);
+  assert.deepEqual(errors, []);
+});
+
+test('MOV：瀏覽器沒有 H.264 時選項停用並說明；WebM＋AV1 用 run() 也正確', { skip, timeout: 300000 }, async t => {
+  const { page } = await openPage(t);
+  await page.evaluate(p => window.QPTEdit.exporter.open({ project: p }), project(640, 360, 30));
+  await page.waitForFunction(() => !/偵測中/.test(document.getElementById('edExCodec').textContent));
+  const mov = await page.evaluate(() => { const o = document.querySelector('#edExContainer option[value="mov"]'); return { disabled: o.disabled, text: o.textContent }; });
+  const hasH264 = await page.evaluate(async () => (await VideoEncoder.isConfigSupported({ codec: 'avc1.640028', width: 640, height: 360, bitrate: 1e6, framerate: 30 })).supported);
+  t.diagnostic(`MOV 選項：${JSON.stringify(mov)}（H.264 ${hasH264 ? '可用' : '不可用'}）`);
+  assert.equal(mov.disabled, !hasH264);
+  if (!hasH264) assert.match(mov.text, /此瀏覽器沒有 H\.264 編碼/);
+  const res = await page.evaluate(async p => {
+    const r = await window.QPTEdit.exporter.run({ project: p, from: 0, to: 30, quality: 'small', container: 'webm', prefer: { video: 'av1' } });
+    const b = new Uint8Array(await r.blob.arrayBuffer());
+    let s = '';
+    for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+    return { b64: btoa(s), codecs: r.codecs, type: r.blob.type, filename: r.filename };
+  }, project(640, 360, 30));
+  assert.equal(res.codecs.label, 'AV1＋Opus');
+  assert.equal(res.type, 'video/webm');
+  const file = path.join(OUT, 'e2e-av1.webm');
+  fs.writeFileSync(file, Buffer.from(res.b64, 'base64'));
+  const info = checkFile(t, file, { w: 640, h: 360, frames: 30, codec: 'av1' });
+  assert.match(info.format.format_name, /webm/);
 });

@@ -745,10 +745,10 @@
     sb.append(el('span', 'ed-bl', '安全框'));
     sb.addEventListener('click', () => { state.safePref = !state.safePref; lsSet(SAFE_KEY, state.safePref ? '1' : '0'); scheduleStage(); });
     const dims = el('span', 'ed-vdims'); dims.id = 'edVDims';
-    const ex = el('button', 'ed-btn primary'); ex.type = 'button'; ex.id = 'edExportBtn'; ex.textContent = '匯出 MP4';
-    ex.title = '匯出成 MP4 影片';
-    ex.addEventListener('click', openExport);
-    bar.append(seg, name, sp, aspLab, vb, sb, dims, ex);
+    // 「匯出影片」按鈕在頁首（index.html 的 #edExportBtn，「儲存專案」右邊），這裡只接上點擊
+    const ex = $('edExportBtn');
+    if (ex) ex.addEventListener('click', openExport);
+    bar.append(seg, name, sp, aspLab, vb, sb, dims);
     wireStage();
 
     // 拖曳條
