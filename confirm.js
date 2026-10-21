@@ -1,4 +1,4 @@
-// 確認對話框：window.askConfirm({ title, message, okText }) → Promise<boolean>。
+// 確認對話框：window.askConfirm({ title, message, okText, cancelText }) → Promise<boolean>。
 // 介面和 QuickPatterntool app.js 的 askConfirm 一樣（edit-ui.js 刪除有片段的軌道前會呼叫它；沒有這個函式時會直接刪）。
 // 按「取消」、點外面、按 Esc 都是 false。
 (function (root) {
@@ -10,11 +10,12 @@
   if (!overlay) return;
   let pending = null;
 
-  function askConfirm({ title = '確定嗎？', message = '', okText = '確定' } = {}) {
+  function askConfirm({ title = '確定嗎？', message = '', okText = '確定', cancelText = '取消' } = {}) {
     if (pending) close(false);              // 前一個還沒回答就當作取消
     titleEl.textContent = title;
     msgEl.textContent = message;
     okBtn.textContent = okText;
+    cancelBtn.textContent = cancelText;
     overlay.classList.add('open');
     okBtn.focus();
     return new Promise(resolve => { pending = resolve; });

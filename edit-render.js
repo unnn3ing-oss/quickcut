@@ -319,12 +319,13 @@
     m.thumbs = []; m.image = null; m.audioBuffer = null; m._audioP = null; m._rev = null; m.peaks = null;
   }
 
-  async function importOne(file) {
+  // 指定 id 時（開啟專案後重新連結素材）沿用存檔裡的 id，時間軸上的片段才接得回來
+  async function importOne(file, forcedId, handle) {
     const guess = guessKind(file);
     if (guess === 'heic') throw userErr(`「${file.name}」是 HEIC 格式，瀏覽器不支援，請先轉成 JPG 或 PNG`);
     if (!guess) throw userErr(`「${file.name}」不是支援的格式：${SUPPORTED}`);
     const m = {
-      id: 'm' + seq++, kind: guess, name: file.name, file, url: URL.createObjectURL(file),
+      id: forcedId || 'm' + seq++, kind: guess, name: file.name, file, handle: handle || null, url: URL.createObjectURL(file),
       duration: 0, width: 0, height: 0, fps: null, hasAudio: false,
       audioBuffer: null, peaks: null, peaksRate: PEAKS_RATE, thumbs: [], image: null, warning: '',
     };
@@ -340,10 +341,13 @@
 
   const media = {
     // 依序匯入（一次一個，避免大檔同時佔記憶體）。回傳成功的 Media 陣列；失敗的放在陣列的 .errors（[{ name, message }]，繁中）
+    // opts.ids[i]：第 i 個檔案要用的 id（重新連結用；已經有人用的 id 不會覆蓋）；opts.handles[i]：檔案的 FileSystemFileHandle（記住位置用）
     async import(files, opts) {
       const list = Array.from(files || []), ok = [], errors = [];
+      const ids = (opts && opts.ids) || [], handles = (opts && opts.handles) || [];
       for (let i = 0; i < list.length; i++) {
-        try { ok.push(await importOne(list[i])); } catch (e) { errors.push({ name: list[i].name, message: e.message }); }
+        const id = ids[i] && !reg.has(ids[i]) ? ids[i] : null;
+        try { ok.push(await importOne(list[i], id, handles[i])); } catch (e) { errors.push({ name: list[i].name, message: e.message }); }
         if (opts && typeof opts.onProgress === 'function') opts.onProgress(i + 1, list.length, list[i].name);
       }
       ok.errors = errors;
@@ -351,6 +355,10 @@
     },
     get: id => reg.get(id) || null,
     list: () => Array.from(reg.values()),
+    // 開啟專案：存檔裡用過的 id（m12 這種）之後不能再發給新素材
+    reserve(ids) {
+      for (const id of ids || []) { const n = /^m(\d+)$/.exec(id); if (n && +n[1] >= seq) seq = +n[1] + 1; }
+    },
     remove(id) {
       const m = reg.get(id);
       if (!m) return false;

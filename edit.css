@@ -571,3 +571,16 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
 @media (prefers-reduced-motion: reduce) {
   .ed-caret, .ed-drop, .ed-fade-h { transition: none; }
 }
+
+/* ---- 開啟專案後缺少的素材（edit-project.js 填內容） ---- */
+.ed-relink {
+  margin: 0 0 8px; padding: 10px 12px; border-radius: 12px; font-size: 12px; line-height: 1.5;
+  background: var(--ed-warn-bg); color: var(--ed-warn-fg); border: 1px solid color-mix(in srgb, var(--ed-warn-fg) 30%, transparent);
+}
+.ed-relink-t { font-weight: 700; font-size: 13px; }
+.ed-relink-d { margin: 2px 0 6px; }
+.ed-relink-list { margin: 0 0 8px; padding-left: 18px; max-height: 96px; overflow-y: auto; }
+.ed-relink-list li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-relink-list li.more { list-style: none; margin-left: -18px; opacity: .8; }
+.ed-relink-n { margin-left: 6px; opacity: .75; }
+.ed-relink .ed-btnrow { flex-wrap: wrap; }

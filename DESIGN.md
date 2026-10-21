@@ -132,3 +132,30 @@
 
 ### 第二階段（未實作）
 - 關鍵影格曲線、動態縮放、Speed Ramp、影像穩定（`edit-stab.js` 目前是佔位）。參數讀取已統一經過 `fx.getParam`，之後改讀關鍵影格時 render 不用改。［程式碼］
+
+## 4. 專案存檔與重新連結素材（`edit-project.js`）
+
+### 專案檔（`.qcut`）
+- 內容是 JSON：`{ format: 'quickcut-project', version: 1, app, appVersion, savedAt, view: { playhead }, project }`，`project` 就是 `core.serialize` 的結果（時間軸、片段、字幕、轉場、標記、In／Out、`mediaInfo`）。**不存素材本身**，所以只有幾 KB（e2e 測的 7 個片段約 6 KB）。［程式碼］
+- 讀檔用 `core.deserialize`（本來就會補齊缺的欄位）；`parseSave` 先擋掉不是專案檔、版本比程式新、缺 `tracks`／`clips` 的檔案，錯誤訊息是繁中。`version` 是檔案格式的版本，和 App 版本（`appVersion`，`APP_VERSION` 要和 `changelog.json` 最新版一致，單元測試會檢查）分開。［程式碼］
+- `mediaInfo` 多記 `size`、`lastModified`（`registerMediaInfo`），重新連結時比對用。素材 id（`m1`…）存在專案裡，開檔後 `render.media.reserve(ids)` 讓之後新匯入的素材不會拿到同一個 id。［程式碼］
+- 檔名「剪輯專案_YYYYMMDD-HHMM.qcut」；`.qcut` 拖進畫面或在匯入裡選到，`importFiles` 會改走開啟專案。［程式碼］
+
+### 缺少素材
+- 開檔後，`mediaInfo` 有、`render.media` 沒有的就是缺少的素材（`missingMedia`），時間軸上有片段在用的排前面。缺少素材時什麼都不用特別處理：時間軸本來就會畫灰色（`--ed-ph-missing`）、合成時略過，所以專案不會壞；片段名稱改成「檔名（缺少素材）」；匯出前檢查匯出範圍裡有沒有缺素材的片段，有就擋下並說明。［程式碼］
+- 重新連結＝用**原本的 id** 重新匯入：`render.media.import(files, { ids })` 讓檔案沿用存檔裡的 id，片段的 `mediaId` 不用改。`doImport` 匯入前問 `project.claim(files)` 哪些檔案對得上缺少的素材，所以任何匯入方式（選檔、拖放、貼上、選資料夾）都會自動配對。［程式碼］
+- 配對（`matchFiles`）：先找「檔名（不分大小寫）＋大小」都一樣的，再找只有檔名一樣的；一個素材只配一個檔案。長度和存檔時差超過 0.5 秒會警告（可能不是同一個檔案）。［程式碼］［推論：不比修改時間，因為複製到別台電腦時修改時間常會變］
+- 開檔前已經在媒體庫的素材：先全部移除（id 可能和專案裡的撞），再用同樣的配對重新匯入，配不上的也放回媒體庫，不會不見。［程式碼］
+
+### 自動接回（使用者選「兩種都做」）
+- **記住檔案位置**：用 `showOpenFilePicker` 選檔、或拖放時 `DataTransferItem.getAsFileSystemHandle()`（要在 drop 事件裡同步呼叫）拿到 `FileSystemFileHandle`，匯入後存進 IndexedDB（`quickcut` 資料庫的 `handles`，key 是「檔名|大小|修改時間」）。開檔時 `queryPermission` 已經是 granted 的直接讀；是 prompt 的放進待處理，媒體庫上方出現「允許存取並重新連結（N 個）」，按下去才 `requestPermission`（需要使用者動作）。只有 Chrome／Edge 支援，其他瀏覽器自動退回 `<input type=file>`。［程式碼］
+- **選資料夾**：`showDirectoryPicker`，往下找最多 6 層、20000 個項目，略過 `.` 開頭的資料夾，只讀檔名對得上的檔案，再用 `matchFiles` 配對。［程式碼］
+- 「記住檔案位置」需要真的檔案挑選視窗，自動化測試測不到，要手動確認；e2e 用假的 `showDirectoryPicker` 測資料夾配對。頁面的 CSP 不准連網路，所以假的挑選器拿的檔案內容是測試程式用 base64 傳進頁面的。［程式碼］
+
+### 自動暫存
+- 每次 `core.bus` 的 change（以及匯入、重新連結）之後 1.5 秒寫進 IndexedDB 的 `kv/autosave`（同樣只有剪輯資料）；分頁切到背景時馬上寫。沒有片段時不寫（避免把有內容的暫存蓋成空的）。［程式碼］
+- 啟動時有暫存就用確認對話框問「還原上次的剪輯？」（`askConfirm` 加了 `cancelText`，另一個選項是「開新專案」，會刪掉暫存）。問完之前不自動暫存，免得空白專案蓋掉舊的暫存。［程式碼］
+- 「有改動但還沒匯出」的關頁提醒（`state.dirty`）在儲存專案後也會清掉。［程式碼］
+- IndexedDB 打不開（無痕、被封鎖）時所有讀寫都當作沒有，剪輯照常可用，只是沒有自動暫存與記住檔案位置。［程式碼］
+- `Q.project` 的 `ready`／`pendingCount` 要用 `Object.defineProperties` 定義：放進 `Object.assign` 的 getter 會被複製成當下的值（踩過這個坑）。［程式碼］
+

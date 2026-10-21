@@ -194,6 +194,8 @@
       kind, duration, hasAudio: kind === 'audio' ? true : kind === 'video' ? !!info.hasAudio : false,
       width: info.width > 0 ? +info.width : null, height: info.height > 0 ? +info.height : null,
       fps: info.fps > 0 ? +info.fps : null, name: info.name ? String(info.name) : '',
+      // 檔案大小與修改時間：存檔後重新連結素材時用來比對是不是同一個檔案
+      size: info.size > 0 ? +info.size : null, lastModified: info.lastModified > 0 ? +info.lastModified : null,
     };
     let fpsSet = false;
     if (firstVideo) {

@@ -171,9 +171,13 @@
   const clipTitle = c => {
     if (!c) return '';
     if (isSubClip(c)) { const t = F.parseAccent(c.title.text).text.split('\n')[0].trim(); if (t) return t.length > 24 ? t.slice(0, 24) + '…' : t; }   // 字幕清單的片段：時間軸上直接顯示字幕內容
-    if (c.name) return c.name;
     const m = c.mediaId && mediaOf(c.mediaId);
-    return m ? m.name : (c.type === 'title' ? '字幕' : c.type === 'solid' ? '色塊' : '片段');
+    // 開啟專案後還沒重新連結的素材：用存檔裡的檔名，並標示「缺少素材」（片段自己有名字也一樣標）
+    const info = !m && c.type === 'media' && c.mediaId && state.project && state.project.mediaInfo && state.project.mediaInfo[c.mediaId];
+    if (info) return `${c.name || info.name || '片段'}（缺少素材）`;
+    if (c.name) return c.name;
+    if (m) return m.name;
+    return c.type === 'title' ? '字幕' : c.type === 'solid' ? '色塊' : '片段';
   };
   const videoTracksTopFirst = () => C.tracksOf(state.project, 'video').slice().reverse();   // 畫面上方的影片軌（高層）在前
 
@@ -254,10 +258,11 @@
     drop.innerHTML = '<strong>拖放檔案到這裡，或點擊選擇</strong><span>影片、音訊、圖片　·　也可以 Ctrl+V 貼上</span>';
     const input = el('input'); input.type = 'file'; input.id = 'edFile'; input.multiple = true; input.accept = FILE_ACCEPT; input.tabIndex = -1;
     drop.appendChild(input);
-    drop.addEventListener('click', e => { if (e.target !== input) input.click(); });
-    drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
+    drop.addEventListener('click', e => { if (e.target !== input) pickFiles(input); });
+    drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickFiles(input); } });
     input.addEventListener('change', () => { const f = [...input.files]; input.value = ''; importFiles(f); });
     const msgs = el('div', 'ed-msgs'); msgs.id = 'edMsgs'; msgs.setAttribute('aria-live', 'polite');
+    const relink = el('div', 'ed-relink'); relink.id = 'edRelink'; relink.hidden = true;   // 開啟專案後缺少的素材（內容由 edit-project.js 填）
     const list = el('div', 'ed-mlist'); list.id = 'edMList';
     // 顯示方式：列表（縮圖＋完整資訊）／網格（大縮圖，資訊只留種類與長度）；選擇記在 localStorage
     const mbar = el('div', 'ed-mbar');
@@ -270,7 +275,7 @@
     }
     mbar.append(cnt, el('span', 'ed-spacer'), vseg);
     const foot = el('div', 'ed-mfoot', '單擊選取　雙擊在檢視器預覽（可設來源 In／Out）　拖到時間軸放入');
-    pm.append(drop, msgs, mbar, list, foot);
+    pm.append(drop, msgs, relink, mbar, list, foot);
 
     // 特效：轉場特效（加在剪接點）＋字體特效（加在字幕片段）。兩組都在同一個捲動面板裡
     const pt = el('div', 'ed-panel scroll'); pt.dataset.panel = 'trans'; pt.hidden = true;
@@ -442,7 +447,8 @@
 
   // ---- 匯入 ------------------------------------------------------------------------
   function mediaInfoOf(m) {
-    return { kind: m.kind, duration: m.kind === 'image' ? null : m.duration, hasAudio: !!m.hasAudio, width: m.width, height: m.height, fps: m.fps, name: m.name };
+    return { kind: m.kind, duration: m.kind === 'image' ? null : m.duration, hasAudio: !!m.hasAudio, width: m.width, height: m.height, fps: m.fps, name: m.name,
+      size: m.file ? m.file.size : null, lastModified: m.file ? m.file.lastModified : null };
   }
   // 復原會把專案換成舊的快照，裡面可能沒有後來匯入的媒體資訊：補回去（不進復原）
   function ensureMediaInfo() {
@@ -456,21 +462,48 @@
   }
 
   let importChain = Promise.resolve([]);
-  function importFiles(files) {
+  // handles[i]：files[i] 的 FileSystemFileHandle（從檔案挑選器或拖放拿到的；沒有就 null），存起來下次開專案可以自動接回素材
+  // 選檔：Chrome／Edge 用 showOpenFilePicker（同時拿到 FileSystemFileHandle，下次開專案可以一鍵接回素材）；其他瀏覽器或失敗時用 <input type=file>
+  const PICK_TYPES = [{ description: '影片、音訊、圖片、字幕', accept: {
+    'video/*': ['.mp4', '.m4v', '.mov', '.webm', '.mkv'], 'audio/*': ['.mp3', '.m4a', '.wav', '.ogg', '.opus', '.flac', '.aac'],
+    'image/*': ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic', '.heif'], 'text/plain': ['.srt'] } }];
+  async function pickFiles(input) {
+    if (typeof root.showOpenFilePicker !== 'function') { input.click(); return; }
+    let hs;
+    try { hs = await root.showOpenFilePicker({ multiple: true, types: PICK_TYPES }); } catch (e) { if (!e || e.name !== 'AbortError') input.click(); return; }
+    const files = [];
+    for (const h of hs) { try { files.push(await h.getFile()); } catch (_) { files.push(null); } }
+    const keep = files.map((f, i) => i).filter(i => files[i]);
+    importFiles(keep.map(i => files[i]), keep.map(i => hs[i]));
+  }
+  function importFiles(files, handles) {
     files = [...(files || [])];
-    const srt = files.filter(isSrtFile);
-    if (srt.length) { files = files.filter(f => !isSrtFile(f)); srt.reduce((pr, f) => pr.then(() => importSrt(f)), Promise.resolve()); }
+    handles = files.map((f, i) => (handles && handles[i]) || null);
+    const proj = files.findIndex(f => /\.qcut$/i.test(f.name || ''));
+    if (proj >= 0 && Q.project && Q.project.openFile) {
+      Q.project.openFile(files[proj]);
+      const keep = files.map((f, i) => i).filter(i => !/\.qcut$/i.test(files[i].name || ''));
+      files = keep.map(i => files[i]); handles = keep.map(i => handles[i]);
+    }
+    const srt = files.map((f, i) => i).filter(i => isSrtFile(files[i]));
+    if (srt.length) {
+      srt.map(i => files[i]).reduce((pr, f) => pr.then(() => importSrt(f)), Promise.resolve());
+      const keep = files.map((f, i) => i).filter(i => !isSrtFile(files[i]));
+      files = keep.map(i => files[i]); handles = keep.map(i => handles[i]);
+    }
     if (!files.length) return importChain;
-    importChain = importChain.then(() => doImport(files), () => doImport(files));
+    importChain = importChain.then(() => doImport(files, handles), () => doImport(files, handles));
     return importChain;
   }
-  async function doImport(files) {
+  async function doImport(files, handles) {
     state.importing = true;
     setBusy(true);
     const errors = [], warns = [];
     let added = [];
     try {
-      const ok = await R.media.import(files, { onProgress: (i, n, name) => say(`匯入中 ${i}／${n}：${name}`) });
+      // 開啟專案後還缺的素材：檔名（＋大小）對得上就沿用存檔裡的 id，時間軸上的片段直接接回來
+      const P = Q.project, ids = P && P.claim ? P.claim(files) : [];
+      const ok = await R.media.import(files, { ids, handles, onProgress: (i, n, name) => say(`匯入中 ${i}／${n}：${name}`) });
       for (const e of ok.errors || []) errors.push(e);
       for (const m of ok) {
         const r = C.registerMediaInfo(state.project, m.id, mediaInfoOf(m));
@@ -479,13 +512,16 @@
         if (r.fpsSet) warns.push({ name: m.name, message: `專案影格率已設為 ${r.fps} fps（依第一支影片）`, info: true });
       }
       if (added.length) state.selMedia = added[added.length - 1].id;
+      if (P && P.afterImport) for (const w of P.afterImport(added)) warns.push(w);
     } catch (e) {
       errors.push({ name: '匯入', message: (e && e.message) || String(e) });
     }
     state.importing = false;
     setBusy(false);
     showMsgs(errors, warns);
-    if (added.length) say(`已匯入 ${added.length} 個素材`, 'ok'); else if (errors.length) say(errors[0].message, 'error'); else say('');
+    const relinked = added.filter(m => m.relinked).length;
+    if (added.length) say(relinked ? `已重新連結 ${relinked} 個素材${added.length > relinked ? `，另外匯入 ${added.length - relinked} 個` : ''}` : `已匯入 ${added.length} 個素材`, 'ok');
+    else if (errors.length) say(errors[0].message, 'error'); else say('');
     renderMedia();
     syncAspect();
     if (player) player.refresh();
@@ -530,7 +566,8 @@
     const st = host.scrollTop;
     host.textContent = '';
     if (!list.length) {
-      host.appendChild(el('div', 'ed-mempty', '還沒有素材。把影片、音訊或圖片拖進來，雙擊在檢視器預覽，再放上時間軸。'));
+      const lost = Q.project && Q.project.missing ? Q.project.missing().length : 0;
+      host.appendChild(el('div', 'ed-mempty', lost ? '素材重新連結後會出現在這裡。' : '還沒有素材。把影片、音訊或圖片拖進來，雙擊在檢視器預覽，再放上時間軸。'));
     }
     const p = state.project;
     for (const m of list) {
@@ -649,7 +686,11 @@
       app.classList.remove('filedrag');
       if (!hasFiles(e)) return;
       e.preventDefault(); e.stopPropagation();
-      importFiles(e.dataTransfer.files);
+      // getAsFileSystemHandle 要在 drop 事件裡同步呼叫（之後 dataTransfer 就清空了）
+      const files = [...e.dataTransfer.files];
+      const items = [...(e.dataTransfer.items || [])].filter(i => i.kind === 'file');
+      const hp = items.map(i => (typeof i.getAsFileSystemHandle === 'function' ? i.getAsFileSystemHandle().catch(() => null) : Promise.resolve(null)));
+      Promise.all(hp).then(hs => importFiles(files, hs.length === files.length ? hs.map(h => (h && h.kind === 'file' ? h : null)) : null));
     });
     // Ctrl+V 一律由這裡處理（捕捉階段攔下）
     doc.addEventListener('paste', e => {
@@ -3438,6 +3479,31 @@
   // 啟動
   // =====================================================================================
   const hasContent = () => !!state.project && Object.keys(state.project.clips).length > 0;
+  // 開啟專案：換掉整個專案、清空復原紀錄與選取；view.playhead 是存檔時的播放頭位置
+  function replaceProject(p, view) {
+    if (player) player.pause();
+    closePop(); closeMenu();
+    if (state.mode === 'source') closeSource();
+    state.project = p;
+    state.history = C.createHistory(() => state.project, q => { state.project = q; }, { limit: 100 });
+    state.selection = new Set(); state.primary = null; state.selTransition = null; state.selMedia = null;
+    state.sourceInOut = null; state.targets = { video: null, audio: null };
+    state.dirty = false;
+    renderMedia(); syncAspect(); updateToolbar();
+    dirty.tl = dirty.insp = dirty.chrome = true;
+    renderNow();
+    if (player) player.refresh();
+    seekTimeline(Math.min(Math.max(0, Math.round((view && view.playhead) || 0)), C.projectDuration(p)));
+    updatePlayheadPos(false);
+    scheduleStage();
+  }
+  // 素材接回來之後重畫（片段縮圖、預覽、詳細內容）
+  function mediaChanged() {
+    renderMedia(); syncAspect();
+    dirty.tl = dirty.insp = true;
+    scheduleRender();
+    if (player) player.refresh();
+  }
 
   function onCoreChange(e) {
     sanitizeSelection();
@@ -3544,6 +3610,8 @@
     init, importFiles, importSrt, exportSrt, markSubtitle, doEdit, selectClips, selectTrack, applyTitleStyle, applyTextFx, selectTransition, seekTimeline, setTool, undo, redo, openSource, setMode, addTitle, addTransitionAt, addTransitionToSelection,
     setZoom, zoomFit, renderNow, bladeAtPlayhead, deleteSelection, markIn, markOut, clearInOut, addMarkerHere, toggleLink, toggleSnap, ensureMediaInfo,
     openSpeedPop, openFreezePop, tl, tc, setTheme: t => applyTheme(t, true),
+    replaceProject, mediaChanged, hasContent, renderMedia, showMsgs,
+    markSaved: () => { state.dirty = false; },
   });
   Object.defineProperties(Q.ui, {
     zoom: { get: () => state.zoom, enumerable: true },
