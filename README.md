@@ -139,7 +139,8 @@
 | `fonts/` | 仙人掌明體（Cactus Classical Serif，SIL OFL 1.1，授權見 `fonts/OFL-CactusClassicalSerif.txt`），用到才下載 |
 | `changelog.json` | 各版本的更動紀錄 |
 | `test/` | 單元測試與瀏覽器流程測試（見下方） |
-| `favicon*` / `apple-touch-icon.png` | 網站圖示 |
+| `favicon.svg` | 圖示原稿（場記板），頁首標題旁的圖示也用它 |
+| `favicon-*.png` / `favicon.ico` / `apple-touch-icon.png` | 從 `favicon.svg` 轉出的各尺寸圖示 |
 
 ## 本地開發
 

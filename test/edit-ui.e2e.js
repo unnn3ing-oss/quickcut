@@ -1752,6 +1752,8 @@ async function runLayoutTests(browser, base, [W, H]) {
     const { ctx, page } = await open();
     await goEdit(page);
     ok(await page.isVisible('#edThemeBtn'), '頁首有深色／淺色開關');
+    const ic = await page.evaluate(() => { const i = document.querySelector('h1.topbar-title .brand-ic'); return i && { ok: i.complete && i.naturalWidth > 0, w: Math.round(i.getBoundingClientRect().width), src: i.getAttribute('src') }; });
+    ok(ic && ic.ok && ic.w === 30 && ic.src === 'favicon.svg', `頁首標題旁有場記板圖示（${JSON.stringify(ic)}）`);
     eq(await attr(page), 'dark', '預設深色（data-ed-theme=dark）');
     eq(await page.getAttribute('#edThemeBtn', 'aria-pressed'), 'true', '開關 aria-pressed=true（深色）');
     ok((await page.getAttribute('#edThemeBtn', 'title')).includes('深色'), '開關有 title');
