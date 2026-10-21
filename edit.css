@@ -343,6 +343,9 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
 .ed-th.audio { background: var(--ed-th-audio-bg); flex-direction: row; align-items: center; gap: 6px; }
 .ed-th.audio .ed-th-name { flex: 1; min-width: 0; }
 .ed-th.target { box-shadow: inset 4px 0 0 var(--accent); }
+.ed-th { cursor: pointer; }
+.ed-th.sel { background-image: linear-gradient(var(--ed-region), var(--ed-region)); }   /* 整條軌的片段都被選取 */
+.ed-th.sel .ed-th-name { color: var(--accent); }
 .ed-th-name {
   border: none; background: transparent; padding: 0; text-align: left; font-size: 13px; font-weight: 700; color: var(--text); cursor: pointer;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
