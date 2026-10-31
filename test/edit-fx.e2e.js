@@ -26,6 +26,7 @@ body{margin:0;padding:16px;font-family:system-ui,"Noto Sans TC",sans-serif;backg
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
   await page.goto('file://' + html);
   await page.addScriptTag({ path: path.join(ROOT, 'edit-fx.js') });
+  await page.addScriptTag({ path: path.join(ROOT, 'edit-fx-gl.js') });
 
   // ---------- 轉場：端點逐像素相同，中段合理 ----------
   console.log('轉場');
@@ -71,7 +72,7 @@ body{margin:0;padding:16px;font-family:system-ui,"Noto Sans TC",sans-serif;backg
     return out;
   });
   for (const [k, v] of Object.entries(tr.ends)) if (!v) ok(false, `轉場端點 ${k} 與 A／B 逐像素相同`);
-  ok(Object.values(tr.ends).every(Boolean), `8 種轉場 × 4 方向，t=0 等於 A、t=1 等於 B（共 ${Object.keys(tr.ends).length} 組）`);
+  ok(Object.values(tr.ends).every(Boolean), `${Object.keys(tr.ends).length / 4} 種轉場 × 4 方向，t=0 等於 A、t=1 等於 B（共 ${Object.keys(tr.ends).length} 組）`);
   const near = (p, q, tol = 3) => p.every((v, i) => Math.abs(v - q[i]) <= tol);
   const m = tr.mid;
   ok(near(m.dissolve, [128, 0, 128, 255], 4), '交叉疊化 t=.5 為紫 ' + m.dissolve);
@@ -86,6 +87,59 @@ body{margin:0;padding:16px;font-family:system-ui,"Noto Sans TC",sans-serif;backg
   ok(near(m.fadeBlack, [0, 0, 0, 255]), '淡出到黑 t=.5 全黑 ' + m.fadeBlack);
   ok(near(m.fadeSingle, [64, 0, 0, 255], 4), '淡出到黑（沒有 B）t=.75 為 25% 紅 ' + m.fadeSingle);
   ok(Math.abs(m.alphaLerp[3] - 191) <= 3, '疊化到透明：alpha 線性 ' + m.alphaLerp);
+
+  // ---------- WebGL 轉場（3.20） ----------
+  console.log('WebGL 轉場');
+  const g = await page.evaluate(() => {
+    const fx = window.QPTEdit.fx, fxgl = window.QPTEdit.fxgl, W = 320, H = 180;
+    const mk = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; };
+    const solid = c => x => { x.fillStyle = c; x.fillRect(0, 0, W, H); };
+    const none = () => {};
+    const run = (type, t, opts, dB = solid('#0000ff')) => {
+      const c = mk(), x = c.getContext('2d');
+      fx.TRANSITIONS[type].draw(x, solid('#ff0000'), dB, t, { type, ease: 'linear', direction: 'left', color: '#000000', ...opts }, W, H);
+      return (px, py) => Array.from(x.getImageData(px, py, 1, 1).data);
+    };
+    const out = { available: fxgl.available() };
+    let r = run('doors', 0.5, { direction: 'left' }); out.doorsL = [r(20, 90), r(160, 90), r(300, 90)];
+    r = run('doors', 0.5, { direction: 'up' }); out.doorsU = [r(160, 10), r(160, 90), r(160, 170)];
+    r = run('flash', 0.5, { color: '#ffffff' }); out.flashW = r(160, 90);
+    r = run('flash', 0.5, { color: '#00ff00' }); out.flashG = r(160, 90);
+    r = run('cube', 0.5, { direction: 'left' }); out.cubeL = [r(100, 90), r(220, 90)];
+    r = run('cube', 0.5, { direction: 'right' }); out.cubeR = [r(100, 90), r(220, 90)];
+    r = run('cube', 0.5, { direction: 'up' }); out.cubeU = [r(160, 20), r(160, 160)];
+    r = run('cube', 0.5, { direction: 'down' }); out.cubeD = [r(160, 20), r(160, 160)];
+    r = run('blinds', 0.45, { direction: 'left' }); out.blindsL = [r(16, 90), r(304, 90)];
+    r = run('blinds', 0.45, { direction: 'right' }); out.blindsR = [r(16, 90), r(304, 90)];
+    r = run('pixelate', 0.2, {}); out.pix = r(160, 90);
+    r = run('zoomPunch', 0.6, {}); out.zoomPunch = r(160, 90);
+    r = run('lightLeak', 0.5, { color: '#ff7a2e' }); out.leak = r(160, 90);
+    out.finite = ['whip', 'glitch', 'spin', 'flip'].map(k => { const q = run(k, 0.37, { direction: 'up' }); return q(160, 90).every(v => v >= 0 && v <= 255); }).every(Boolean);
+    // 單邊（尾端淡出）：沒有 B 的那一側是透明，不是黑色
+    r = run('cube', 0.5, { direction: 'left' }, none); out.cubeSingle = r(220, 90);
+    // 沒有 WebGL：退回交叉疊化
+    fxgl._disable(true);
+    r = run('doors', 0.5, {}); out.fallback = r(160, 90);
+    fxgl._disable(false);
+    return out;
+  });
+  const red = p => p[0] > 150 && p[2] < 60, blue = p => p[2] > 150 && p[0] < 60;
+  ok(g.available, '這個瀏覽器有 WebGL');
+  ok(red(g.doorsL[0]) && blue(g.doorsL[1]) && red(g.doorsL[2]), '對開門（左右）：兩側是 A、中間露出 B ' + JSON.stringify(g.doorsL));
+  ok(red(g.doorsU[0]) && blue(g.doorsU[1]) && red(g.doorsU[2]), '對開門（上下）：上下是 A、中間露出 B ' + JSON.stringify(g.doorsU));
+  ok(near(g.flashW, [255, 255, 255, 255], 6), '閃光 t=.5 為白 ' + g.flashW);
+  ok(near(g.flashG, [0, 255, 0, 255], 6), '閃光可換顏色（綠） ' + g.flashG);
+  ok(red(g.cubeL[0]) && blue(g.cubeL[1]), '立方體向左：B 從右邊轉進來 ' + JSON.stringify(g.cubeL));
+  ok(blue(g.cubeR[0]) && red(g.cubeR[1]), '立方體向右：B 從左邊轉進來 ' + JSON.stringify(g.cubeR));
+  ok(red(g.cubeU[0]) && blue(g.cubeU[1]), '立方體向上：B 從下面轉上來 ' + JSON.stringify(g.cubeU));
+  ok(blue(g.cubeD[0]) && red(g.cubeD[1]), '立方體向下：B 從上面轉下來 ' + JSON.stringify(g.cubeD));
+  ok(red(g.blindsL[0]) && blue(g.blindsL[1]) && blue(g.blindsR[0]) && red(g.blindsR[1]), '百葉窗：向左從右邊先翻、向右從左邊先翻 ' + JSON.stringify([g.blindsL, g.blindsR]));
+  ok(red(g.pix), '馬賽克前段仍是 A ' + g.pix);
+  ok(blue(g.zoomPunch), '縮放衝刺後半是 B ' + g.zoomPunch);
+  ok(g.leak[0] > 200 && g.leak[1] > 60, '光漏中段有暖色光 ' + g.leak);
+  ok(g.finite, '甩鏡／故障／旋轉／卡片翻轉中段有正常輸出');
+  ok(g.cubeSingle[3] < 10, '單邊轉場：沒有 B 的一側是透明 ' + g.cubeSingle);
+  ok(near(g.fallback, [128, 0, 128, 255], 4), '沒有 WebGL 時退回交叉疊化 ' + g.fallback);
 
   // ---------- 變形／裁切 ----------
   console.log('變形與裁切');
@@ -185,7 +239,7 @@ body{margin:0;padding:16px;font-family:system-ui,"Noto Sans TC",sans-serif;backg
     __mount('transform', __clip); __mount('crop', __clip); __mount('title', __title); __mount('titleLook', __title); __mount('titleAnim', __title); __mount('transition', __tr);
   });
   const rowCount = await page.evaluate(() => Object.fromEntries(['transform', 'crop', 'title', 'titleLook', 'titleAnim', 'transition'].map(id => [id, document.querySelectorAll('#sec-' + id + ' .ed-fx-row').length])));
-  ok(rowCount.transform >= 12 && rowCount.crop === 6 && rowCount.title >= 8 && rowCount.titleLook >= 15 && rowCount.titleAnim >= 3 && rowCount.transition === 6, '四個區段都有畫出欄位 ' + JSON.stringify(rowCount));
+  ok(rowCount.transform >= 12 && rowCount.crop === 6 && rowCount.title >= 8 && rowCount.titleLook >= 15 && rowCount.titleAnim >= 3 && rowCount.transition === 8, '四個區段都有畫出欄位 ' + JSON.stringify(rowCount));
   await page.screenshot({ path: path.join(SHOTS, 'fx-inspector.png'), fullPage: true });
 
   // 在「縮放 X」標籤上往右拖 40px：1 + 40*0.005 = 1.2；中途 live、放開 live:false
@@ -243,6 +297,19 @@ body{margin:0;padding:16px;font-family:system-ui,"Noto Sans TC",sans-serif;backg
     return [st, [rowOf('顏色').hidden, rowOf('方向').hidden]];
   });
   ok(vis2[0][0] === false && vis2[0][1] === true && vis2[1][0] === true && vis2[1][1] === false, '轉場：顏色只在浸入顏色、方向只在擦拭／推擠／滑入顯示');
+  // 3.20：方向／顏色依轉場類型顯示（甩鏡等四方向、旋轉＝逆／順時針、對開門＝左右／上下、閃光與光漏有顏色）
+  const vis3 = await page.evaluate(() => {
+    const look = type => {
+      __tr.type = type; __mount('transition', __tr);
+      const rows = [...document.querySelectorAll('#sec-transition .ed-fx-row')].filter(r => !r.hidden);
+      const dir = rows.filter(r => r.querySelector('.ed-fx-lab').textContent === '方向').map(r => [...r.querySelectorAll('option')].map(o => o.textContent).join('/'));
+      return { dir, color: rows.some(r => r.querySelector('.ed-fx-lab').textContent === '顏色') };
+    };
+    return Object.fromEntries(['whip', 'cube', 'spin', 'doors', 'flash', 'lightLeak', 'glitch'].map(k => [k, look(k)]));
+  });
+  ok(vis3.whip.dir.join() === '向左/向右/向上/向下' && vis3.cube.dir.join() === '向左/向右/向上/向下' && !vis3.whip.color, '甩鏡、立方體：四個方向 ' + JSON.stringify([vis3.whip, vis3.cube]));
+  ok(vis3.spin.dir.join() === '逆時針/順時針' && vis3.doors.dir.join() === '左右打開/上下打開', '旋轉、對開門：各自的方向選項 ' + JSON.stringify([vis3.spin, vis3.doors]));
+  ok(vis3.flash.color && vis3.lightLeak.color && !vis3.flash.dir.length && !vis3.glitch.color && !vis3.glitch.dir.length, '閃光、光漏有顏色；故障沒有方向與顏色 ' + JSON.stringify([vis3.flash, vis3.glitch]));
   // 外框（色框）：增加 → 4 格完整送出、第 1 格啟用；移除 → 剩下的往前補
   const outl = await page.evaluate(() => {
     const btn = t => [...document.querySelectorAll('#sec-titleLook button')].find(b => b.textContent.trim() === t);

@@ -1077,7 +1077,7 @@ t('轉場：新增（相鄰／尾端淡出）、長度夾住、取代既有、�
   assert.ok(core.updateTransition(p, fade.id, { duration: 10, ease: 'easeInOut', color: '#ffffff' }).ok);
   assert.deepStrictEqual([fade.duration, fade.ease, fade.color].length, 3);
   assert.deepStrictEqual([p.transitions[fade.id].duration, p.transitions[fade.id].ease], [10, 'easeInOut']);
-  unchanged(p, () => core.updateTransition(p, fade.id, { type: 'spin' }), /轉場種類/);
+  unchanged(p, () => core.updateTransition(p, fade.id, { type: 'teleport' }), /轉場種類/);
   unchanged(p, () => core.updateTransition(p, fade.id, { duration: 0 }), /1 格/);
   unchanged(p, () => core.addTransition(p, { leftClipId: 'nope' }), /找不到/);
   assert.deepStrictEqual(core.transitionsOfClip(p, b[0]).map(x => x.id), [tr.id]);
@@ -1627,4 +1627,29 @@ test('模糊測試（全部操作、鎖定、連結選取開關、變速、增�
   assert.strictEqual(n, 100);
   while (h.redo()) assertInvariants(p);
   assert.strictEqual(core.serialize(p), end);
+});
+
+t('轉場預設顏色：閃光白、光漏暖橘、其他黑；改類型時只換掉舊類型的預設色', () => {
+  assert.equal(core.transitionColor('flash'), '#ffffff');
+  assert.equal(core.transitionColor('lightLeak'), '#ff7a2e');
+  assert.equal(core.transitionColor('cube'), '#000000');
+  for (const t of ['whip', 'flash', 'glitch', 'zoomPunch', 'spin', 'lightLeak', 'blinds', 'pixelate', 'flip', 'cube', 'doors']) assert.ok(core.TRANSITION_TYPES.includes(t), t);
+  const { p, a, b } = scene();
+  let r = core.addTransition(p, { leftClipId: a[0], type: 'flash' });
+  assert.ok(r.ok, r.reason);
+  assert.equal(p.transitions[r.id].color, '#ffffff');
+  assert.equal(p.transitions[r.id].rightClipId, b[0]);
+  // 改成光漏：白色是閃光的預設 → 換成光漏的預設
+  assert.ok(core.updateTransition(p, r.id, { type: 'lightLeak' }).ok);
+  assert.equal(p.transitions[r.id].color, '#ff7a2e');
+  // 自己挑的顏色：改類型也保留
+  assert.ok(core.updateTransition(p, r.id, { color: '#00aaff' }).ok);
+  assert.ok(core.updateTransition(p, r.id, { type: 'flash' }).ok);
+  assert.equal(p.transitions[r.id].color, '#00aaff');
+  // 明確給顏色就用給的
+  r = core.addTransition(p, { leftClipId: a[0], type: 'flash', color: '#ff0000' });
+  assert.equal(p.transitions[r.id].color, '#ff0000');
+  // 新增其他類型：黑
+  r = core.addTransition(p, { leftClipId: a[0], type: 'spin', direction: 'right' });
+  assert.deepEqual([p.transitions[r.id].color, p.transitions[r.id].direction], ['#000000', 'right']);
 });

@@ -490,7 +490,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   await settle(page);
   await page.click('.ed-tab[data-tab="trans"]');
   ok(await page.isVisible('#edTransList .ed-gitem'), '轉場分頁：列出轉場縮圖');
-  eq(await page.evaluate(() => document.querySelectorAll('#edTransList .ed-gitem').length), 8, '列出 8 種轉場');
+  eq(await page.evaluate(() => document.querySelectorAll('#edTransList .ed-gitem').length), 19, '列出 19 種轉場（8 種基本＋11 種 WebGL）');
   await page.click('#edTransAdd');
   await settle(page);
   let trs = await proj(page, p => Object.values(p.transitions));

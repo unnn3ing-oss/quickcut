@@ -24,7 +24,12 @@
   const ASPECTS = { '9:16': [1080, 1920], '16:9': [1920, 1080], '4:5': [1080, 1350] };
   const MAX_SIDE = 3840;                  // 'source' 比例的長邊上限
   const MARKER_COLORS = ['blue', 'cyan', 'green', 'yellow', 'red', 'pink', 'purple', 'fuchsia', 'rose', 'lavender', 'sky', 'mint', 'lemon', 'sand', 'cocoa', 'cream'];
-  const TRANSITION_TYPES = ['crossDissolve', 'dipToColor', 'fadeToBlack', 'wipe', 'push', 'slide', 'zoom', 'blur'];
+  const TRANSITION_TYPES = ['crossDissolve', 'dipToColor', 'fadeToBlack', 'wipe', 'push', 'slide', 'zoom', 'blur',
+    // 3.20 的 WebGL 轉場（edit-fx-gl.js）
+    'whip', 'flash', 'glitch', 'zoomPunch', 'spin', 'lightLeak', 'blinds', 'pixelate', 'flip', 'cube', 'doors'];
+  // 有自己預設顏色的轉場（其他都是黑色）：閃光預設白光、光漏預設暖橘
+  const TRANSITION_COLORS = { flash: '#ffffff', lightLeak: '#ff7a2e' };
+  const transitionColor = type => TRANSITION_COLORS[type] || '#000000';
   const EDIT_MODES = ['insert', 'overwrite', 'replace', 'append'];
   const IMAGE_DEFAULT_SEC = 5;            // 圖片放上時間軸的預設長度
   const DEFAULT_FREEZE_SEC = 2;           // 定格對話框的預設長度（UI 用）
@@ -1279,6 +1284,8 @@
     const t = Object.assign({}, base);
     for (const k of TR_KEYS) if (o[k] !== undefined) t[k] = o[k];
     if (!TRANSITION_TYPES.includes(t.type)) bail('不認得的轉場種類');
+    // 沒指定顏色時：新轉場用該類型的預設色；改類型時，原本是舊類型的預設色才跟著換（使用者自己挑的顏色保留）
+    if (o.color === undefined && (isNew || (t.type !== base.type && String(base.color || '#000000').toLowerCase() === transitionColor(base.type)))) t.color = transitionColor(t.type);
     if (!['center', 'start', 'end'].includes(t.align)) bail('轉場對齊只能是置中、開頭或結尾');
     if (side !== 'both' && (isNew || o.align !== undefined)) t.align = side === 'out' ? 'end' : 'start';
     if (!['left', 'right', 'up', 'down'].includes(t.direction)) bail('轉場方向不正確');
@@ -1454,7 +1461,7 @@
 
   const api = {
     // 常數、預設值
-    FPS_CHOICES, ASPECTS, MARKER_COLORS, TRANSITION_TYPES, EDIT_MODES, IMAGE_DEFAULT_SEC, DEFAULT_FREEZE_SEC, SPEED_MIN, SPEED_MAX,
+    FPS_CHOICES, ASPECTS, MARKER_COLORS, TRANSITION_TYPES, TRANSITION_COLORS, transitionColor, EDIT_MODES, IMAGE_DEFAULT_SEC, DEFAULT_FREEZE_SEC, SPEED_MIN, SPEED_MAX,
     defaultVideo, defaultAudio, defaultTitle, defaultTransform, defaultEq, snapFps,
     // 專案、軌道、媒體
     createProject, clone, serialize, deserialize,

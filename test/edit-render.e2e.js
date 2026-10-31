@@ -47,6 +47,7 @@ function refFrames(fix) {
 const PAGE = `<!doctype html><meta charset="utf-8"><body>
 <script src="/repo/edit-core.js"></script>
 <script src="/repo/edit-fx.js"></script>
+<script src="/repo/edit-fx-gl.js"></script>
 <script src="/repo/edit-render.js"></script>
 <script>
 // ---- 頁面端的小工具 ----
@@ -274,6 +275,9 @@ function check(name, ok, detail) {
     await R.renderFrame(g, p6, 0); out.single.black0 = T.mean(T.pixels(cv, 64, 36)); out.single.black0red = redFrac();
     p6.transitions.h.type = 'wipe';      // 和背景擦拭：'left' = 畫面往左，片段從右邊進來
     await R.renderFrame(g, p6, 5); out.single.wipeL = at(100, 360); out.single.wipeR = at(1180, 360);
+    p6.transitions.h.type = 'doors';     // WebGL 轉場走同一個 compose：兩扇門（背景）往外推開，中間露出片段
+    await R.renderFrame(g, p6, 5); out.single.doorsL = at(60, 360); out.single.doorsC = at(640, 360);
+    out.single.glOk = !!(window.QPTEdit.fxgl && window.QPTEdit.fxgl.available());
     delete p6.transitions.h;
     p6.transitions.t = tr6('t', { leftClipId: 'b', align: 'end' });
     await R.renderFrame(g, p6, 59); out.single.out59 = redFrac();
@@ -296,6 +300,7 @@ function check(name, ok, detail) {
   check('交叉疊化開頭淡入：第一格幾乎是背景色、結束時是片段', cp.single.in0 > 0.8 && Math.abs(cp.single.in9 - cp.single.in20) < 0.08, cp.single);   // in20：片段本身（測試圖卡有紅色色條）
   check('淡出到黑的開頭淡入：第一格接近黑色（不是背景紅）', cp.single.black0 < 30 && cp.single.black0red < 0.05, cp.single);
   check('擦拭開頭淡入：一半是背景、一半是片段', cp.single.wipeL[0] > 200 && cp.single.wipeL[1] < 60 && !(cp.single.wipeR[0] > 200 && cp.single.wipeR[1] < 60 && cp.single.wipeR[2] < 60), cp.single);
+  check('WebGL 對開門開頭淡入（經過 compose）：兩側是背景、中間是片段', cp.single.glOk && cp.single.doorsL[0] > 200 && cp.single.doorsL[1] < 60 && !(cp.single.doorsC[0] > 200 && cp.single.doorsC[1] < 60 && cp.single.doorsC[2] < 60), cp.single);
   check('交叉疊化尾端淡出：最後一格幾乎是背景色', cp.single.out59 > 0.8 && Math.abs(cp.single.out50 - cp.single.in20) < 0.08, cp.single);
 
   // ---------------------------------------------------------------------------------

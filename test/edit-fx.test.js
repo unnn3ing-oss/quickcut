@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fx = require('../edit-fx.js');
+const fxgl = require('../edit-fx-gl.js');   // 載入時把 WebGL 轉場加進 fx.TRANSITIONS（node 沒有 WebGL → 退回交叉疊化）
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) <= eps, `${a} ≠ ${b}`);
 const nearPt = (p, x, y, eps = 1e-6) => { near(p[0], x, eps); near(p[1], y, eps); };
@@ -192,7 +193,8 @@ test('drawSolid：用純色填滿裁切後的矩形', () => {
 // ---- 轉場 ----
 test('轉場：t=0 只畫 A、t=1 只畫 B，中間兩者都畫', () => {
   fx._setCanvasFactory((w, h) => { const cx = mockCtx(); return { width: w, height: h, getContext: () => cx }; });
-  const types = ['crossDissolve', 'dipToColor', 'fadeToBlack', 'wipe', 'push', 'slide', 'zoom', 'blur'];
+  const types = ['crossDissolve', 'dipToColor', 'fadeToBlack', 'wipe', 'push', 'slide', 'zoom', 'blur',
+    'whip', 'flash', 'glitch', 'zoomPunch', 'spin', 'lightLeak', 'blinds', 'pixelate', 'flip', 'cube', 'doors'];
   assert.deepEqual(Object.keys(fx.TRANSITIONS).sort(), types.slice().sort());
   const run = (type, t, opts = {}) => {
     const hits = { A: 0, B: 0 };
@@ -242,6 +244,34 @@ test('轉場：推擠／滑入的位移方向', () => {
   const rects = calls(ctx3, 'rect');
   assert.deepEqual(rects[0].slice(1), [100, 0, 300, 200]);   // A 剩下右邊
   assert.deepEqual(rects[1].slice(1), [0, 0, 100, 200]);     // B 從左邊長出來
+});
+
+test('WebGL 轉場：清單、選項欄位、和 core 的種類一致', () => {
+  const core = require('../edit-core.js');
+  const glTypes = Object.keys(fxgl.DEFS);
+  assert.deepEqual(glTypes.sort(), ['blinds', 'cube', 'doors', 'flash', 'flip', 'glitch', 'lightLeak', 'pixelate', 'spin', 'whip', 'zoomPunch']);
+  for (const k of Object.keys(fx.TRANSITIONS)) assert.ok(core.TRANSITION_TYPES.includes(k), k + ' 要在 core.TRANSITION_TYPES 裡');
+  assert.equal(core.TRANSITION_TYPES.length, Object.keys(fx.TRANSITIONS).length);
+  for (const k of glTypes) {
+    const d = fx.TRANSITIONS[k];
+    assert.ok(d.gl && d.name && typeof d.draw === 'function', k);
+    assert.ok(d.dirs === null || ['four', 'spin', 'doors'].includes(d.dirs), k + ' dirs');
+    assert.ok(d.thumbT > 0 && d.thumbT < 1, k + ' thumbT');
+  }
+  assert.deepEqual(['whip', 'blinds', 'flip', 'cube'].map(k => fx.TRANSITIONS[k].dirs), ['four', 'four', 'four', 'four']);
+  assert.equal(fx.TRANSITIONS.spin.dirs, 'spin'); assert.equal(fx.TRANSITIONS.doors.dirs, 'doors');
+  assert.deepEqual(Object.keys(fx.TRANSITIONS).filter(k => fx.TRANSITIONS[k].color).sort(), ['dipToColor', 'flash', 'lightLeak']);
+  assert.deepEqual(['wipe', 'push', 'slide'].map(k => fx.TRANSITIONS[k].dirs), ['four', 'four', 'four']);
+  // 每支著色器都要宣告 tr()（共用的 main 會呼叫它）
+  for (const k of glTypes) assert.match(fxgl.DEFS[k].frag, /vec4 tr\(\)\{/, k);
+});
+test('WebGL 轉場：沒有 WebGL 時退回交叉疊化（中段 A、B 都畫，端點只畫一邊）', () => {
+  fx._setCanvasFactory((w, h) => { const cx = mockCtx(); return { width: w, height: h, getContext: () => cx }; });
+  assert.equal(fxgl.available(), false);
+  const hits = { A: 0, B: 0 };
+  const ctx = mockCtx();
+  fx.TRANSITIONS.cube.draw(ctx, () => { hits.A++; }, () => { hits.B++; }, 0.4, { direction: 'up', ease: 'linear' }, 320, 180);
+  assert.deepEqual(hits, { A: 1, B: 1 });
 });
 
 // ---- 字幕 ----

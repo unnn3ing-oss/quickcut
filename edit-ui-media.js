@@ -127,6 +127,7 @@
       it.append(cv, el('span', 'ed-gname', def.name));
       tl.appendChild(it);
       paintTransThumb(cv, type);
+      wireThumbPlay(it, cv, f => paintTransThumb(cv, type, f == null ? null : f / 44));
       it.addEventListener('pointerdown', e => libPointerDown(e, { kind: 'transition', id: type }, def.name, () => { lib.trans = type; markGallery(); }));
       it.addEventListener('dblclick', () => { lib.trans = type; markGallery(); UI.addTransitionToSelection(type); });
       it.addEventListener('keydown', e => { if (e.key === 'Enter') { lib.trans = type; markGallery(); UI.addTransitionToSelection(type); } });
@@ -202,7 +203,8 @@
     it.addEventListener('pointerenter', () => { if (raf) return; t0 = performance.now(); raf = root.requestAnimationFrame(tick); });
     it.addEventListener('pointerleave', () => { if (raf) root.cancelAnimationFrame(raf); raf = 0; draw(null); });
   }
-  function paintTransThumb(cv, type) {
+  // t：轉場進度（null＝停在該轉場的預設畫面 thumbT，閃光停在最亮前一點、甩鏡停在模糊最明顯處）
+  function paintTransThumb(cv, type, t) {
     const g = cv.getContext('2d'), W = cv.width, H = cv.height;
     const side = (c0, c1, label) => c => {
       const gr = c.createLinearGradient(0, 0, W, H); gr.addColorStop(0, c0); gr.addColorStop(1, c1);
@@ -211,7 +213,10 @@
       c.fillText(label, W / 2, H / 2 + 2);
     };
     g.clearRect(0, 0, W, H);
-    try { F.TRANSITIONS[type].draw(g, side('#4f86d6', '#1d3f87', 'A'), side('#f59e0b', '#b45309', 'B'), 0.5, { type, direction: 'left', color: '#000000', ease: 'linear', align: 'center' }, W, H); } catch (_) { side('#4f86d6', '#1d3f87', 'A')(g); }
+    const def = F.TRANSITIONS[type] || {};
+    const at = t == null ? (def.thumbT || 0.5) : t;
+    const color = C.transitionColor ? C.transitionColor(type) : '#000000';
+    try { def.draw(g, side('#4f86d6', '#1d3f87', 'A'), side('#f59e0b', '#b45309', 'B'), at, { type, direction: 'left', color, ease: 'linear', align: 'center' }, W, H); } catch (_) { side('#4f86d6', '#1d3f87', 'A')(g); }
   }
   function paintTitleThumb(cv, preset) {
     const g = cv.getContext('2d'), W = cv.width, H = cv.height;
