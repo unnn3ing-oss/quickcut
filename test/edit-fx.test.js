@@ -1,6 +1,7 @@
 // 剪輯：畫面數學、轉場、字幕的純邏輯測試（node 內跑，畫面用記錄呼叫的假 ctx）
 const test = require('node:test');
 const assert = require('node:assert/strict');
+require('../edit-core.js');   // 關鍵影格內插（core.keyframeValue）
 const fx = require('../edit-fx.js');
 const fxgl = require('../edit-fx-gl.js');   // 載入時把 WebGL 轉場加進 fx.TRANSITIONS（node 沒有 WebGL → 退回交叉疊化）
 
@@ -472,4 +473,14 @@ test('V 標記：預設 10 秒、碰到下一段就停、前一段在這格前�
   assert.deepEqual(fx.planSubtitleMark(subs, 350, 30, 10), { start: 350, end: 400, trimPrev: null }, '碰到 b：結束在 b 開始的前一格');
   assert.deepEqual(fx.planSubtitleMark([], 0, 25, 10), { start: 0, end: 250, trimPrev: null });
   assert.deepEqual(fx.planSubtitleMark(subs, 400, 30, 10), { existing: 'b' }, '剛好是某段開頭：不重複加');
+});
+
+test('getParam：關鍵影格內插走 core.keyframeValue（ease 緩入緩出、clipMatrix 也跟著）', () => {
+  const c = clipOf();
+  c.keyframes = { 'video.transform.posX': [{ f: 0, v: 0, interp: 'ease' }, { f: 100, v: 100 }] };
+  near(fx.getParam(c, 'video.transform.posX', 50), 50);
+  const q = fx.getParam(c, 'video.transform.posX', 25);
+  assert.ok(q < 25 && q > 0, `緩入：四分之一處小於 25（${q}）`);
+  const m = fx.clipMatrix(c, 1920, 1080, 1920, 1080, 25);
+  near(m[4], fx.getParam(c, 'video.transform.posX', 25));
 });

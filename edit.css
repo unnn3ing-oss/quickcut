@@ -401,6 +401,9 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
 .ed-linkic svg { fill: none; }
 .ed-badge { flex: none; font-size: 10px; font-weight: 700; padding: 0 6px; line-height: 15px; border-radius: 99px; background: var(--ed-badge-bg); color: var(--ed-badge-fg); }
 .ed-badge.bad { background: #d93636; color: #fff; }
+.ed-ckf { position: absolute; left: 0; right: 0; bottom: 14px; height: 8px; pointer-events: none; z-index: 3; }
+.ed-ckf i { position: absolute; top: 0; width: 6px; height: 6px; margin-left: -3px; background: #ffc233; border: 1px solid rgba(0,0,0,.45); transform: rotate(45deg); }
+.ed-clip.sel .ed-ckf i { background: #ffd666; border-color: #000; }
 .ed-cmark { position: absolute; bottom: 3px; width: 9px; height: 9px; margin-left: -4px; background: var(--c); border: 1.5px solid #fff; transform: rotate(45deg); z-index: 4; cursor: pointer; }
 .ed-fadesvg { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 1; }
 .ed-fade-area { fill: rgba(10, 30, 25, 0.4); }
@@ -522,6 +525,11 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
 .ed-pop { padding: 12px; width: 288px; max-width: calc(100vw - 16px); }
 
 .ed-pop.fit { width: 320px; }
+.ed-pop.beat { width: 320px; }
+.ed-beat-h { font-size: 12px; font-weight: 700; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
+.ed-beat .ed-form-h + .ed-beat-h { border-top: none; padding-top: 0; }
+.ed-beat select { flex: 1 1 auto; min-width: 0; font: inherit; font-size: 12px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--field-bg, var(--surface)); color: var(--text); }
+.ed-beat-out:empty { display: none; }
 .ed-fitopts { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .ed-fitopt { display: flex; flex-direction: column; gap: 2px; text-align: left; font: inherit; font-size: 12px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--ed-border); background: var(--ed-field); color: var(--ed-text); cursor: pointer; }
 .ed-fitopt strong { font-size: 13px; }

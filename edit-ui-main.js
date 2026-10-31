@@ -68,6 +68,10 @@
     UI.player = R.createPlayer({ canvas: $('edCanvas'), getProject: viewProject, maxSize: 1280 });
     UI.player.on('frame', onPlayerFrame);
     UI.player.on('state', updatePlayButton);
+    // 打拍子模式在停止播放時結束（顯示打了幾拍）
+    UI.player.on('state', e => {
+      if (e && !e.playing && state.beatTap) { state.beatTap = false; say(`打拍子結束：時間軸上有 ${Q.core.beatFrames(state.project).length} 個節拍標記`); }
+    });
     updatePlayButton();
   }
 

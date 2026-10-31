@@ -374,6 +374,15 @@
       d.title = `${mk.name || '片段標記'}（${MARKER_NAME[mk.color] || ''}）${mk.note ? '\n' + mk.note : ''}`;
       e.appendChild(d);
     }
+    // 關鍵影格：片段上緣一排小菱形（只顯示、不擋滑鼠；跳到關鍵影格用詳細內容的 ◀ ▶）
+    if (c.video && c.keyframes && w > 12) {
+      const fs = C.keyframeFrames(c);
+      if (fs.length) {
+        const row = el('div', 'ed-ckf'); row.title = `關鍵影格 ${fs.length} 個`;
+        for (const f of fs) { const d = el('i'); d.style.left = (f * k) + 'px'; row.appendChild(d); }
+        e.appendChild(row);
+      }
+    }
     // 音訊淡入淡出：曲線＋上緣兩端的把手
     if (t.kind === 'audio' && c.audio && w > 24) {
       const a = c.audio, W = Math.max(3, c.duration * k);

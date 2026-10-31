@@ -1695,3 +1695,181 @@ t('比例轉換：aspectMismatch 找出會留黑邊的片段、setFitAll 一次�
   const q = setup();
   unchanged(q, () => core.setFitAll(q, 'blur'), /沒有可以套用/);
 });
+
+t('關鍵影格：新增／改值／刪除／清除／內插方式，失敗時不改專案', () => {
+  const p = setup();
+  const [v] = put(p, 'mv', 0, 0, 4);                     // [0,120)
+  const ZX = 'video.transform.zoomX', PX = 'video.transform.posX';
+  // 範圍外、不支援的參數、音訊片段
+  unchanged(p, () => core.setKeyframe(p, v, 120, { [ZX]: 2 }), /播放頭/);
+  unchanged(p, () => core.setKeyframe(p, v, 0, { 'video.fit': 2 }), /不能打關鍵影格/);
+  unchanged(p, () => core.setKeyframe(p, v, 0, { [ZX]: 2 }, 'bounce'), /內插/);
+  const au = Object.values(p.clips).find(c => c.trackId === A(p)).id;
+  unchanged(p, () => core.setKeyframe(p, au, 0, { [ZX]: 2 }), /沒有畫面/);
+  // 新增兩格、數值夾範圍
+  assert.ok(core.setKeyframe(p, v, 0, { [ZX]: 1, [PX]: 0 }).ok);
+  assert.ok(core.setKeyframe(p, v, 60, { [ZX]: 500, [PX]: 200 }, 'ease').ok);
+  assert.deepStrictEqual(C(p, v).keyframes[ZX].map(k => [k.f, k.v]), [[0, 1], [60, 100]]);
+  assert.deepStrictEqual(core.keyframeFrames(C(p, v)), [0, 60]);
+  // 同一格再設定＝改值；interp 省略保留原本
+  assert.ok(core.setKeyframe(p, v, 60, { [ZX]: 2 }).ok);
+  assert.deepStrictEqual(C(p, v).keyframes[ZX][1], { f: 60, v: 2, interp: 'ease' });
+  // 內插：linear 中點 1.5；改成 ease 後中點也是 1.5、四分之一處比較慢；hold 停在前一格
+  near(core.keyframeValue(C(p, v).keyframes[ZX], 30), 1.5);
+  assert.ok(core.setKeyframeInterp(p, v, 0, 'ease').ok);
+  near(core.keyframeValue(C(p, v).keyframes[ZX], 30), 1.5);
+  assert.ok(core.keyframeValue(C(p, v).keyframes[ZX], 15) < 1.25, '緩入：一開始比較慢');
+  assert.ok(core.setKeyframeInterp(p, v, 0, 'hold', [ZX]).ok);
+  assert.strictEqual(core.keyframeValue(C(p, v).keyframes[ZX], 59), 1);
+  assert.strictEqual(C(p, v).keyframes[PX][0].interp, 'ease', '只改指定參數');
+  unchanged(p, () => core.setKeyframeInterp(p, v, 7, 'ease'), /沒有關鍵影格/);
+  // 刪除：最後一個刪掉時靜態值改成它的值
+  assert.ok(core.removeKeyframe(p, v, 0, [ZX, PX]).ok);
+  assert.ok(core.removeKeyframe(p, v, 60, [ZX]).ok);
+  assert.strictEqual(C(p, v).keyframes[ZX], undefined);
+  assert.strictEqual(C(p, v).video.transform.zoomX, 2);
+  unchanged(p, () => core.removeKeyframe(p, v, 60, [ZX]), /沒有關鍵影格/);
+  // 清除：靜態值＝指定格的值
+  assert.ok(core.setKeyframe(p, v, 0, { [PX]: 0 }, 'linear').ok);
+  assert.ok(core.setKeyframe(p, v, 60, { [PX]: 100 }).ok);
+  assert.ok(core.clearKeyframes(p, v, null, 30).ok);
+  assert.deepStrictEqual(C(p, v).keyframes, {});
+  near(C(p, v).video.transform.posX, 50);
+  unchanged(p, () => core.clearKeyframes(p, v), /沒有關鍵影格/);
+  // 鎖定軌
+  lock(p, V(p));
+  unchanged(p, () => core.setKeyframe(p, v, 0, { [ZX]: 2 }), /鎖定/);
+  // 復原
+  const q = setup(); const [w] = put(q, 'mv', 0, 0, 4);
+  const h = core.createHistory(() => q, () => {});
+  h.run('關鍵影格', x => core.setKeyframe(x, w, 10, { [ZX]: 3 }));
+  assert.strictEqual(C(q, w).keyframes[ZX].length, 1);
+  h.undo();
+  assert.strictEqual(C(q, w).keyframes[ZX], undefined);
+  assertInvariants(q);
+});
+
+t('關鍵影格：修剪開頭、切開、變速後動畫跟著畫面走', () => {
+  const ZX = 'video.transform.zoomX';
+  const p = setup();
+  const [v] = put(p, 'mv', 0, 0, 4);                     // [0,120)
+  assert.ok(core.setKeyframe(p, v, 0, { [ZX]: 1 }).ok);
+  assert.ok(core.setKeyframe(p, v, 60, { [ZX]: 2 }).ok);
+  assert.ok(core.setKeyframe(p, v, 119, { [ZX]: 3 }).ok);
+  const at = (id, frame) => core.keyframeValue(C(p, id).keyframes[ZX], frame - C(p, id).start);
+  const before = [10, 45, 60, 90, 110].map(f => at(v, f));
+  // 切開在 50：兩半在時間軸上看到的值完全不變
+  assert.ok(core.blade(p, 50, [V(p)]).ok);
+  const right = Object.values(p.clips).find(c => c.trackId === V(p) && c.start === 50).id;
+  assert.deepStrictEqual([at(v, 10), at(v, 45), at(right, 60), at(right, 90), at(right, 110)], before);
+  assert.ok(C(p, right).keyframes[ZX].some(k => k.f < 0), '保留片段前的一格讓開頭內插不變');
+  assert.ok(C(p, v).keyframes[ZX].every(k => k.f <= 60), '左半只留範圍內＋後面最近一格');
+  // 修剪右半的開頭（往右縮 20 格）：畫面位置不變
+  assert.ok(core.trimEdge(p, right, 'start', 20).ok);
+  assert.deepStrictEqual([at(right, 90), at(right, 110)], [before[3], before[4]]);
+  // 變速（ripple）：長度減半，關鍵影格依比例縮
+  const q = setup();
+  const [w] = put(q, 'mv', 0, 0, 4);
+  assert.ok(core.setKeyframe(q, w, 100, { [ZX]: 2 }).ok);
+  assert.ok(core.setSpeed(q, w, { speed: 2, ripple: true }).ok);
+  assert.strictEqual(C(q, w).duration, 60);
+  assert.strictEqual(C(q, w).keyframes[ZX][0].f, 50);
+  assertInvariants(p); assertInvariants(q);
+});
+
+t('關鍵影格：一鍵動畫（放大、縮小、平移）', () => {
+  const p = setup();
+  const [v] = put(p, 'mv', 0, 0, 4);
+  const K = x => C(p, v).keyframes['video.transform.' + x];
+  assert.ok(core.applyKeyframePreset(p, v, 'zoomIn').ok);
+  assert.deepStrictEqual(K('zoomX').map(k => [k.f, k.v, k.interp]), [[0, 1, 'ease'], [119, 1.15, 'ease']]);
+  assert.deepStrictEqual(K('zoomY').map(k => k.v), [1, 1.15]);
+  assert.ok(core.applyKeyframePreset(p, v, 'panLeft', { amount: 0.2 }).ok);
+  assert.ok(K('posX')[0].v > 0 && K('posX')[1].v < 0, '向左平移');
+  assert.ok(K('zoomX')[0].v > 1, '平移時放大避免露出黑邊');
+  assert.ok(core.applyKeyframePreset(p, v, 'zoomOut').ok);
+  assert.strictEqual(K('posX'), undefined, '換動畫會清掉舊的平移');
+  unchanged(p, () => core.applyKeyframePreset(p, v, 'spin'), /動畫種類/);
+  assertInvariants(p);
+});
+
+t('關鍵影格：setClipPropsAt 有動畫的參數改成打關鍵影格，其他照常改', () => {
+  const p = setup();
+  const [v] = put(p, 'mv', 30, 0, 4);                    // [30,150)
+  const ZX = 'video.transform.zoomX';
+  // 沒有關鍵影格：等同 setClipProps
+  assert.ok(core.setClipPropsAt(p, v, { video: { transform: { zoomX: 2 } } }, 40).ok);
+  assert.strictEqual(C(p, v).video.transform.zoomX, 2);
+  assert.ok(core.setKeyframe(p, v, 0, { [ZX]: 1 }).ok);
+  // 播放頭在第 70 格（片段內 40）：新增關鍵影格；posX 沒動畫，改靜態值
+  assert.ok(core.setClipPropsAt(p, v, { video: { transform: { zoomX: 3, posX: 12 } } }, 70).ok);
+  assert.deepStrictEqual(C(p, v).keyframes[ZX].map(k => [k.f, k.v]), [[0, 1], [40, 3]]);
+  assert.strictEqual(C(p, v).video.transform.posX, 12);
+  assert.strictEqual(C(p, v).video.transform.zoomX, 2, '有動畫的參數不改靜態值');
+  // 同一格再改＝改值
+  assert.ok(core.setClipPropsAt(p, v, { video: { transform: { zoomX: 4 } } }, 70).ok);
+  assert.deepStrictEqual(C(p, v).keyframes[ZX].map(k => k.v), [1, 4]);
+  // 播放頭不在片段上：失敗、不改
+  unchanged(p, () => core.setClipPropsAt(p, v, { video: { transform: { zoomX: 5 } } }, 10), /播放頭/);
+  unchanged(p, () => core.setClipPropsAt(p, v, { video: { fit: 'zoom' } }, 70), /縮放方式/);
+  assertInvariants(p);
+});
+
+t('節拍標記：一次加一批（取代舊的、略過已有標記的格）、清除', () => {
+  const p = setup();
+  assert.ok(core.addMarker(p, { frame: 30, color: 'red' }).ok);
+  const r = core.addBeatMarkers(p, [15, 30, 45.4, 60, 60, -3]);
+  assert.ok(r.ok); assert.strictEqual(r.count, 3);
+  assert.deepStrictEqual(core.beatFrames(p), [15, 45, 60]);
+  assert.strictEqual(p.markers.find(m => m.frame === 30).color, 'red', '原本的標記不動');
+  assert.ok(core.addBeatMarkers(p, [10, 20]).ok);
+  assert.deepStrictEqual(core.beatFrames(p), [10, 20], '預設取代舊的節拍標記');
+  assert.ok(core.addBeatMarkers(p, [40], { replace: false }).ok);
+  assert.deepStrictEqual(core.beatFrames(p), [10, 20, 40]);
+  unchanged(p, () => core.addBeatMarkers(p, []), /節拍/);
+  assert.strictEqual(core.clearBeatMarkers(p).count, 3);
+  assert.strictEqual(p.markers.length, 1);
+  unchanged(p, () => core.clearBeatMarkers(p), /沒有節拍標記/);
+  // 鎖定軌也能加（標記不屬於軌道）
+  lock(p, V(p));
+  assert.ok(core.addBeatMarkers(p, [5]).ok);
+});
+
+t('卡點：片段依節拍排好（連結聲音跟著、素材不夠長留空、後面的片段跟著推）', () => {
+  const p = setup();
+  const img = []; let f = 0;
+  for (let i = 0; i < 3; i++) { const [id] = put(p, 'mi', f, 0, 2, { video: V(p) }); img.push(id); f += 60; }   // 三張圖片各 60 格
+  const [vid, au] = put(p, 'mv', f, 0, 1);              // 影片 30 格（來源 10 秒，夠長）
+  const [tail] = put(p, 'mn', f + 30, 0, 1, { video: V(p) });  // 後面沒選到的片段
+  assert.ok(core.addBeatMarkers(p, [20, 35, 50, 65, 80]).ok);
+  const r = core.fitClipsToBeats(p, [...img, vid]);
+  assert.ok(r.ok, r.reason);
+  assert.deepStrictEqual([...img, vid].map(id => span(C(p, id))), [[0, 20], [20, 35], [35, 50], [50, 65]]);
+  assert.deepStrictEqual(span(C(p, au)), [50, 65], '連結的聲音跟著');
+  assert.strictEqual(C(p, tail).start, 65, '後面的片段往前收');
+  assertInvariants(p, { linkSync: true });
+  // 每 2 拍
+  const q = setup();
+  const a = put(q, 'mi', 0, 0, 1, { video: V(q) })[0], b = put(q, 'mi', 30, 0, 1, { video: V(q) })[0];
+  assert.ok(core.fitClipsToBeats(q, [a, b], { beats: [10, 20, 30, 40, 50], every: 2 }).ok);
+  assert.deepStrictEqual([span(C(q, a)), span(C(q, b))], [[0, 10], [10, 30]]);
+  // 素材不夠長：空景只有 3 秒（90 格）
+  const s = setup();
+  const n = put(s, 'mn', 0, 0, 1, { video: V(s) })[0];
+  const r2 = core.fitClipsToBeats(s, [n], { beats: [200] });
+  assert.ok(r2.ok); assert.strictEqual(r2.short, 1);
+  assert.strictEqual(C(s, n).duration, 90);
+  // 沒有節拍、中間夾著沒選到的片段
+  const e = setup();
+  const x1 = put(e, 'mi', 0, 0, 1, { video: V(e) })[0], x2 = put(e, 'mi', 30, 0, 1, { video: V(e) })[0], x3 = put(e, 'mi', 60, 0, 1, { video: V(e) })[0];
+  unchanged(e, () => core.fitClipsToBeats(e, [x1, x3]), /還沒有節拍標記/);
+  unchanged(e, () => core.fitClipsToBeats(e, [x1, x3], { beats: [10, 20] }), /夾在選取的片段中間/);
+  assert.ok(x2);
+});
+
+t('卡點：開頭離第一拍太近時，第一段延到下一個拍子（不會一閃而過）', () => {
+  const p = setup();
+  const ids = [0, 1, 2].map(i => put(p, 'mi', i * 30, 0, 1, { video: V(p) })[0]);
+  assert.ok(core.fitClipsToBeats(p, ids, { beats: [4, 19, 34, 49, 64, 79], every: 2 }).ok);
+  assert.deepStrictEqual(ids.map(id => span(C(p, id))), [[0, 19], [19, 49], [49, 79]]);
+});
