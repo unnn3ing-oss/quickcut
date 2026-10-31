@@ -939,6 +939,10 @@
       blend(ctx, layer('tA', dA, W, H), layer('tB', dB, W, H), u, W, H, { filter }, { filter });
     }),
   };
+  // 詳細內容要顯示的選項（WebGL 轉場在 edit-fx-gl.js 裡也帶同樣的欄位）：
+  //   dirs：'four'＝上下左右、'spin'＝逆／順時針、'doors'＝左右／上下打開；color：顯示「顏色」
+  for (const k of ['wipe', 'push', 'slide']) TRANSITIONS[k].dirs = 'four';
+  TRANSITIONS.dipToColor.color = true;
   // ---------------------------------------------------------------------------------
   // 詳細內容
   //   sections：[{ id, title, appliesTo(subject), render(el, subject, commit) }]
@@ -949,6 +953,7 @@
   //   同一個 el、同一個 subject.id 再次 render 只會更新欄位值（不重建 DOM），所以外部在 live 提交後重畫也不會打斷拖曳或輸入。
   // ---------------------------------------------------------------------------------
   const isTransition = s => !!s && s.leftClipId !== undefined;
+  const trInfo = s => (s && TRANSITIONS[s.type]) || {};
   const FIT_OPTIONS = [['fit', '符合（完整顯示）'], ['fill', '填滿（裁掉多的）'], ['stretch', '拉伸（變形）']];
   const DIR_OPTIONS = [['left', '向左'], ['right', '向右'], ['up', '向上'], ['down', '向下']];
   const ALIGN_OPTIONS = [['left', '靠左'], ['center', '置中'], ['right', '靠右']];
@@ -1347,8 +1352,10 @@
           { type: 'select', label: '類型', options: Object.keys(TRANSITIONS).map(k => [k, TRANSITIONS[k].name]), get: s => s.type, patch: v => ({ type: v }) },
           { type: 'num', label: '長度', get: s => s.duration, def: 15, min: 1, max: 600, dpp: 0.25, dec: 0, unit: '格', patch: v => ({ duration: Math.round(v) }) },
           { type: 'select', label: '對齊', options: [['center', '置中於剪接點'], ['start', '從剪接點開始'], ['end', '在剪接點結束']], get: s => s.align || 'center', show: s => !!(s.leftClipId && s.rightClipId), patch: v => ({ align: v }) },
-          { type: 'color', label: '顏色', get: s => s.color || '#000000', show: s => s.type === 'dipToColor', patch: v => ({ color: v }) },
-          { type: 'select', label: '方向', options: DIR_OPTIONS, get: s => s.direction || 'left', show: s => ['wipe', 'push', 'slide'].includes(s.type), patch: v => ({ direction: v }) },
+          { type: 'color', label: '顏色', get: s => s.color || '#000000', show: s => !!trInfo(s).color, patch: v => ({ color: v }) },
+          { type: 'select', label: '方向', options: DIR_OPTIONS, get: s => s.direction || 'left', show: s => trInfo(s).dirs === 'four', patch: v => ({ direction: v }) },
+          { type: 'select', label: '方向', options: [['left', '逆時針'], ['right', '順時針']], get: s => (s.direction === 'right' || s.direction === 'down') ? 'right' : 'left', show: s => trInfo(s).dirs === 'spin', patch: v => ({ direction: v }) },
+          { type: 'select', label: '方向', options: [['left', '左右打開'], ['up', '上下打開']], get: s => (s.direction === 'up' || s.direction === 'down') ? 'up' : 'left', show: s => trInfo(s).dirs === 'doors', patch: v => ({ direction: v }) },
           { type: 'select', label: '緩動', options: [['linear', '線性'], ['easeInOut', '緩入緩出']], get: s => s.ease || 'linear', patch: v => ({ ease: v }) },
         ]);
       },
