@@ -33,12 +33,12 @@
     const aspLab = el('label', 'ed-aspect'); aspLab.htmlFor = 'edAspect';
     aspLab.append(el('span', null, '輸出比例'));
     const sel = el('select'); sel.id = 'edAspect'; sel.title = '輸出畫面的比例（只影響時間軸與匯出，不影響素材）';
-    for (const [v, t] of [['source', '依來源'], ['9:16', '9:16 直式'], ['16:9', '16:9 橫式'], ['4:5', '4:5']]) { const o = el('option', null, t); o.value = v; sel.appendChild(o); }
+    for (const [v, t] of [['source', '依來源'], ['9:16', '9:16 直式'], ['16:9', '16:9 橫式'], ['4:5', '4:5'], ['1:1', '1:1 方形']]) { const o = el('option', null, t); o.value = v; sel.appendChild(o); }
     sel.addEventListener('change', () => {
       const v = sel.value;
       const r = state.history.run('輸出比例', p => C.setAspect(p, v));
       if (!report(r)) syncAspect();
-      else say(`輸出比例 ${aspectText()}`, 'ok');
+      else { say(`輸出比例 ${aspectText()}`, 'ok'); offerFitAll(sel); }
     });
     aspLab.appendChild(sel);
     const vb = el('button', 'ed-btn small ed-vertbtn'); vb.type = 'button'; vb.id = 'edVert';
@@ -112,6 +112,39 @@
   }
 
   const aspectText = () => { const p = state.project; return `${p.width}×${p.height}`; };
+
+  // ---- 一鍵比例轉換：換了輸出比例後，有素材比例不合（會出現大片黑邊）就問要怎麼放進新畫面 ------------
+  // 套用到所有影片軌上的影片／圖片片段（C.setFitAll，整批一次復原）；「保持黑邊」＝不改。
+  const FIT_CHOICES = [
+    ['blur', '模糊背景', '完整顯示，空白處用同一個畫面的模糊放大補滿（短影音最常見）'],
+    ['fill', '填滿裁切', '放大蓋滿整個畫面，多出來的部分裁掉；可以在預覽上拖曳調整要留哪一塊'],
+    ['fit', '保持黑邊', '不改，完整顯示並留黑邊'],
+  ];
+  function offerFitAll(anchor) {
+    const p = state.project;
+    const mm = C.aspectMismatch ? C.aspectMismatch(p) : { count: 0 };
+    if (!mm.count) return;
+    const ratio = p.aspect === 'source' ? aspectText() : p.aspect;
+    const box = el('div', 'ed-form');
+    box.id = 'edFitPop';
+    box.append(el('div', 'ed-form-h', `有 ${mm.count} 段素材的比例和 ${ratio} 不同`));
+    box.append(el('div', 'ed-hint', '要怎麼放進新的畫面？會套用到時間軸上所有影片和圖片片段，之後也可以在「詳細內容 → 畫面符合」逐段調整。'));
+    const list = el('div', 'ed-fitopts');
+    for (const [fit, label, desc] of FIT_CHOICES) {
+      const b = el('button', 'ed-fitopt' + (fit === 'blur' ? ' rec' : '')); b.type = 'button'; b.dataset.fit = fit;
+      b.append(el('strong', null, label + (fit === 'blur' ? '（推薦）' : '')), el('span', null, desc));
+      b.addEventListener('click', () => {
+        UI.closePop();
+        if (fit === 'fit') return;
+        UI.op('畫面符合', q => C.setFitAll(q, fit), `已把所有影片和圖片片段改成「${label}」`);
+      });
+      list.appendChild(b);
+    }
+    box.appendChild(list);
+    UI.openPop(anchor, box, 'fit');
+    const first = list.querySelector('button');
+    if (first) first.focus();
+  }
   function syncAspect() {
     const sel = $('edAspect'), p = state.project;
     if (sel) sel.value = p.aspect;

@@ -21,7 +21,9 @@
   const Q = root.QPTEdit = root.QPTEdit || {};
 
   const FPS_CHOICES = [24, 25, 30, 50, 60];
-  const ASPECTS = { '9:16': [1080, 1920], '16:9': [1920, 1080], '4:5': [1080, 1350] };
+  const ASPECTS = { '9:16': [1080, 1920], '16:9': [1920, 1080], '4:5': [1080, 1350], '1:1': [1080, 1080] };
+  // 片段放進輸出畫面的方式：fit＝完整（黑邊）、blur＝完整＋同一畫面的模糊放大當背景、fill＝填滿（裁切）、stretch＝拉伸
+  const FIT_MODES = ['fit', 'blur', 'fill', 'stretch'];
   const MAX_SIDE = 3840;                  // 'source' 比例的長邊上限
   const MARKER_COLORS = ['blue', 'cyan', 'green', 'yellow', 'red', 'pink', 'purple', 'fuchsia', 'rose', 'lavender', 'sky', 'mint', 'lemon', 'sand', 'cocoa', 'cream'];
   const TRANSITION_TYPES = ['crossDissolve', 'dipToColor', 'fadeToBlack', 'wipe', 'push', 'slide', 'zoom', 'blur',
@@ -1355,7 +1357,8 @@
       for (const k of ['left', 'right', 'top', 'bottom', 'softness']) num(cr, k, 0, 1);
       if (cr.left + cr.right > 0.99) cr.right = Math.max(0, 0.99 - cr.left);
       if (cr.top + cr.bottom > 0.99) cr.bottom = Math.max(0, 0.99 - cr.top);
-      if (!['fit', 'fill', 'stretch'].includes(c.video.fit)) bail('縮放方式只能是符合、填滿或延展');
+      if (!FIT_MODES.includes(c.video.fit)) bail('縮放方式只能是符合、模糊背景、填滿或延展');
+      num(c.video, 'bgBlur', 0, 100);
     }
     if (c.audio) {
       const a = c.audio;
@@ -1384,6 +1387,35 @@
       for (const c of clips) { const k = q.clips[c.id]; deepMerge(k, patch); sanitize(k); }
       return {};
     });
+  });
+
+  // ---- 比例轉換 ----------------------------------------------------------------------
+  // 時間軸上影片軌的「影片／圖片」片段（不含字幕、色塊）
+  function mediaVisualClips(p) {
+    return Object.values(p.clips).filter(c => {
+      if (c.type !== 'media' || !c.mediaId || !c.video) return false;
+      const t = getTrack(p, c.trackId), m = p.mediaInfo && p.mediaInfo[c.mediaId];
+      return t && t.kind === 'video' && m && (m.kind === 'video' || m.kind === 'image');
+    });
+  }
+  // 比例和輸出畫面差超過 5%、而且還是「符合（黑邊）」的片段：換比例後會出現大片黑邊，介面據此詢問要不要一次改掉
+  function aspectMismatch(p) {
+    const out = p.width / p.height;
+    const ids = mediaVisualClips(p).filter(c => {
+      const m = p.mediaInfo[c.mediaId];
+      if (!(m.width > 0 && m.height > 0)) return false;
+      const fit = (c.video && c.video.fit) || 'fit';
+      return fit === 'fit' && Math.abs(m.width / m.height - out) / out > 0.05;
+    }).map(c => c.id);
+    return { count: ids.length, ids };
+  }
+  // 一次把所有影片／圖片片段改成同一種畫面符合方式（鎖定軌上的略過），整批只算一次編輯
+  const setFitAll = guard((p, fit) => {
+    if (!FIT_MODES.includes(fit)) return fail('縮放方式只能是符合、模糊背景、填滿或延展');
+    const ids = mediaVisualClips(p).filter(c => !getTrack(p, c.trackId).locked).map(c => c.id);
+    if (!ids.length) return fail('時間軸上沒有可以套用的影片或圖片片段');
+    const r = setClipProps(p, ids, { video: { fit } });
+    return r.ok ? { ok: true, count: ids.length } : r;
   });
 
   // =====================================================================================
@@ -1461,7 +1493,7 @@
 
   const api = {
     // 常數、預設值
-    FPS_CHOICES, ASPECTS, MARKER_COLORS, TRANSITION_TYPES, TRANSITION_COLORS, transitionColor, EDIT_MODES, IMAGE_DEFAULT_SEC, DEFAULT_FREEZE_SEC, SPEED_MIN, SPEED_MAX,
+    FPS_CHOICES, ASPECTS, FIT_MODES, MARKER_COLORS, TRANSITION_TYPES, TRANSITION_COLORS, transitionColor, EDIT_MODES, IMAGE_DEFAULT_SEC, DEFAULT_FREEZE_SEC, SPEED_MIN, SPEED_MAX,
     defaultVideo, defaultAudio, defaultTitle, defaultTransform, defaultEq, snapFps,
     // 專案、軌道、媒體
     createProject, clone, serialize, deserialize,
@@ -1476,7 +1508,7 @@
     moveClips, trimEdge, blade, rippleTrim, rippleDelete, deleteGap, lift, roll, slip, slide,
     setInOut, clearInOut, editToTimeline, addClip, link, unlink,
     addMarker, updateMarker, removeMarker, addClipMarker, updateClipMarker, removeClipMarker, setFlags,
-    setSpeed, freezeFrame, addTransition, updateTransition, removeTransition, setClipProps,
+    setSpeed, freezeFrame, addTransition, updateTransition, removeTransition, setClipProps, setFitAll, aspectMismatch,
     // 復原
     createHistory, bus,
   };

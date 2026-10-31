@@ -520,6 +520,14 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
   color: var(--text); font-size: 12.5px;
 }
 .ed-pop { padding: 12px; width: 288px; max-width: calc(100vw - 16px); }
+
+.ed-pop.fit { width: 320px; }
+.ed-fitopts { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.ed-fitopt { display: flex; flex-direction: column; gap: 2px; text-align: left; font: inherit; font-size: 12px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--ed-border); background: var(--ed-field); color: var(--ed-text); cursor: pointer; }
+.ed-fitopt strong { font-size: 13px; }
+.ed-fitopt span { color: var(--ed-muted); line-height: 1.4; }
+.ed-fitopt:hover, .ed-fitopt:focus-visible { border-color: var(--ed-accent); }
+.ed-fitopt.rec { border-color: var(--ed-accent); }
 .ed-menu { padding: 5px; min-width: 190px; display: flex; flex-direction: column; }
 .ed-menu-item {
   display: flex; justify-content: space-between; gap: 18px; align-items: center; width: 100%; text-align: left; border: none; background: transparent; color: var(--text);

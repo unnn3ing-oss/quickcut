@@ -171,6 +171,38 @@ test('drawClipVisual：套矩陣、裁切來源、不透明度', () => {
   fx.drawClipVisual(ctx2, clipOf(), null, 10, 10, 10, 10, 0);          // 沒有來源 = 不畫
   assert.equal(calls(ctx2, 'drawImage').length, 0);
 });
+test('drawClipVisual：模糊背景（fit＝blur）先畫蓋滿的小圖再畫本體，大小跟著 bgBlur', () => {
+  const made = [];
+  fx._setCanvasFactory((w, h) => { const cx = mockCtx(); const cv = { width: w, height: h, getContext: () => cx, cx }; made.push(cv); return cv; });
+  let r = fx.fitRect(1920, 1080, 1080, 1920, 'blur');
+  assert.deepEqual([+r.sx.toFixed(4), r.w], [0.5625, 1080]);          // 本體和 fit 一樣
+  const c = clipOf(); c.video.fit = 'blur';
+  const ctx = mockCtx();
+  fx.drawClipVisual(ctx, c, { tag: 'src' }, 1920, 1080, 1080, 1920, 0);
+  const bg = made[made.length - 1];
+  assert.deepEqual([bg.width, bg.height], [Math.round(1080 * 0.066) + 6, Math.round(1920 * 0.066) + 6]);   // 預設 50：k = 0.066，四周各多 3px
+  const di = calls(ctx, 'drawImage');
+  assert.equal(di.length, 2, '背景＋本體');
+  assert.equal(di[0][1], bg);
+  assert.deepEqual(di[0].slice(2), [3, 3, bg.width - 6, bg.height - 6, 0, 0, 1080, 1920]);   // 取中間、蓋滿輸出
+  assert.deepEqual(di[1][1], { tag: 'src' });
+  // 小圖用 cover：1920×1080 放進直式小圖，高度剛好、寬度超出
+  const sd = calls(bg.cx, 'drawImage')[0];
+  assert.ok(Math.abs(sd[9] - bg.height) < 1e-6 && sd[8] > bg.width);
+  // bgBlur 100 → 更小
+  c.video.bgBlur = 100; made.length = 0;
+  fx.drawClipVisual(mockCtx(), c, {}, 1920, 1080, 1080, 1920, 0);
+  assert.deepEqual([made[0].width, made[0].height], [Math.round(1080 * 0.012) + 6, Math.round(1920 * 0.012) + 6]);
+  // 一般 fit 不畫背景
+  const ctx3 = mockCtx(); const c3 = clipOf();
+  fx.drawClipVisual(ctx3, c3, {}, 1920, 1080, 1080, 1920, 0);
+  assert.equal(calls(ctx3, 'drawImage').length, 1);
+  // 不透明度 0：連背景都不畫
+  const ctx4 = mockCtx(); const c4 = clipOf({ opacity: 0 }); c4.video.fit = 'blur';
+  fx.drawClipVisual(ctx4, c4, {}, 1920, 1080, 1080, 1920, 0);
+  assert.equal(calls(ctx4, 'drawImage').length, 0);
+  assert.deepEqual(fx.FIT_OPTIONS.map(o => o[0]), ['fit', 'blur', 'fill', 'stretch']);
+});
 test('drawClipVisual：柔邊走離屏遮罩', () => {
   const made = [];
   fx._setCanvasFactory((w, h) => { const cx = mockCtx(); const cv = { width: w, height: h, getContext: () => cx, cx }; made.push(cv); return cv; });
