@@ -204,7 +204,7 @@ t('unregisterMediaInfo：有片段在用就不能移除', () => {
 t('setAspect：9:16／16:9／4:5／source（偶數化、長邊上限 3840）', () => {
   const p = setup();
   assert.deepStrictEqual([p.width, p.height], [1280, 720]);
-  for (const [a, w, h] of [['9:16', 1080, 1920], ['16:9', 1920, 1080], ['4:5', 1080, 1350]]) {
+  for (const [a, w, h] of [['9:16', 1080, 1920], ['16:9', 1920, 1080], ['4:5', 1080, 1350], ['1:1', 1080, 1080]]) {
     assert.ok(core.setAspect(p, a).ok);
     assert.deepStrictEqual([p.aspect, p.width, p.height], [a, w, h]);
   }
@@ -219,7 +219,7 @@ t('setAspect：9:16／16:9／4:5／source（偶數化、長邊上限 3840）', (
   const q = core.createProject();
   core.setAspect(q, 'source');
   assert.deepStrictEqual([q.width, q.height], [1920, 1080]);
-  unchanged(p, () => core.setAspect(p, '1:1'), /比例/);
+  unchanged(p, () => core.setAspect(p, '21:9'), /比例/);
   return [p, q];
 });
 
@@ -1652,4 +1652,46 @@ t('轉場預設顏色：閃光白、光漏暖橘、其他黑；改類型時只�
   // 新增其他類型：黑
   r = core.addTransition(p, { leftClipId: a[0], type: 'spin', direction: 'right' });
   assert.deepEqual([p.transitions[r.id].color, p.transitions[r.id].direction], ['#000000', 'right']);
+});
+
+t('比例轉換：aspectMismatch 找出會留黑邊的片段、setFitAll 一次改好（鎖定軌略過、可復原）', () => {
+  const p = setup();
+  const a = put(p, 'mv', 0, 0, 2);              // 1280×720 影片（含連結聲音）
+  const b = put(p, 'mn', 60, 0, 2);             // 720×1280 直式影片
+  const img = core.addClip(p, { type: 'media', mediaId: 'mi', trackId: V(p, 1), start: 0, duration: 30 });   // 800×600 圖片
+  assert.ok(img.ok, img.reason);
+  const ti = core.addClip(p, { type: 'title', trackId: V(p, 1), start: 40, duration: 30 });
+  assert.ok(ti.ok);
+  // 16:9 輸出：直式影片和 4:3 圖片不合
+  core.setAspect(p, '16:9');
+  let mm = core.aspectMismatch(p);
+  assert.deepStrictEqual(mm.ids.sort(), [b[0], img.id].sort());
+  // 9:16：橫式影片和圖片不合，直式影片剛好
+  core.setAspect(p, '9:16');
+  mm = core.aspectMismatch(p);
+  assert.deepStrictEqual(mm.ids.sort(), [a[0], img.id].sort());
+  // 已經不是 fit 的片段不算
+  assert.ok(core.setClipProps(p, img.id, { video: { fit: 'fill' } }).ok);
+  assert.deepStrictEqual(core.aspectMismatch(p).ids, [a[0]]);
+  // setFitAll：所有影片軌上的影片／圖片，字幕不動、聲音片段不動
+  const r = core.setFitAll(p, 'blur');
+  assert.ok(r.ok, r.reason);
+  assert.strictEqual(r.count, 3);
+  for (const id of [a[0], b[0], img.id]) assert.strictEqual(C(p, id).video.fit, 'blur');
+  assert.strictEqual(C(p, ti.id).video.fit, 'fit');
+  assert.strictEqual(core.aspectMismatch(p).count, 0);
+  // 鎖定軌略過
+  lock(p, V(p, 1));
+  assert.ok(core.setFitAll(p, 'fill').ok);
+  assert.strictEqual(C(p, a[0]).video.fit, 'fill');
+  assert.strictEqual(C(p, img.id).video.fit, 'blur');
+  // 不認得的模式、bgBlur 夾在 0~100
+  unchanged(p, () => core.setFitAll(p, 'zoom'), /縮放方式/);
+  assert.ok(core.setClipProps(p, a[0], { video: { fit: 'blur', bgBlur: 250 } }).ok);
+  assert.strictEqual(C(p, a[0]).video.bgBlur, 100);
+  unchanged(p, () => core.setClipProps(p, a[0], { video: { fit: 'cover' } }), /縮放方式/);
+  assert.deepStrictEqual(core.FIT_MODES, ['fit', 'blur', 'fill', 'stretch']);
+  // 沒有可套用的片段
+  const q = setup();
+  unchanged(q, () => core.setFitAll(q, 'blur'), /沒有可以套用/);
 });

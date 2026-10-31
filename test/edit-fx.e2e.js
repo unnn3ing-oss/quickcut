@@ -141,6 +141,30 @@ body{margin:0;padding:16px;font-family:system-ui,"Noto Sans TC",sans-serif;backg
   ok(g.cubeSingle[3] < 10, '單邊轉場：沒有 B 的一側是透明 ' + g.cubeSingle);
   ok(near(g.fallback, [128, 0, 128, 255], 4), '沒有 WebGL 時退回交叉疊化 ' + g.fallback);
 
+  // ---------- 模糊背景（3.30） ----------
+  console.log('模糊背景');
+  const bb = await page.evaluate(() => {
+    const fx = window.QPTEdit.fx;
+    const src = document.createElement('canvas'); src.width = 400; src.height = 200;
+    const s = src.getContext('2d');
+    s.fillStyle = '#e53935'; s.fillRect(0, 0, 200, 200); s.fillStyle = '#1e88e5'; s.fillRect(200, 0, 200, 200);
+    const W = 180, H = 320;
+    const run = (fit, extra = {}) => {
+      const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d');
+      const clip = { id: 'c', type: 'media', duration: 60, video: { transform: { ...fx.DEFAULT_TRANSFORM, ...(extra.tf || {}) }, crop: { ...fx.DEFAULT_CROP }, fit, ...(extra.v || {}) } };
+      fx.drawClipVisual(x, clip, src, 400, 200, W, H, 0);
+      return (px, py) => Array.from(x.getImageData(px, py, 1, 1).data);
+    };
+    const fit = run('fit'), blur = run('blur'), half = run('blur', { tf: { opacity: 0.5 } }), zoomed = run('blur', { tf: { zoomX: 0.5, zoomY: 0.5 } });
+    return { fitTop: fit(20, 20), blurTopL: blur(20, 20), blurTopR: blur(160, 20), blurMidL: blur(20, 160), blurMidR: blur(160, 160), halfTop: half(20, 20), zoomCorner: zoomed(20, 300) };
+  });
+  ok(bb.fitTop[3] === 0, '符合：上方是空白（透明） ' + bb.fitTop);
+  ok(bb.blurTopL[3] === 255 && bb.blurTopL[0] > bb.blurTopL[2] && bb.blurTopR[2] > bb.blurTopR[0], '模糊背景：上方補滿，左紅右藍延續畫面 ' + JSON.stringify([bb.blurTopL, bb.blurTopR]));
+  ok(bb.blurMidL[0] > 200 && bb.blurMidL[2] < 80 && bb.blurMidR[2] > 200, '模糊背景：中間仍是清楚的本體 ' + JSON.stringify([bb.blurMidL, bb.blurMidR]));
+  ok(bb.blurTopL[0] < 229, '背景有壓暗 ' + bb.blurTopL);
+  ok(Math.abs(bb.halfTop[3] - 128) <= 3, '背景跟著不透明度 ' + bb.halfTop);
+  ok(bb.zoomCorner[3] === 255, '背景不跟著縮放，縮小本體時四周仍蓋滿 ' + bb.zoomCorner);
+
   // ---------- 變形／裁切 ----------
   console.log('變形與裁切');
   const vis = await page.evaluate(() => {

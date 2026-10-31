@@ -32,7 +32,8 @@
   // 畫面數學
   // ---------------------------------------------------------------------------------
 
-  // 基準縮放：fit＝完整放進輸出（黑邊）、fill＝蓋滿（裁掉多的）、stretch＝各軸拉到剛好
+  // 基準縮放：fit＝完整放進輸出（黑邊）、blur＝和 fit 一樣（黑邊改由模糊背景補滿，見 drawClipVisual）、
+  //   fill＝蓋滿（裁掉多的）、stretch＝各軸拉到剛好
   // 回傳 { sx, sy, w, h }：sx／sy 是來源像素 → 輸出像素的倍率，w／h 是縮放後的大小
   function fitRect(srcW, srcH, outW, outH, fit) {
     srcW = Math.max(1, srcW); srcH = Math.max(1, srcH);
@@ -191,8 +192,40 @@
     ctx.restore();
   }
 
+  // 模糊背景（fit＝'blur'）：同一個畫面放大到蓋滿輸出、模糊、稍微壓暗，畫在片段本體下面。
+  //   不跟著片段的縮放／位置／旋轉／裁切走（背景永遠蓋滿整個畫面），只跟著不透明度。
+  //   模糊用「縮到很小再放大」：成本固定、不依賴 ctx.filter（舊版 Safari 沒有），支援 filter 時在小圖上再柔化一次去掉方塊感。
+  //   bgBlur 0~100（預設 50）：越大縮得越小、越糊。
+  const BG_BLUR_DEFAULT = 50;
+  function drawBlurBackground(ctx, clip, source, srcW, srcH, outW, outH, f) {
+    const op = clamp(num(getParam(clip, 'video.transform.opacity', f), 1), 0, 1);
+    if (op <= 0) return;
+    const amt = clamp(num(clip.video && clip.video.bgBlur, BG_BLUR_DEFAULT), 0, 100) / 100;
+    const k = (1 - amt) * 0.12 + amt * 0.012;              // 小圖佔輸出的比例：0.12（微糊）～0.012（很糊）
+    const sw = Math.max(4, Math.round(outW * k)), sh = Math.max(4, Math.round(outH * k));
+    // 四周多留 m 像素：柔化時邊緣會吃進畫布外的透明，取中間 sw×sh 貼回去，邊緣才不會半透明
+    const m = 3, pw = sw + 2 * m, ph = sh + 2 * m;
+    const s = scratch('bgBlur', pw, ph), c = s.ctx;
+    const cover = Math.max(pw / srcW, ph / srcH);
+    const dw = srcW * cover, dh = srcH * cover;
+    c.imageSmoothingQuality = 'high';
+    if ('filter' in c) c.filter = 'blur(1px)';
+    c.drawImage(source, 0, 0, srcW, srcH, (pw - dw) / 2, (ph - dh) / 2, dw, dh);
+    c.filter = 'none';
+    c.globalCompositeOperation = 'source-atop';          // 壓暗只作用在背景本身，不改 alpha
+    c.fillStyle = 'rgba(0,0,0,0.18)';
+    c.fillRect(0, 0, pw, ph);
+    c.globalCompositeOperation = 'source-over';
+    ctx.save();
+    ctx.globalAlpha *= op;
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(s.canvas, m, m, sw, sh, 0, 0, outW, outH);
+    ctx.restore();
+  }
+
   function drawClipVisual(ctx, clip, source, srcW, srcH, outW, outH, fInClip) {
     if (!source || !(srcW > 0) || !(srcH > 0)) return;
+    if (getParam(clip, 'video.fit', fInClip || 0) === 'blur') drawBlurBackground(ctx, clip, source, srcW, srcH, outW, outH, fInClip || 0);
     drawBox(ctx, clip, srcW, srcH, outW, outH, fInClip || 0, (c, r) => {
       c.drawImage(source, r.sx, r.sy, r.sw, r.sh, r.sx, r.sy, r.sw, r.sh);
     });
@@ -954,7 +987,7 @@
   // ---------------------------------------------------------------------------------
   const isTransition = s => !!s && s.leftClipId !== undefined;
   const trInfo = s => (s && TRANSITIONS[s.type]) || {};
-  const FIT_OPTIONS = [['fit', '符合（完整顯示）'], ['fill', '填滿（裁掉多的）'], ['stretch', '拉伸（變形）']];
+  const FIT_OPTIONS = [['fit', '符合（完整顯示）'], ['blur', '符合＋模糊背景'], ['fill', '填滿（裁掉多的）'], ['stretch', '拉伸（變形）']];
   const DIR_OPTIONS = [['left', '向左'], ['right', '向右'], ['up', '向上'], ['down', '向下']];
   const ALIGN_OPTIONS = [['left', '靠左'], ['center', '置中'], ['right', '靠右']];
 
@@ -1251,6 +1284,7 @@
           { type: 'check', label: '水平翻轉', get: c => !!tf(c, 'flipH'), patch: v => tfPatch({ flipH: v }) },
           { type: 'check', label: '垂直翻轉', get: c => !!tf(c, 'flipV'), patch: v => tfPatch({ flipV: v }) },
           { type: 'select', label: '畫面符合', options: FIT_OPTIONS, get: c => (c.video && c.video.fit) || 'fit', patch: v => ({ video: { fit: v } }) },
+          { type: 'num', label: '背景模糊', show: c => !!c.video && c.video.fit === 'blur', get: c => num(c.video && c.video.bgBlur, BG_BLUR_DEFAULT), def: BG_BLUR_DEFAULT, min: 0, max: 100, dpp: 0.5, dec: 0, unit: '%', slider: [0, 100], sliderStep: 1, patch: v => ({ video: { bgBlur: v } }) },
           { type: 'btn', label: '重設變形', patch: () => ({ video: { transform: defaultTransform(), fit: 'fit' } }) },
           { type: 'hint', label: '提示：縮放、位置可拖拉桿或直接輸入數值；也可以在預覽畫面上直接拖曳、拉角落縮放、拉上方圓點旋轉。在左側標籤上左右拖曳可微調（Shift 加速、Alt 微調），雙擊標籤或拉桿重設。' },
         ]);
@@ -1364,7 +1398,7 @@
 
   const api = {
     DEFAULT_TRANSFORM, DEFAULT_CROP, defaultTransform, defaultCrop, defaultVideo,
-    fitRect, clipMatrix, applyMatrix, cropRect, getParam,
+    fitRect, clipMatrix, applyMatrix, cropRect, getParam, FIT_OPTIONS, BG_BLUR_DEFAULT,
     drawClipVisual, drawSolid, drawTitle, titleBounds, clipQuad,
     TRANSITIONS, ease, TITLE_PRESETS, TITLE_STYLES, TEXT_FX, makeTitle, normTitle, parseAccent, buildAccent, parseSrt, formatSrt, fitCues, planSubtitleMark, wrapText, parseColor, formatColor,
     ready, get fontLoaded() { return defaultFontLoaded(); }, FONTS, loadFont, onFontLoad, fontIsLoaded,

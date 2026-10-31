@@ -1014,6 +1014,24 @@ async function runViewport(browser, base, fix, [W, H]) {
   eq(await page.evaluate(() => [document.getElementById('edCanvas').width, document.getElementById('edCanvas').height]), [720, 1280], '檢視器畫布跟著變成直式（預覽縮小到長邊 1280）');
   ok((await page.textContent('#edVDims')).includes('1080×1920'), '檢視器上方顯示輸出尺寸');
   await shot(page, `${tag}-6b-aspect-916`);
+  // 3.30 一鍵比例轉換：橫式素材放進 9:16 → 問要怎麼放
+  const mm = await proj(page, p => QPTEdit.core.aspectMismatch(p).count);
+  ok(mm > 0, '橫式素材放進 9:16：偵測到比例不合的片段 ' + mm);
+  ok(await page.isVisible('#edFitPop'), '換比例後跳出「要怎麼放進新的畫面」');
+  eq(await page.$$eval('#edFitPop .ed-fitopt', bs => bs.map(b => b.dataset.fit)), ['blur', 'fill', 'fit'], '三個選項：模糊背景／填滿裁切／保持黑邊');
+  await shot(page, `${tag}-6c-fit-pop`);
+  await page.click('#edFitPop .ed-fitopt[data-fit="blur"]');
+  await settle(page);
+  ok(!(await page.isVisible('#edFitPop')), '選了之後小視窗關閉');
+  const fits = await proj(page, p => Object.values(p.clips).filter(c => c.type === 'media' && c.video && p.mediaInfo[c.mediaId] && p.mediaInfo[c.mediaId].kind !== 'audio').map(c => c.video.fit));
+  ok(fits.length > 0 && fits.every(f => f === 'blur'), '所有影片／圖片片段改成模糊背景 ' + JSON.stringify(fits));
+  eq(await proj(page, p => QPTEdit.core.aspectMismatch(p).count), 0, '套用後沒有會留黑邊的片段');
+  ok((await page.textContent('#edUndoLab')).includes('畫面符合'), '整批只算一步復原（畫面符合）');
+  await shot(page, `${tag}-6d-fit-blur`);
+  await page.keyboard.press('Control+z');
+  await settle(page);
+  ok((await proj(page, p => Object.values(p.clips).filter(c => c.type === 'media' && c.video).map(c => c.video.fit))).every(f => f === 'fit'), '復原：回到原本的「符合」');
+  ok(await page.$eval('#edAspect', s => [...s.options].some(o => o.value === '1:1')), '輸出比例有 1:1 方形');
 
   // ---------------------------------------------------------------- 直式版面（有素材、播放中切換）
   console.log('直式版面：改成 9:16 後預設開啟、播放中切換不中斷');
