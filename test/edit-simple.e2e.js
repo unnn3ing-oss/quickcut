@@ -203,7 +203,7 @@ async function main() {
   ok((await page.textContent('#edInspHead')).startsWith('快速調整'), '標題是「快速調整」');
   eq(await page.evaluate(() => [...document.querySelectorAll('#edQuick .ed-qsec')].map(s => [s.id, [...s.querySelectorAll('.ed-qchip')].map(b => b.dataset.k)]).filter(x => x[1].length)),
     [['edQFit', ['blur', 'fill', 'fit']], ['edQMotion', ['none', 'zoomIn', 'zoomOut', 'panLeft', 'panRight']], ['edQTrans', ['none', 'crossDissolve', 'push', 'flash', 'zoom']],
-      ['edQSpeed', ['normal', 'slow', 'bullet', 'fast']], ['edQLook', ['none', 'warm', 'cool', 'mono']]], '各區段的選項');
+      ['edQSpeed', ['normal', 'slow', 'bullet', 'fast']], ['edQLook', ['none', 'warm', 'cool', 'mono', 'mist', 'film']]], '各區段的選項');
   await shot(page, 'S3-quick');
 
   // 畫面
