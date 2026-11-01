@@ -24,6 +24,8 @@
   const ASPECTS = { '9:16': [1080, 1920], '16:9': [1920, 1080], '4:5': [1080, 1350], '1:1': [1080, 1080] };
   // 片段放進輸出畫面的方式：fit＝完整（黑邊）、blur＝完整＋同一畫面的模糊放大當背景、fill＝填滿（裁切）、stretch＝拉伸
   const FIT_MODES = ['fit', 'blur', 'fill', 'stretch'];
+  // 濾鏡（video.look）：none＝原色、warm＝暖陽、cool＝冷調、mono＝黑白；video.lookAmt 0~100（強度，預設 100）
+  const LOOKS = ['none', 'warm', 'cool', 'mono'];
   // 可以打關鍵影格的參數 → [最小, 最大]（和 sanitize 的範圍一致）。f 是「片段內影格」（0 = 片段第一格），
   //   可以超出片段範圍（修剪、切開後留著，邊界附近的內插才不會變）。
   const KF_PATHS = {
@@ -1466,7 +1468,8 @@
       for (const g of group) {
         const k = q.clips[g];
         if (o.ripple) {
-          let nd = Math.max(1, Math.round(k.duration * k.speed / sp));
+          const src = o.srcFrames && o.srcFrames[g] != null ? o.srcFrames[g] : k.duration * k.speed;   // 來源用量（影格）
+          let nd = Math.max(1, Math.round(src / sp));
           const D = finiteDur(q, k);
           if (D != null && k.srcIn + nd * sp / q.fps > D + EPS) nd = Math.max(1, Math.floor((D - k.srcIn) * q.fps / sp + EPS));
           if (g === c.id) delta = nd - k.duration;
@@ -1517,6 +1520,16 @@
     }
     return pts.map(([u, v]) => [u, Math.exp(k * Math.log(v))]);
   }
+  // 曲線變速前的來源用量（影格）：長度四捨五入會吃掉零頭，記下原本的值，取消／換曲線時才回得去原長度。
+  // 片段長度變過（修剪、分割、改基準速度）就不準了，改用目前的長度×速度
+  function rtSrcFrames(p, group) {
+    const out = {};
+    for (const g of group) {
+      const k = p.clips[g];
+      out[g] = ramped(k) && isFinite(k.retime.src) && k.retime.len === k.duration ? k.retime.src : k.duration * k.speed;
+    }
+    return out;
+  }
   function rtGroup(p, c, linked) {
     return expandLinked(p, [c.id], linked !== false).filter(i => {
       const k = p.clips[i]; const km = mediaOf(p, k);
@@ -1544,10 +1557,11 @@
     const retime = { preset: o.points ? 'custom' : o.preset, strength: clamp(o.strength == null ? 1 : Number(o.strength), 0, 1), base,
       points: curve.map(([u, v]) => ({ u: r9(u), s: r9(v / mean) })) };
     const r = tx(p, q => {
+      const src = rtSrcFrames(q, group);
       for (const g of group) q.clips[g].retime = null;            // 先拿掉舊曲線，讓 setSpeed 用一般的方式算長度
-      const sr = setSpeed(q, c.id, { speed: base * mean, ripple: o.ripple, linked: o.linked });
+      const sr = setSpeed(q, c.id, { speed: base * mean, ripple: o.ripple, linked: o.linked, srcFrames: src });
       if (!sr.ok) return sr;
-      for (const g of group) q.clips[g].retime = copy(retime);
+      for (const g of group) { const k = q.clips[g]; k.retime = Object.assign(copy(retime), { src: src[g], len: k.duration }); }
       return { duration: q.clips[c.id].duration, mean: r9(mean) };
     });
     if (!r.ok && /來源媒體的長度不夠/.test(r.reason)) r.reason = '來源媒體的長度不夠，可以勾選「波紋」讓片段長度跟著變';
@@ -1560,8 +1574,9 @@
     const group = rtGroup(p, c, o.linked);
     const base = c.retime.base;
     return tx(p, q => {
+      const src = rtSrcFrames(q, group);
       for (const g of group) q.clips[g].retime = null;
-      const sr = setSpeed(q, c.id, { speed: base, ripple: o.ripple, linked: o.linked });
+      const sr = setSpeed(q, c.id, { speed: base, ripple: o.ripple, linked: o.linked, srcFrames: src });
       return sr.ok ? { duration: q.clips[c.id].duration } : sr;
     });
   });
@@ -1673,6 +1688,8 @@
       if (cr.top + cr.bottom > 0.99) cr.bottom = Math.max(0, 0.99 - cr.top);
       if (!FIT_MODES.includes(c.video.fit)) bail('縮放方式只能是符合、模糊背景、填滿或延展');
       num(c.video, 'bgBlur', 0, 100);
+      if (c.video.look != null && !LOOKS.includes(c.video.look)) bail('濾鏡只能是原色、暖陽、冷調或黑白');
+      num(c.video, 'lookAmt', 0, 100);
     }
     if (c.audio) {
       const a = c.audio;
@@ -1986,7 +2003,7 @@
 
   const api = {
     // 常數、預設值
-    FPS_CHOICES, ASPECTS, FIT_MODES, MARKER_COLORS, TRANSITION_TYPES, TRANSITION_COLORS, transitionColor, EDIT_MODES, IMAGE_DEFAULT_SEC, DEFAULT_FREEZE_SEC, SPEED_MIN, SPEED_MAX,
+    FPS_CHOICES, ASPECTS, FIT_MODES, LOOKS, MARKER_COLORS, TRANSITION_TYPES, TRANSITION_COLORS, transitionColor, EDIT_MODES, IMAGE_DEFAULT_SEC, DEFAULT_FREEZE_SEC, SPEED_MIN, SPEED_MAX,
     defaultVideo, defaultAudio, defaultTitle, defaultTransform, defaultEq, snapFps,
     // 專案、軌道、媒體
     createProject, clone, serialize, deserialize,

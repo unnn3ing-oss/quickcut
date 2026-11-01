@@ -222,7 +222,9 @@
     tl.edgeTc = el('div', 'ed-edgetc'); tl.edgeTc.hidden = true;
     ov.append(tl.playhead, tl.snapLine, tl.bladeLine, tl.dropLine, tl.marquee, tl.edgeTc);
     if (!Object.keys(p.clips).length) {
-      const hint = el('div', 'ed-tl-empty', '時間軸是空的：把媒體庫的素材拖到這裡，或選好素材後按「加到結尾」（F12）。');
+      const hint = el('div', 'ed-tl-empty');
+      hint.append(el('span', 'ed-pro-only', '時間軸是空的：把媒體庫的素材拖到這裡，或選好素材後按「加到結尾」（F12）。'),
+        el('span', 'ed-simple-only', '時間軸是空的：按上面的「加素材」或把檔案拖進來，會自動依序排好。'));
       ov.appendChild(hint);
     }
     inner.appendChild(ov);
@@ -240,7 +242,7 @@
     const th = el('div', 'ed-th ' + t.kind); th.dataset.track = t.id; th.style.height = h + 'px';
     const isTarget = targetTrack(t.kind) && targetTrack(t.kind).id === t.id;
     if (isTarget) th.classList.add('target');
-    const nm = el('button', 'ed-th-name', t.name); nm.type = 'button';
+    const nm = el('button', 'ed-th-name', UI.trackLabel ? UI.trackLabel(t) : t.name); nm.type = 'button';
     nm.title = `${t.name}：點一下選取這條軌的所有片段並設為目的軌道（插入／覆蓋會放到這條）；Shift／${MOD.replace('+', '')}＋點一下加選；雙擊改名；右鍵更多`;
     nm.addEventListener('dblclick', () => renameTrack(t.id, nm));
     const btns = el('div', 'ed-th-btns');

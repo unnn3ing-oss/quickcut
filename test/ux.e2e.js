@@ -51,7 +51,7 @@ async function shot(page, name) { if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: 
 
 async function main() {
   const { server, base } = await serve();
-  const browser = await chromium.launch({ executablePath: EXE });
+  const browser = require('./e2e-pro.js')(await chromium.launch({ executablePath: EXE }));
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const problems = [];
   page.on('pageerror', e => problems.push('pageerror: ' + e.message));

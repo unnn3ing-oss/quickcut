@@ -120,6 +120,7 @@
     // fx 的詳細內容樣式（.ed-fx-*）：音訊／速度區段也用同一套外觀，啟動時就插入
     if (typeof F.ensureStyle === 'function') F.ensureStyle();
     buildMediaPanel(); buildViewer(); buildToolbar(); buildTimeline(); buildInspector();
+    UI.initSimple();                     // 簡易／專業切換、大按鈕工具列、開始畫面（edit-ui-simple.js）
     wireFileDrop(); wireSplitter(); wireColSplitters();
     readColors(); syncThemeBtn();
     const tbtn = $('edThemeBtn');
@@ -158,7 +159,7 @@
   Object.assign(Q.ui, {
     init, importFiles, importSrt, exportSrt, markSubtitle, doEdit, selectClips, selectTrack, applyTitleStyle, applyTextFx, selectTransition, seekTimeline, setTool, undo, redo, openSource, setMode, addTitle, addTransitionAt, addTransitionToSelection,
     setZoom, zoomFit, renderNow, bladeAtPlayhead, deleteSelection, markIn, markOut, clearInOut, addMarkerHere, toggleLink, toggleSnap, ensureMediaInfo,
-    openSpeedPop, openFreezePop, tl, tc, setTheme: t => applyTheme(t, true),
+    openSpeedPop, openFreezePop, tl, tc, setTheme: t => applyTheme(t, true), setUiMode: m => UI.setUiMode(m),
     replaceProject, mediaChanged, hasContent, renderMedia, showMsgs,
     markSaved: () => { state.dirty = false; },
   });

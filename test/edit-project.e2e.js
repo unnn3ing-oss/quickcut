@@ -103,7 +103,7 @@ async function exportTry(page) {
 async function main() {
   const fix = fixturesDir();
   const { server, base } = await serve();
-  const browser = await chromium.launch({ executablePath: EXE });
+  const browser = require('./e2e-pro.js')(await chromium.launch({ executablePath: EXE }));
   const problems = [];
   let saved = null;
 

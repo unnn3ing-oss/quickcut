@@ -307,6 +307,7 @@
     else if (errors.length) say(errors[0].message, 'error'); else say('');
     renderMedia();
     UI.syncAspect();
+    if (UI.placeImported) UI.placeImported(added);     // 簡易模式：自動排到時間軸
     if (UI.player) UI.player.refresh();
     UI.scheduleRender();
     return added;

@@ -1903,6 +1903,19 @@ t('setRetime 波紋：來源用量不變、片段變長；畫面單調前進、�
   return synced(p);
 });
 
+t('曲線變速來回切換（波紋）長度回得去：不因四捨五入少一格', () => {
+  const p = setup();
+  const [v] = put(p, 'mv', 0, 0, 6);
+  const d0 = C(p, v).duration;
+  for (const pre of Object.keys(core.RETIME_PRESETS)) {
+    assert.ok(core.setRetime(p, v, { preset: pre, ripple: true }).ok, pre);
+    assert.ok(core.setRetime(p, v, { preset: 'bullet', ripple: true }).ok, pre + '→bullet');
+    assert.ok(core.clearRetime(p, v, { ripple: true }).ok);
+    assert.strictEqual(C(p, v).duration, d0, `${pre}→bullet→正常：長度回到 ${d0}`);
+  }
+  return synced(p);
+});
+
 t('setRetime 非波紋：長度不變；媒體不夠時失敗不改；倒播、定格、圖片不能用', () => {
   const p = setup();
   const [v] = put(p, 'mv', 0, 0, 2);
@@ -1964,4 +1977,16 @@ t('曲線變速＋切開、修剪：每一格看到的畫面不變', () => {
   assert.ok(core.trimEdge(p, ids[0], 'end', -4).ok);
   frames(p, ids[0], start, cut - 4).forEach((x, i) => assert.ok(Math.abs(x - before[i]) < 1e-6, `左半第 ${i} 格`));
   return synced(p);
+});
+
+t('濾鏡（video.look）：四種、強度夾在 0~100、不認得的拒絕不改', () => {
+  const p = setup();
+  const [v] = put(p, 'mv', 0, 0, 2);
+  assert.deepStrictEqual(core.LOOKS, ['none', 'warm', 'cool', 'mono']);
+  assert.ok(core.setClipProps(p, v, { video: { look: 'warm', lookAmt: 250 } }).ok);
+  assert.deepStrictEqual([C(p, v).video.look, C(p, v).video.lookAmt], ['warm', 100]);
+  unchanged(p, () => core.setClipProps(p, v, { video: { look: 'sepia' } }), /濾鏡/);
+  const q = core.deserialize(core.serialize(p));
+  assert.strictEqual(q.clips[v].video.look, 'warm', '存檔來回保留');
+  return p;
 });

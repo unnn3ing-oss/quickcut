@@ -212,8 +212,36 @@
     ctx.restore();
   }
 
+  // 濾鏡（video.look）：先把來源畫到離屏，用混合模式調色，再當成來源畫（模糊背景也用調過的）。
+  //   不依賴 ctx.filter（舊版 Safari 沒有）；混合模式（soft-light、saturation）各家瀏覽器都支援。
+  //   調色會把透明的地方也塗上顏色，最後用原圖 destination-in 把 alpha 還原（PNG 去背圖才不會多出色塊）。
+  const LOOKS = {
+    none: null,
+    warm: { op: 'soft-light', color: 'rgb(255,150,60)', a: 0.55 },
+    cool: { op: 'soft-light', color: 'rgb(60,140,255)', a: 0.5 },
+    mono: { op: 'saturation', color: 'rgb(128,128,128)', a: 1 },
+  };
+  function lookSource(clip, source, srcW, srcH) {
+    const v = clip && clip.video, lk = v && LOOKS[v.look];
+    if (!lk) return source;
+    const amt = clamp(num(v.lookAmt, 100), 0, 100) / 100;
+    if (!(amt > 0)) return source;
+    const s = scratch('look', srcW, srcH), c = s.ctx;
+    c.drawImage(source, 0, 0, srcW, srcH);
+    c.globalCompositeOperation = lk.op;
+    c.globalAlpha = lk.a * amt;
+    c.fillStyle = lk.color;
+    c.fillRect(0, 0, srcW, srcH);
+    c.globalAlpha = 1;
+    c.globalCompositeOperation = 'destination-in';
+    c.drawImage(source, 0, 0, srcW, srcH);
+    c.globalCompositeOperation = 'source-over';
+    return s.canvas;
+  }
+
   function drawClipVisual(ctx, clip, source, srcW, srcH, outW, outH, fInClip) {
     if (!source || !(srcW > 0) || !(srcH > 0)) return;
+    source = lookSource(clip, source, srcW, srcH);
     if (getParam(clip, 'video.fit', fInClip || 0) === 'blur') drawBlurBackground(ctx, clip, source, srcW, srcH, outW, outH, fInClip || 0);
     drawBox(ctx, clip, srcW, srcH, outW, outH, fInClip || 0, (c, r) => {
       c.drawImage(source, r.sx, r.sy, r.sw, r.sh, r.sx, r.sy, r.sw, r.sh);
@@ -977,6 +1005,7 @@
   const isTransition = s => !!s && s.leftClipId !== undefined;
   const trInfo = s => (s && TRANSITIONS[s.type]) || {};
   const FIT_OPTIONS = [['fit', '符合（完整顯示）'], ['blur', '符合＋模糊背景'], ['fill', '填滿（裁掉多的）'], ['stretch', '拉伸（變形）']];
+  const LOOK_OPTIONS = [['none', '原色'], ['warm', '暖陽'], ['cool', '冷調'], ['mono', '黑白']];
   const DIR_OPTIONS = [['left', '向左'], ['right', '向右'], ['up', '向上'], ['down', '向下']];
   const ALIGN_OPTIONS = [['left', '靠左'], ['center', '置中'], ['right', '靠右']];
 
@@ -1355,6 +1384,8 @@
           { type: 'check', label: '垂直翻轉', get: (c, x) => !!tf(c, 'flipV', x), patch: v => tfPatch({ flipV: v }) },
           { type: 'select', label: '畫面符合', options: FIT_OPTIONS, get: c => (c.video && c.video.fit) || 'fit', patch: v => ({ video: { fit: v } }) },
           { type: 'num', label: '背景模糊', show: c => !!c.video && c.video.fit === 'blur', get: c => num(c.video && c.video.bgBlur, BG_BLUR_DEFAULT), def: BG_BLUR_DEFAULT, min: 0, max: 100, dpp: 0.5, dec: 0, unit: '%', slider: [0, 100], sliderStep: 1, patch: v => ({ video: { bgBlur: v } }) },
+          { type: 'select', label: '濾鏡', show: c => c.type === 'media', options: LOOK_OPTIONS, get: c => (c.video && c.video.look) || 'none', patch: v => ({ video: { look: v } }) },
+          { type: 'num', label: '濾鏡強度', show: c => c.type === 'media' && !!c.video && !!c.video.look && c.video.look !== 'none', get: c => num(c.video && c.video.lookAmt, 100), def: 100, min: 0, max: 100, dpp: 0.5, dec: 0, unit: '%', slider: [0, 100], sliderStep: 1, patch: v => ({ video: { lookAmt: v } }) },
           { type: 'btn', label: '重設變形', kfReset: 'video.transform.', patch: () => ({ video: { transform: defaultTransform(), fit: 'fit' } }) },
           { type: 'hint', label: '提示：按數值右邊的 ◇ 就能做動畫：移動播放頭、改數值，會自動在播放頭加關鍵影格。縮放、位置可拖拉桿或直接輸入數值；也可以在預覽畫面上直接拖曳、拉角落縮放、拉上方圓點旋轉。在左側標籤上左右拖曳可微調（Shift 加速、Alt 微調），雙擊標籤或拉桿重設。' },
         ], ctx);
@@ -1469,7 +1500,7 @@
   const api = {
     DEFAULT_TRANSFORM, DEFAULT_CROP, defaultTransform, defaultCrop, defaultVideo,
     fitRect, clipMatrix, applyMatrix, cropRect, getParam, FIT_OPTIONS, BG_BLUR_DEFAULT,
-    drawClipVisual, drawSolid, drawTitle, titleBounds, clipQuad,
+    drawClipVisual, drawSolid, drawTitle, titleBounds, clipQuad, LOOKS, LOOK_OPTIONS,
     TRANSITIONS, ease, TITLE_PRESETS, TITLE_STYLES, TEXT_FX, makeTitle, normTitle, parseAccent, buildAccent, parseSrt, formatSrt, fitCues, planSubtitleMark, wrapText, parseColor, formatColor,
     ready, get fontLoaded() { return defaultFontLoaded(); }, FONTS, loadFont, onFontLoad, fontIsLoaded,
     inspector: { sections: SECTIONS },

@@ -19,7 +19,7 @@ const ok = (cond, msg) => { if (!cond) { failed++; console.log('  FAIL', msg); }
 body{margin:0;padding:16px;font-family:system-ui,"Noto Sans TC",sans-serif;background:var(--bg);color:var(--text)}
 #insp{width:300px;padding:12px;background:#fff;border:1px solid var(--border);border-radius:12px}
 </style><body><div id="insp"></div>`);
-  const browser = await chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {});
+  const browser = require('./e2e-pro.js')(await chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {}));
   const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
   const errors = [];
   page.on('pageerror', e => errors.push(String(e)));
