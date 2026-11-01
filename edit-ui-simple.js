@@ -352,11 +352,18 @@
     if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) < 1e-6;
     return a === b;
   }
-  // 目前的樣式＝第一個 patch 完全符合的；都不符合（在專業模式改過顏色之類）＝null，不標選取
+  // 目前的樣式＝patch 完全符合的；好幾個都符合時取欄位最多的（某個樣式的 patch 可能只是另一個的一部分）；
+  // 都不符合（在專業模式改過顏色之類）＝null，不標選取
+  const leafCount = o => (o && typeof o === 'object' ? Object.values(o).reduce((n, v) => n + leafCount(v), 0) : 1);
   function styleOf(c) {
     const t = F.normTitle(c.title);
-    for (const [k, st] of Object.entries(F.TITLE_STYLES || {})) if (st && st.patch && sameVal(st.patch, t)) return k;
-    return null;
+    let best = null, bestN = -1;
+    for (const [k, st] of Object.entries(F.TITLE_STYLES || {})) {
+      if (!st || !st.patch || !sameVal(st.patch, t)) continue;
+      const n = leafCount(st.patch);
+      if (n > bestN) { best = k; bestN = n; }
+    }
+    return best;
   }
 
   // 樣式縮圖：每個樣式只真的畫一次（用 fx 畫，和成品一致），重畫面板時複製過去；字型載入後清掉重畫

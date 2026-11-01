@@ -558,6 +558,14 @@ async function main() {
   eq(await page.inputValue('#edQTextIn'), '輸入字幕', '文字框跟著復原');
   await page.click('#edSRedo'); await settle(page);
   eq(await page.inputValue('#edQTextIn'), '笑到*肚子*痛', '重做：文字框也更新');
+  // 打完字直接點時間軸上的別的片段（沒有先失焦）：文字也要寫回
+  await page.click('#edQTextIn'); await page.keyboard.press('End'); await page.keyboard.type('！');
+  await page.click(`.ed-clip[data-clip="${landE.id}"]`); await settle(page);
+  eq((await ttl(t1)).text, '笑到*肚子*痛！', '打完字直接點別的片段：文字也寫回');
+  ok(await page.$('#edQFit'), '換成影片的快速調整');
+  await page.click('#edSUndo'); await settle(page);
+  await page.evaluate(id => window.QPTEdit.ui.selectClips([id]), t1); await settle(page);
+  eq(await page.inputValue('#edQTextIn'), '笑到*肚子*痛', '復原後再選字幕：文字框是復原後的文字');
   await page.evaluate(() => window.QPTEdit.ui.seekTimeline(45)); await settle(page);   // 進場動畫跑完的畫面
   await shot(page, 's430-quick');
 
