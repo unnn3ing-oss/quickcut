@@ -682,6 +682,20 @@ html[data-ed-theme="dark"] .ed-uimode { background: rgba(255, 255, 255, 0.08); }
 .ed-qchip:hover, .ed-qchip:focus-visible { border-color: var(--ed-accent); }
 .ed-qchip.on { border-color: var(--ed-accent); box-shadow: 0 0 0 1px var(--ed-accent); background: var(--ed-tint); font-weight: 700; }
 .ed-qsec input[type=range] { width: 100%; accent-color: var(--ed-accent); }
+/* 快速調整：字幕（4.30）—文字框、樣式縮圖 */
+.ed-qtext {
+  display: block; width: 100%; box-sizing: border-box; min-height: 44px; max-height: 160px; resize: vertical; padding: 8px 10px; border-radius: 10px;
+  border: 1px solid var(--ed-border); background: var(--ed-field); color: var(--ed-text); font: inherit; font-size: 14px; line-height: 1.45;
+}
+.ed-qtext:focus { outline: none; border-color: var(--ed-accent); box-shadow: 0 0 0 1px var(--ed-accent); }
+.ed-qstyles { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); }
+.ed-qtabs { display: flex; gap: 4px; margin: 0 0 8px; padding: 3px; border-radius: 10px; background: var(--ed-tint); }
+.ed-qtab { flex: 1; min-width: 0; padding: 5px 6px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 12.5px; cursor: pointer; }
+.ed-qtab.on { background: var(--ed-accent); color: #fff; font-weight: 700; }
+.ed-qtab:focus-visible { outline: 2px solid var(--ed-accent); outline-offset: 1px; }
+.ed-qthumb { display: flex; flex-direction: column; align-items: stretch; gap: 4px; min-width: 0; padding: 4px 4px 5px; }
+.ed-qthumb canvas { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 6px; }
+.ed-qthumb span { font-size: 11.5px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ed-qpro { font-size: 12px; line-height: 1.55; color: var(--ed-muted); border-top: 1px solid var(--ed-line); padding-top: 10px; }
 .ed-linkbtn { border: none; background: none; padding: 0 2px; min-height: 24px; color: var(--ed-accent); font: inherit; font-weight: 700; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 

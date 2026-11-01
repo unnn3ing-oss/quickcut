@@ -138,6 +138,8 @@
       for (const k of Object.keys(base)) if (c[k] === undefined) c[k] = base[k];
       if (c.video === undefined) c.video = t && t.kind === 'video' ? defaultVideo() : null;
       if (c.audio === undefined) c.audio = t && t.kind === 'audio' ? defaultAudio() : null;
+      // 4.30 的「波浪」是進場特效，4.40 起是持續特效（畫面一樣）：讀檔時換過去，詳細內容和簡易面板才會顯示在對的地方
+      if (c.title && c.title.textFx === 'wave') { c.title.textFx = 'none'; if (!c.title.textLoop || c.title.textLoop === 'none') c.title.textLoop = 'wave'; }
     }
     // 轉場：舊存檔只有「leftClipId＋rightClipId（可能是 null）」；缺的欄位補預設值
     for (const [id, tr] of Object.entries(p.transitions)) {

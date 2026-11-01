@@ -145,6 +145,7 @@
     const xl = $('edTextFxList'), sl = $('edTStyleList');
     xl.textContent = ''; sl.textContent = '';
     for (const [kind, def] of Object.entries(F.TEXT_FX || {})) {
+      if (def.hidden) continue;   // 只留給舊專案讀的 key（4.30 的波浪進場）
       const it = el('div', 'ed-gitem'); it.dataset.textfx = kind; it.tabIndex = 0; it.title = `${def.name}：拖到時間軸的字幕片段，或選取字幕後按「套用到選取的字幕」（滑鼠移上來會播放）`;
       const cv = el('canvas'); cv.width = 192; cv.height = 108;
       it.append(cv, el('span', 'ed-gname', def.name));
@@ -189,7 +190,7 @@
   // 字體特效縮圖：f＝null 時畫動畫進行到一半的樣子（看得出效果），播放時逐格畫
   function paintTextFxThumb(cv, kind, f) {
     const t = Object.assign(F.makeTitle('static', '字體特效'), { size: 260, textFx: kind, textFxDur: 0.5, stroke: { color: '#1b2233', width: 6 } });
-    paintSampleTitle(cv, t, f == null ? (F.TEXT_FX[kind] && F.TEXT_FX[kind].char ? 9 : 7) : f);
+    paintSampleTitle(cv, t, f == null ? (F.TEXT_FX[kind] && (F.TEXT_FX[kind].thumbF || (F.TEXT_FX[kind].char ? 9 : 7))) : f);
   }
   function paintStyleThumb(cv, key) {
     const st = F.TITLE_STYLES[key];

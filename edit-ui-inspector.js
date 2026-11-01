@@ -510,7 +510,7 @@
     for (const s of [insp.info, insp.audio, insp.speed, insp.subs, ...insp.fxSecs.map(f => f.ui)]) s.el.classList.remove('solo');
     insp.tabs.hidden = true;
     $('edInspHead').textContent = '詳細內容';
-    if (UI.renderQuick && UI.renderQuick(insp)) return;     // 簡易模式：影片／圖片／音訊片段改顯示「快速調整」
+    if (UI.renderQuick && UI.renderQuick(insp)) return;     // 簡易模式：影片／圖片／音訊片段、字幕片段改顯示「快速調整」
     if (tr) {
       const f = insp.fxSecs.find(x => x.def.appliesTo(tr));
       if (f) { show(f.ui, true); f.def.render(f.ui.body, tr, commitTransition); }

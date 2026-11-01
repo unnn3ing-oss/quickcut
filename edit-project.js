@@ -16,7 +16,7 @@
   'use strict';
 
   const FORMAT = 'quickcut-project', FORMAT_VERSION = 1, EXT = '.qcut';
-  const APP_VERSION = '4.30';            // 跟 changelog.json 最新版一致（test/edit-project.test.js 會檢查）
+  const APP_VERSION = '4.40';            // 跟 changelog.json 最新版一致（test/edit-project.test.js 會檢查）
 
   // ---- 純函式 ------------------------------------------------------------------------
   const lc = s => String(s || '').toLowerCase();

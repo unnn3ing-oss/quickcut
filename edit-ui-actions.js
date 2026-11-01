@@ -548,7 +548,7 @@
     if (r && r.ok) {
       selectClips([r.id]);
       UI.afterRender(() => UI.revealFrame(r.start, r.end));
-      say('已新增字幕：在右側詳細內容改文字與樣式', 'ok');
+      say('已新增字幕：在右側改文字與樣式', 'ok');
     }
     return r;
   }
@@ -670,6 +670,10 @@
     const st = F.TITLE_STYLES && F.TITLE_STYLES[key];
     if (!st) return null;
     return applyTitlePatch('字幕樣式', JSON.parse(JSON.stringify(st.patch)), ids, `已套用字幕樣式「${st.name}」`);
+  }
+  // 一般的字幕欄位修改（簡易模式的快速調整：位置、大小、持續／出場特效）：一筆復原、重畫預覽
+  function applyTitleProps(label, patch, ids, okMsg) {
+    return applyTitlePatch(label, JSON.parse(JSON.stringify(patch)), ids, okMsg);
   }
   function applyTextFx(kind, ids) {
     const d = F.TEXT_FX && F.TEXT_FX[kind];
@@ -872,7 +876,7 @@
 
   Object.assign(UI, {
     MOD, TRANS_SIDE_TEXT, addMarkerHere, openBeatPop, addTitle, addTransitionAt, addTransitionToSelection, applyTextFx,
-    applyTitleStyle, bladeAtPlayhead, buildToolbar, clearInOut, clickSelect, closeGaps, deleteSelection, doEdit, exportSrt,
+    applyTitleProps, applyTitleStyle, bladeAtPlayhead, buildToolbar, clearInOut, clickSelect, closeGaps, deleteSelection, doEdit, exportSrt,
     flushPop, importSrt, isSrtFile, linkSelection, markClipRange, markIn, markOut, markSubtitle, onKeyDown, onKeyUp,
     op, openFlagPop, openFreezePop, openMarkerPop, openSpeedPop, redo, sanitizeSelection, selectClips,
     selectTransition, setTool, subClips, toggleLink, toggleSnap, undo, updateSubMark, updateToolbar,

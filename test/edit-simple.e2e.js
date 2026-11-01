@@ -1,6 +1,6 @@
 // =====================================================================================
 // 簡易模式（4.00）的瀏覽器流程測試：預設介面、開始畫面、三步教學、匯入自動排到時間軸、
-// 快速調整（畫面／動態／轉場／速度／音量／濾鏡）、大按鈕工具列、簡易／專業切換、白話軌道名稱。
+// 快速調整（畫面／動態／轉場／速度／音量／濾鏡；字幕的文字／樣式／特效／位置／大小）、大按鈕工具列、簡易／專業切換、白話軌道名稱。
 //
 // 執行：node test/edit-simple.e2e.js
 //   （不叫 *.test.js：需要 Chromium，不讓 node --test 去跑它）
@@ -367,7 +367,7 @@ async function main() {
   const titles = await proj(page, p => Object.values(p.clips).filter(c => c.type === 'title').map(c => ({ id: c.id, s: c.start, t: p.tracks.find(t => t.id === c.trackId).name })));
   eq(titles.map(t => [t.s, t.t]), [[15, 'V2']], '加字幕：在播放頭加一段字幕（V1 有東西 → 新增 V2）');
   eq(await selNow(), titles.map(t => t.id), '新字幕被選取');
-  ok(!(await quickState(page)).shown && !(await page.evaluate(() => document.querySelector('.ed-insp-body').hidden)), '選到字幕：不顯示快速調整，改顯示詳細內容');
+  ok((await quickState(page)).shown && await page.isVisible('#edQStyle') && await page.evaluate(() => document.querySelector('.ed-insp-body').hidden), '選到字幕：顯示字幕的快速調整（細節見「字幕的快速調整」）');
   ok((await thNames()).some(([n, l]) => n === 'V2' && l === '畫中畫'), '簡易模式 V2 顯示「畫中畫」');
   await page.click('#edSUndo'); await settle(page);
   eq(await proj(page, p => Object.values(p.clips).filter(c => c.type === 'title').length), 0, '復原：字幕移除');
@@ -473,6 +473,154 @@ async function main() {
   eq(Object.keys((await quickState(page)).secs), ['edQSpeed', 'edQVol'], '音樂片段的快速調整：速度、音量');
   await cspOf(page, problems, 'Esc');
   await D.ctx.close();
+
+  // ---------------------------------------------------------------- 字幕的快速調整（4.30）
+  // 選項從 fx 的註冊表讀（之後加的樣式、特效會自動出現），所以這裡不寫死清單
+  console.log('字幕的快速調整');
+  const E = await fresh(browser, base, problems, '字幕');
+  page = E.page;
+  await page.keyboard.press('Escape'); await settle(page);                    // 直式 9:16
+  if (await page.$('#edTip')) { await page.click('#edTip .ed-linkbtn'); await settle(page); }
+  await page.setInputFiles('#edFile', [path.join(fix, FILES.land)]);
+  await page.waitForFunction(() => Object.keys(window.QPTEdit.ui.state.project.clips).length >= 1, null, { timeout: 60000 });
+  await settle(page);
+  const landE = (await byTrack(page)).V1[0];
+  await page.evaluate(() => window.QPTEdit.ui.seekTimeline(0)); await settle(page);
+  await page.click('#edSText'); await settle(page);
+  const t1 = (await proj(page, p => Object.values(p.clips).filter(c => c.type === 'title').map(c => c.id)))[0];
+  const ttl = id => proj(page, (p, Q, id) => p.clips[id].title, id);
+  const REG = await page.evaluate(() => { const F = window.QPTEdit.fx; return { st: Object.keys(F.TITLE_STYLES), fx: Object.keys(F.TEXT_FX).filter(k => !F.TEXT_FX[k].hidden), loop: Object.keys(F.TEXT_LOOP), out: Object.keys(F.TEXT_OUT), lib: window.QPTEdit.uiParts.lib.tstyle }; });
+  // patch 的每個欄位都和字幕一樣（物件只比 patch 有的子欄位）
+  const styleApplied = (id, k) => proj(page, (p, Q, [id, k]) => {
+    const sub = (a, b) => Array.isArray(a) ? a.every((x, i) => sub(x, b[i])) : a && typeof a === 'object' ? !!b && Object.keys(a).every(j => sub(a[j], b[j])) : String(a).toLowerCase() === String(b).toLowerCase();
+    return sub(Q.fx.TITLE_STYLES[k].patch, Q.fx.normTitle(p.clips[id].title));
+  }, [id, k]);
+  q = await quickState(page);
+  ok(q.shown, '選取字幕：顯示快速調整');
+  ok(await page.evaluate(() => document.querySelector('.ed-insp-body').hidden), '詳細內容藏起來');
+  ok((await page.textContent('#edInspHead')).startsWith('快速調整'), '標題是「快速調整」');
+  const wantSecs = ['edQText', 'edQStyle', 'edQIn', ...(REG.loop.length > 1 ? ['edQLoop'] : []), ...(REG.out.length > 1 ? ['edQOut'] : []), 'edQPos', 'edQSize'];
+  eq(Object.keys(q.secs), wantSecs, `字幕的區段：${wantSecs.join('、')}（持續／出場的註冊表只有「無」時不顯示）`);
+  const chipKeys = sec => page.evaluate(sec => [...document.querySelectorAll(`#${sec} .ed-qchip`)].map(b => b.dataset.k), sec);
+  eq(await chipKeys('edQStyle'), REG.st, '樣式選項＝TITLE_STYLES 的全部 key（依序）');
+  eq(await chipKeys('edQIn'), REG.fx, '進場選項＝TEXT_FX 的全部 key（hidden 的舊 key 不列）');
+  eq(await page.evaluate(() => [...document.querySelectorAll('#edQStyle .ed-qchip')].every(b => b.querySelector('canvas') && b.textContent.trim())), true, '每個樣式都有縮圖和名稱');
+  eq(await chipKeys('edQPos'), ['top', 'mid', 'bottom'], '位置：上方／中間／下方');
+  eq(await chipKeys('edQSize'), ['s', 'm', 'l'], '大小：小／中／大');
+  eq([q.secs.edQStyle, q.secs.edQIn, q.secs.edQPos, q.secs.edQSize], [REG.lib, 'none', 'mid', 'm'], `目前值：樣式「${REG.lib}」、進場無、中間、中`);
+  ok(q.aria, '.on 與 aria-checked 一致');
+  eq(await page.inputValue('#edQTextIn'), '輸入字幕', '文字框顯示字幕文字');
+  // 樣式分頁：基本／綜藝／社群，預設在目前樣式那一頁；切分頁只換顯示
+  const tabState = () => page.evaluate(() => ({ tabs: [...document.querySelectorAll('#edQStyleTabs .ed-qtab')].map(t => [t.dataset.group, t.textContent, t.getAttribute('aria-selected')]),
+    vis: [...document.querySelectorAll('#edQStyle .ed-qthumb')].filter(b => !b.hidden).map(b => b.dataset.group) }));
+  let ts0 = await tabState();
+  eq(ts0.tabs.map(x => x[1]), ['基本', '綜藝', '社群'], '樣式分頁：基本／綜藝／社群');
+  ok(ts0.tabs.find(x => x[2] === 'true')[0] === 'basic' && ts0.vis.length && ts0.vis.every(g => g === 'basic'), '預設在目前樣式（基本）那一頁，只顯示這一類');
+  await page.click('#edQStyleTabs [data-group="variety"]'); await settle(page);
+  ts0 = await tabState();
+  ok(ts0.tabs.find(x => x[2] === 'true')[0] === 'variety' && ts0.vis.length === 6 && ts0.vis.every(g => g === 'variety'), '點「綜藝」：只顯示 6 個綜藝樣式');
+  await page.click('#edQStyleTabs [data-group="basic"]'); await settle(page);
+
+  // 樣式
+  const sk = REG.st.find(k => k !== REG.lib);
+  const before1 = await ttl(t1);
+  await chip(page, 'edQStyle', sk);
+  ok(await styleApplied(t1, sk), `按樣式「${sk}」：patch 的欄位都套用到字幕`);
+  eq((await quickState(page)).secs.edQStyle, sk, 'chip 標成選取');
+  eq([(await ttl(t1)).text, (await ttl(t1)).y, (await ttl(t1)).size], [before1.text, before1.y, before1.size], '樣式只改外觀：文字、位置、大小不變');
+  await page.click('#edSUndo'); await settle(page);
+  eq(await ttl(t1), before1, '復原一次：字幕回到套用樣式前');
+  eq((await quickState(page)).secs.edQStyle, REG.lib, '復原後 chip 也回來');
+  await chip(page, 'edQStyle', sk);
+
+  // 進場／持續／出場
+  const fk = REG.fx[REG.fx.length - 1];
+  await chip(page, 'edQIn', fk);
+  eq((await ttl(t1)).textFx, fk, `進場「${fk}」→ title.textFx`);
+  eq((await quickState(page)).secs.edQIn, fk, '進場 chip 標成選取');
+  for (const [sec, list, key] of [['edQLoop', REG.loop, 'textLoop'], ['edQOut', REG.out, 'textOut']]) {
+    if (list.length <= 1) { ok(!(await page.$('#' + sec)), `${key} 註冊表只有「無」：${sec} 不顯示`); continue; }
+    eq(await chipKeys(sec), list, `${sec} 選項＝註冊表的全部 key`);
+    await chip(page, sec, list[1]);
+    eq((await ttl(t1))[key], list[1], `${sec}：按「${list[1]}」→ title.${key}`);
+    eq((await quickState(page)).secs[sec], list[1], `${sec} chip 標成選取`);
+    await page.click('#edSUndo'); await settle(page);
+    ok([undefined, 'none'].includes((await ttl(t1))[key]), `${sec}：復原一次回到無`);
+  }
+
+  // 位置、大小
+  await chip(page, 'edQPos', 'top');
+  eq((await ttl(t1)).y, 0.15, '位置：上方 → y 0.15');
+  await chip(page, 'edQPos', 'bottom');
+  eq((await ttl(t1)).y, 0.75, '位置：下方（直式 9:16 讓開平台按鈕）→ y 0.75');
+  eq((await quickState(page)).secs.edQPos, 'bottom', '位置 chip：下方');
+  await page.click('#edSUndo'); await settle(page);
+  eq((await ttl(t1)).y, 0.15, '復原一次：回到上方');
+  eq((await quickState(page)).secs.edQPos, 'top', '位置 chip 跟著回到上方');
+  await chip(page, 'edQPos', 'bottom');
+  await chip(page, 'edQSize', 'l');
+  eq((await ttl(t1)).size, 112, '大小：大 → size 112');
+  eq((await quickState(page)).secs.edQSize, 'l', '大小 chip：大');
+  await chip(page, 'edQSize', 's');
+  eq((await ttl(t1)).size, 56, '大小：小 → size 56');
+  await page.click('#edSUndo'); await settle(page);
+  eq((await ttl(t1)).size, 112, '復原一次：回到大');
+
+  // 文字：失焦時一次寫回（打字過程不寫）
+  await page.click('#edQTextIn');
+  eq(await page.evaluate(() => { const t = document.getElementById('edQTextIn'); return [t.selectionStart, t.selectionEnd]; }), [0, 4], '點進預設文字「輸入字幕」：整段選取，直接打字就取代');
+  await page.keyboard.type('笑到*肚子*痛');
+  eq((await ttl(t1)).text, '輸入字幕', '打字中還沒寫回');
+  await page.evaluate(() => document.activeElement.blur()); await settle(page);
+  eq((await ttl(t1)).text, '笑到*肚子*痛', '失焦：文字寫回字幕');
+  await page.click('#edSUndo'); await settle(page);
+  eq((await ttl(t1)).text, '輸入字幕', '復原一次：文字回到原本');
+  eq(await page.inputValue('#edQTextIn'), '輸入字幕', '文字框跟著復原');
+  await page.click('#edSRedo'); await settle(page);
+  eq(await page.inputValue('#edQTextIn'), '笑到*肚子*痛', '重做：文字框也更新');
+  // 打完字直接點時間軸上的別的片段（沒有先失焦）：文字也要寫回
+  await page.click('#edQTextIn'); await page.keyboard.press('End'); await page.keyboard.type('！');
+  await page.click(`.ed-clip[data-clip="${landE.id}"]`); await settle(page);
+  eq((await ttl(t1)).text, '笑到*肚子*痛！', '打完字直接點別的片段：文字也寫回');
+  ok(await page.$('#edQFit'), '換成影片的快速調整');
+  await page.click('#edSUndo'); await settle(page);
+  await page.evaluate(id => window.QPTEdit.ui.selectClips([id]), t1); await settle(page);
+  eq(await page.inputValue('#edQTextIn'), '笑到*肚子*痛', '復原後再選字幕：文字框是復原後的文字');
+  await page.evaluate(() => window.QPTEdit.ui.seekTimeline(45)); await settle(page);   // 進場動畫跑完的畫面
+  await shot(page, 's430-quick');
+
+  // 多選
+  await page.evaluate(() => document.activeElement.blur());
+  await page.evaluate(() => window.QPTEdit.ui.seekTimeline(120)); await settle(page);
+  await page.click('#edSText'); await settle(page);
+  const t2 = (await proj(page, (p, Q, t1) => Object.values(p.clips).filter(c => c.type === 'title' && c.id !== t1).map(c => c.id), t1))[0];
+  await page.evaluate(ids => window.QPTEdit.ui.selectClips(ids), [t1, t2]); await settle(page);
+  ok((await page.textContent('#edInspHead')).includes('2 個字幕'), '多選：標題顯示 2 個字幕');
+  ok(!(await page.$('#edQText')), '多選：不顯示文字框（文字要一個一個改）');
+  const sk2 = REG.st.find(k => k !== sk);
+  const both = async () => [await ttl(t1), await ttl(t2)];
+  const b2 = await both();
+  await chip(page, 'edQStyle', sk2);
+  ok(await styleApplied(t1, sk2) && await styleApplied(t2, sk2), `多選：樣式「${sk2}」一起套用`);
+  await chip(page, 'edQPos', 'top');
+  eq([(await ttl(t1)).y, (await ttl(t2)).y], [0.15, 0.15], '多選：位置一起套用');
+  await page.click('#edSUndo'); await settle(page);
+  await page.click('#edSUndo'); await settle(page);
+  eq(await both(), b2, '多選：每個選項各復原一次就回到原本');
+  // 媒體＋字幕一起選：以媒體為主
+  await page.evaluate(ids => window.QPTEdit.ui.selectClips(ids), [landE.id, t1]); await settle(page);
+  ok(await page.$('#edQFit') && !(await page.$('#edQStyle')), '媒體和字幕一起選：顯示媒體的快速調整');
+  // 字幕清單（SRT／V 標記）的片段：照舊用詳細內容
+  const sub = await page.evaluate(() => { const Q = window.QPTEdit, U = Q.uiParts; const r = U.op('test', p => Q.core.addClip(p, { type: 'title', trackId: Q.core.tracksOf(p, 'video')[1].id, start: 300, duration: 30, mode: 'overwrite', title: Object.assign(Q.fx.makeTitle('static', 'x'), { sub: true }), name: '字幕' })); return r.id; });
+  await page.evaluate(id => window.QPTEdit.ui.selectClips([id]), sub); await settle(page);
+  ok(!(await quickState(page)).shown, '字幕清單的片段：不顯示快速調整（用詳細內容的字幕清單）');
+  // 橫式：下方是 0.82
+  await page.evaluate(() => window.QPTEdit.uiParts.op('輸出比例', p => window.QPTEdit.core.setAspect(p, '16:9'))); await settle(page);
+  await page.evaluate(id => window.QPTEdit.ui.selectClips([id]), t1); await settle(page);
+  await chip(page, 'edQPos', 'bottom');
+  eq((await ttl(t1)).y, 0.82, '橫式 16:9：下方 → y 0.82');
+  await cspOf(page, problems, '字幕');
+  await E.ctx.close();
 
   // ---------------------------------------------------------------- 8. 沒有錯誤
   eq(problems, [], '整個流程沒有 console error／頁面例外／CSP 違規');
