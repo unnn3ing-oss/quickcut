@@ -57,3 +57,6 @@ jobs:
 
       - name: 簡易模式（edit-simple.e2e）
         run: node test/edit-simple.e2e.js
+
+      - name: 一鍵成片（edit-auto.e2e）
+        run: node test/edit-auto.e2e.js

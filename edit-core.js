@@ -1393,6 +1393,125 @@
     });
   });
 
+  // ---- 一鍵成片（4.10） --------------------------------------------------------------
+  // 風格：every＝每幾拍換一段（有音樂時）；sec＝沒有音樂時每段幾秒；motions 依序輪流套用；
+  //   trans：轉場種類／顏色／秒數，transEvery＝每幾個剪接點放一個（其餘直接切）；look：濾鏡；fade：開頭結尾淡入淡出（秒）
+  const AUTO_STYLES = {
+    beat: { name: '節奏感', every: 2, sec: 1.2, motions: ['zoomIn', 'zoomOut'], trans: { type: 'dipToColor', color: '#ffffff', sec: 0.27 }, transEvery: 2, look: null, lookAmt: 0, fade: 0 },
+    gentle: { name: '溫柔回憶', every: 4, sec: 3, motions: ['zoomIn', 'panLeft', 'zoomOut', 'panRight'], trans: { type: 'crossDissolve', sec: 0.6 }, transEvery: 1, look: 'warm', lookAmt: 50, fade: 0.5 },
+    cinema: { name: '電影感', every: 4, sec: 3.5, motions: ['zoomIn'], trans: { type: 'dipToColor', color: '#000000', sec: 0.5 }, transEvery: 1, look: 'cool', lookAmt: 40, fade: 1 },
+  };
+  // o：{ mediaIds（影片／圖片，依序）, musicId（音訊或有聲影片；null＝不要音樂）, beats（音樂裡的拍點，來源秒數）, style }
+  // 從時間軸目前的結尾開始排：影片／圖片接在第一條影片軌；有音樂時放第二條音訊軌（沒有就新增），素材原聲不放；
+  // 沒音樂時素材原聲放第一條音訊軌。每段長度跟著拍子（每 every 拍換一段；素材少時加倍到最多 8 拍，盡量配滿整首歌；
+  // 拍點用完就照平均間隔往後推）；
+  // 影片取中段、太短就整段用（之後的段落接著排）。比例不合用模糊背景；動態、轉場、濾鏡依風格。整批一筆復原。
+  const autoEdit = guard((p, o = {}) => {
+    const st = AUTO_STYLES[o.style || 'beat'];
+    if (!st) return fail('不認得的風格');
+    const ids = arr(o.mediaIds);
+    const infos = ids.map(id => p.mediaInfo && p.mediaInfo[id]);
+    if (!ids.length) return fail('先選要用的影片或照片');
+    const badI = infos.findIndex(m => !m || (m.kind !== 'video' && m.kind !== 'image'));
+    if (badI >= 0) return fail(infos[badI] ? `「${infos[badI].name || '這個素材'}」不是影片或照片` : '找不到素材的資訊，請重新匯入');
+    const music = o.musicId ? p.mediaInfo && p.mediaInfo[o.musicId] : null;
+    if (o.musicId && (!music || music.kind === 'image' || (music.kind === 'video' && music.hasAudio === false))) return fail('選的音樂沒有聲音');
+    const fps = p.fps;
+    return tx(p, q => {
+      let vt = tracksOf(q, 'video')[0];
+      let at = tracksOf(q, 'audio');
+      if (!vt) bail('沒有影片軌');
+      if (music && !at[1]) { pushTrack(q, 'audio'); at = tracksOf(q, 'audio'); }
+      const musicT = music ? at[1] : null, origT = music ? null : at[0] || null;
+      const used = [vt, musicT, origT].filter(Boolean);
+      for (const t of used) if (t.locked) bail(`「${t.name}」軌已鎖定，不能放上去`);
+      const start = used.reduce((m, t) => clipsOnTrack(q, t.id).reduce((n, c) => Math.max(n, clipEnd(c)), m), 0);
+      // 段落邊界（時間軸影格）
+      const musicLen = music ? Math.floor(music.duration * fps + EPS) : 0;
+      let beats = music ? arr(o.beats).map(Number).filter(t => isFinite(t) && t > 0 && t < music.duration).sort((a, b) => a - b).map(t => start + Math.round(t * fps)) : [];
+      beats = beats.filter((f, i) => i === 0 || f > beats[i - 1]);
+      const gaps = beats.slice(1).map((f, i) => f - beats[i]).sort((a, b) => a - b);
+      // 素材少、歌比較長：每段多幾拍（風格拍數的倍數，最多 8 拍），盡量配滿整首歌
+      const every = beats.length ? Math.max(st.every, Math.min(Math.max(8, st.every), st.every * Math.floor(beats.length / ids.length / st.every))) : st.every;
+      const nominal = Math.max(2, gaps.length ? gaps[Math.floor(gaps.length / 2)] * every : Math.round(st.sec * fps));
+      const marks = [];
+      if (beats.length) {
+        // 第一個切點：最接近「開頭＋一段長」的拍子（拍點不一定從 0 秒開始）
+        let k = -1;
+        beats.forEach((f, i) => { if (f - start >= nominal / 2 && (k < 0 || Math.abs(f - start - nominal) < Math.abs(beats[k] - start - nominal))) k = i; });
+        if (k >= 0) for (let i = k; i < beats.length; i += every) marks.push(beats[i]);
+      }
+      const nextMark = cur => {
+        const m = marks.find(f => f - cur >= nominal / 2);
+        if (m != null) return m;
+        if (!marks.length) return cur + nominal;            // 沒有拍點：固定長度
+        const last = marks.length ? marks[marks.length - 1] : start;
+        let f = last;
+        while (f - cur < nominal / 2) f += nominal;
+        return f;
+      };
+      let cursor = start;
+      const vids = [];
+      ids.forEach((id, i) => {
+        const m = infos[i];
+        let dur = nextMark(cursor) - cursor;
+        let srcIn = 0;
+        if (m.kind === 'video') {
+          const avail = Math.floor(m.duration * fps + EPS);
+          if (avail < 1) return;
+          if (avail < dur) dur = avail;
+          srcIn = r9(Math.max(0, (m.duration - dur / fps) / 2));
+        }
+        const r = editToTimeline(q, { mode: 'overwrite', mediaId: id, srcIn, srcOut: srcIn + dur / fps + (m.kind === 'video' ? EPS : 0), frame: cursor, ignoreInOut: true,
+          trackIds: { video: vt.id, audio: m.kind === 'video' && m.hasAudio !== false && origT ? origT.id : null }, name: m.name });
+        if (!r.ok) bail(r.reason);
+        const v = r.ids.find(x => q.clips[x].trackId === vt.id);
+        for (const x of r.ids) if (q.clips[x].duration !== dur) adjustEdge(q, q.clips[x], 'end', dur - q.clips[x].duration);
+        vids.push(v);
+        cursor += dur;
+      });
+      if (!vids.length) bail('選的素材都太短');
+      const end = cursor;
+      // 畫面：比例不合→模糊背景；濾鏡
+      const mis = new Set(aspectMismatch(q).ids);
+      for (const id of vids) {
+        const c = q.clips[id];
+        if (mis.has(id)) c.video.fit = 'blur';
+        if (st.look) { c.video.look = st.look; c.video.lookAmt = st.lookAmt; }
+      }
+      // 動態
+      vids.forEach((id, i) => { const r = applyKeyframePreset(q, id, st.motions[i % st.motions.length]); if (!r.ok) bail(r.reason); });
+      // 轉場（放不下就略過）；開頭結尾淡入淡出
+      const tlen = Math.max(1, Math.round(st.trans.sec * fps));
+      for (let i = 0; i + 1 < vids.length; i++) {
+        if ((i + 1) % st.transEvery) continue;
+        const L = q.clips[vids[i]], R = q.clips[vids[i + 1]];
+        if (clipEnd(L) !== R.start || Math.min(L.duration, R.duration) < tlen * 2) continue;
+        addTransition(q, Object.assign({ leftClipId: L.id, duration: tlen, align: 'center' }, st.trans.color ? { type: st.trans.type, color: st.trans.color } : { type: st.trans.type }));
+      }
+      if (st.fade) {
+        const fl = Math.round(st.fade * fps);
+        const a = q.clips[vids[0]], z = q.clips[vids[vids.length - 1]];
+        if (a.start === start && a.duration > fl * 2) addTransition(q, { rightClipId: a.id, type: 'dipToColor', color: '#000000', duration: fl });
+        if (z.duration > fl * 2) addTransition(q, { leftClipId: z.id, type: 'dipToColor', color: '#000000', duration: fl });
+      }
+      // 音樂：從開頭放到影片結尾（音樂比較短就放完為止），最後淡出
+      let musicId = null;
+      if (music) {
+        const len = Math.min(musicLen, end - start);
+        if (len >= 1) {
+          const r = editToTimeline(q, { mode: 'overwrite', mediaId: o.musicId, srcIn: 0, srcOut: len / fps + EPS, frame: start, ignoreInOut: true, trackIds: { video: null, audio: musicT.id }, name: music.name });
+          if (!r.ok) bail(r.reason);
+          musicId = r.ids[0];
+          const mc = q.clips[musicId];
+          if (mc.duration > len) adjustEdge(q, mc, 'end', len - mc.duration);
+          mc.audio.fadeOut = Math.min(Math.round(1.5 * fps), Math.floor(mc.duration / 3));
+        }
+      }
+      return { ids: vids, musicId, start, end, count: vids.length, every };
+    });
+  });
+
   // 片段標記：m.offset（相對片段起點）或 m.frame（時間軸影格）擇一
   const addClipMarker = guard((p, clipId, m = {}) => {
     const c = needClips(p, clipId)[0];
@@ -2018,7 +2137,7 @@
     moveClips, trimEdge, blade, rippleTrim, rippleDelete, deleteGap, lift, roll, slip, slide,
     setInOut, clearInOut, editToTimeline, addClip, link, unlink,
     addMarker, updateMarker, removeMarker, addClipMarker, updateClipMarker, removeClipMarker, setFlags,
-    setSpeed, setRetime, clearRetime, RETIME_PRESETS, retimeCurve, retimeFactor, srcOffset, freezeFrame, addTransition, updateTransition, removeTransition, setClipProps, setFitAll, aspectMismatch,
+    autoEdit, AUTO_STYLES, setSpeed, setRetime, clearRetime, RETIME_PRESETS, retimeCurve, retimeFactor, srcOffset, freezeFrame, addTransition, updateTransition, removeTransition, setClipProps, setFitAll, aspectMismatch,
     // 節拍
     BEAT_NAME, beatFrames, addBeatMarkers, clearBeatMarkers, fitClipsToBeats,
     // 關鍵影格

@@ -1990,3 +1990,112 @@ t('濾鏡（video.look）：四種、強度夾在 0~100、不認得的拒絕不�
   assert.strictEqual(q.clips[v].video.look, 'warm', '存檔來回保留');
   return p;
 });
+
+// =====================================================================================
+// 一鍵成片（4.10）
+// =====================================================================================
+t('autoEdit 有音樂：跟著拍子排、原聲不放、音樂放第二條音訊軌並淡出、整批一筆', () => {
+  const p = setup({ a: 1 });
+  const fps = p.fps;
+  const beats = []; for (let s = 0.5; s < 8; s += 0.5) beats.push(s);   // 120 BPM
+  const r = core.autoEdit(p, { mediaIds: ['mv', 'mi', 'mn'], musicId: 'ma', beats, style: 'beat' });
+  assert.ok(r.ok, r.reason);
+  assert.strictEqual(r.count, 3);
+  const vs = r.ids.map(id => C(p, id));
+  assert.deepStrictEqual(vs.map(c => c.mediaId), ['mv', 'mi', 'mn'], '照順序');
+  assert.strictEqual(vs[0].start, 0);
+  for (let i = 1; i < vs.length; i++) assert.strictEqual(vs[i].start, vs[i - 1].start + vs[i - 1].duration, '首尾相接');
+  // 15 拍、3 段：每段拉長到 4 拍（2 秒），盡量配滿整首歌；剪接點落在拍點上
+  assert.strictEqual(r.every, 4);
+  for (const c of vs.slice(1)) assert.ok(beats.some(b => Math.round(b * fps) === c.start), `剪接點在拍子上：${c.start}`);
+  assert.ok(Math.abs(vs[0].duration - 2 * fps) <= 1, '第一段 4 拍');
+  // 素材多：維持風格的 2 拍
+  const p2 = setup();
+  const r2 = core.autoEdit(p2, { mediaIds: Array(8).fill('mi'), musicId: 'ma', beats, style: 'beat' });
+  assert.ok(r2.ok, r2.reason);
+  assert.strictEqual(r2.every, 2);
+  // 影片取中段
+  assert.ok(vs[0].srcIn > 2, '影片取中段：' + vs[0].srcIn);
+  // 原聲不放；音樂在新增的第二條音訊軌
+  assert.strictEqual(core.tracksOf(p, 'audio').length, 2, '自動新增音樂軌');
+  const mus = C(p, r.musicId);
+  assert.strictEqual(mus.trackId, A(p, 1));
+  assert.ok(!Object.values(p.clips).some(c => c.trackId === A(p, 0)), '素材原聲不放');
+  assert.strictEqual(mus.start, 0);
+  assert.strictEqual(mus.duration, r.end, '音樂長度＝影片長度');
+  assert.ok(mus.audio.fadeOut > 0, '音樂淡出');
+  // 比例不合→模糊背景（輸出 16:9：直的空景、4:3 照片）
+  assert.strictEqual(vs[1].video.fit, 'blur');
+  assert.strictEqual(vs[2].video.fit, 'blur');
+  assert.notStrictEqual(vs[0].video.fit, 'blur', '16:9 影片不用');
+  // 動態：輪流放大／縮小
+  assert.ok(vs.every(c => (c.keyframes['video.transform.zoomX'] || []).length >= 2), '每段都有動態');
+  // 閃白轉場：每 2 個剪接點一個
+  const tr = Object.values(p.transitions);
+  assert.strictEqual(tr.length, 1);
+  assert.strictEqual(tr[0].leftClipId, vs[1].id);
+  assert.strictEqual(tr[0].color.toLowerCase(), '#ffffff');
+  return synced(p);
+});
+
+t('autoEdit 沒音樂：固定長度、原聲放第一條音訊軌；溫柔回憶有濾鏡、淡化、頭尾淡入淡出', () => {
+  const p = setup();
+  const fps = p.fps;
+  const r = core.autoEdit(p, { mediaIds: ['mi', 'mv', 'mi'], musicId: null, style: 'gentle' });
+  assert.ok(r.ok, r.reason);
+  const vs = r.ids.map(id => C(p, id));
+  assert.ok(vs.every(c => c.duration === Math.round(3 * fps)), '每段 3 秒');
+  assert.ok(vs.every(c => c.video.look === 'warm' && c.video.lookAmt === 50), '暖陽濾鏡');
+  const au = Object.values(p.clips).filter(c => c.trackId === A(p, 0));
+  assert.strictEqual(au.length, 1, '影片原聲在 A1');
+  assert.strictEqual(au[0].linkId, vs[1].linkId);
+  assert.strictEqual(au[0].duration, vs[1].duration, '原聲和畫面一樣長');
+  assert.strictEqual(r.musicId, null);
+  const tr = Object.values(p.transitions);
+  assert.strictEqual(tr.filter(x => x.type === 'crossDissolve').length, 2, '每個剪接點淡化');
+  assert.strictEqual(tr.filter(x => x.type === 'dipToColor').length, 2, '頭尾淡入淡出');
+  return synced(p);
+});
+
+t('autoEdit：影片太短就整段用、拍點用完照平均間隔往後推、接在時間軸結尾', () => {
+  const p = setup();
+  const fps = p.fps;
+  put(p, 'mi', 0, 0, 2);   // 時間軸上已經有 2 秒
+  const start = Math.round(2 * fps);
+  const r = core.autoEdit(p, { mediaIds: ['mn', 'mi', 'mi', 'mi', 'mi'], musicId: 'ma', beats: [1, 2, 3, 4, 5, 6, 7], style: 'cinema' });
+  assert.ok(r.ok, r.reason);
+  assert.strictEqual(r.start, start, '接在原本的結尾');
+  const vs = r.ids.map(id => C(p, id));
+  assert.strictEqual(vs[0].start, start);
+  assert.strictEqual(vs[0].duration, Math.floor(3 * fps), '3 秒的空景：整段用（不到 4 拍）');
+  for (let i = 1; i < vs.length; i++) assert.strictEqual(vs[i].start, vs[i - 1].start + vs[i - 1].duration);
+  assert.ok(r.end - start > 8 * fps, '拍點用完照平均間隔往後推');
+  const mus = C(p, r.musicId);
+  assert.strictEqual(mus.start, start);
+  assert.strictEqual(mus.duration, Math.floor(8 * fps + 1e-6), '音樂比影片短：放完為止');
+  return synced(p);
+});
+
+t('autoEdit：影片比一段短 → 整段用，下一段接著排', () => {
+  const p = setup();
+  const fps = p.fps;
+  const r = core.autoEdit(p, { mediaIds: ['mn', 'mi'], style: 'cinema' });   // 電影感沒音樂每段 3.5 秒，空景只有 3 秒
+  assert.ok(r.ok, r.reason);
+  const [a, b] = r.ids.map(id => C(p, id));
+  assert.strictEqual(a.duration, Math.floor(3 * fps + 1e-6));
+  assert.strictEqual(a.srcIn, 0);
+  assert.strictEqual(b.start, a.duration);
+  assert.strictEqual(b.duration, Math.round(3.5 * fps));
+  return synced(p);
+});
+
+t('autoEdit 失敗：沒選素材、音訊當畫面、不認得的風格、鎖定軌 → 不改', () => {
+  const p = setup();
+  unchanged(p, () => core.autoEdit(p, { mediaIds: [] }), /先選/);
+  unchanged(p, () => core.autoEdit(p, { mediaIds: ['ma'] }), /不是影片或照片/);
+  unchanged(p, () => core.autoEdit(p, { mediaIds: ['mi'], style: 'x' }), /風格/);
+  unchanged(p, () => core.autoEdit(p, { mediaIds: ['mi'], musicId: 'mi' }), /沒有聲音/);
+  lock(p, V(p));
+  unchanged(p, () => core.autoEdit(p, { mediaIds: ['mi'] }), /鎖定/);
+  return p;
+});
