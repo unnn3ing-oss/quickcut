@@ -1036,7 +1036,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   await page.evaluate(() => { QPTEdit.ui.selectClips([]); QPTEdit.ui.seekTimeline(10); });
   await settle(page);
   ok(await page.isVisible('#edLetterbox'), '沒選片段：專案區段有「電影黑邊」選單');
-  eq(await page.$$eval('#edLetterbox option', os => os.map(o => o.value)), ['none', '2.39', '2.00', '1.85'], '電影黑邊選項：不加／2.39／2.00／1.85');
+  eq(await page.$$eval('#edLetterbox option', os => os.map(o => o.value)), ['none', '2.39', '2.00', '1.85', '1.50'], '電影黑邊選項：不加／2.39／2.00／1.85／Open Gate');
   // 預覽畫布上「黑邊內緣往上 4px」那一列最亮的像素（9:16 的橫式影片：沒黑邊時那裡是影片畫面）
   const lbRow = () => page.evaluate(() => {
     const cv = document.getElementById('edCanvas'), c = document.createElement('canvas');

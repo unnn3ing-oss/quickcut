@@ -33,7 +33,7 @@
     const aspLab = el('label', 'ed-aspect'); aspLab.htmlFor = 'edAspect';
     aspLab.append(el('span', null, '輸出比例'));
     const sel = el('select'); sel.id = 'edAspect'; sel.title = '輸出畫面的比例（只影響時間軸與匯出，不影響素材）';
-    for (const [v, t] of [['source', '依來源'], ['9:16', '9:16 直式'], ['16:9', '16:9 橫式'], ['4:5', '4:5'], ['1:1', '1:1 方形']]) { const o = el('option', null, t); o.value = v; sel.appendChild(o); }
+    for (const [v, t] of [['source', '依來源'], ['9:16', '9:16 直式'], ['16:9', '16:9 橫式'], ['4:5', '4:5'], ['1:1', '1:1 方形'], ['3:2', '3:2 Open Gate']]) { const o = el('option', null, t); o.value = v; sel.appendChild(o); }
     sel.addEventListener('change', () => {
       const v = sel.value;
       const r = state.history.run('輸出比例', p => C.setAspect(p, v));

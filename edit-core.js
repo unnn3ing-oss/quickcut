@@ -21,13 +21,15 @@
   const Q = root.QPTEdit = root.QPTEdit || {};
 
   const FPS_CHOICES = [24, 25, 30, 50, 60];
-  const ASPECTS = { '9:16': [1080, 1920], '16:9': [1920, 1080], '4:5': [1080, 1350], '1:1': [1080, 1080] };
+  const ASPECTS = { '9:16': [1080, 1920], '16:9': [1920, 1080], '4:5': [1080, 1350], '1:1': [1080, 1080], '3:2': [1620, 1080] };   // 3:2＝Open Gate（整片感光元件）
   // 片段放進輸出畫面的方式：fit＝完整（黑邊）、blur＝完整＋同一畫面的模糊放大當背景、fill＝填滿（裁切）、stretch＝拉伸
   const FIT_MODES = ['fit', 'blur', 'fill', 'stretch'];
   // 濾鏡（video.look）：none＝原色、warm＝暖陽、cool＝冷調、mono＝黑白；video.lookAmt 0~100（強度，預設 100）
   const LOOKS = ['none', 'warm', 'cool', 'mono'];
-  // 電影黑邊（專案層級 p.letterbox）：none＝不加；其他是「黑邊之間畫面」的寬高比（以畫面寬度為準，上下加黑邊），顏色固定黑色
-  const LETTERBOXES = ['none', '2.39', '2.00', '1.85'];
+  // 電影黑邊（專案層級 p.letterbox）：none＝不加；其他是「黑邊之間畫面」的寬高比，顏色固定黑色。
+  //   畫面比目標比例「高」→ 上下加黑邊（以寬度為準）；比目標比例「寬」→ 左右加黑邊（以高度為準）。
+  //   1.50＝Open Gate（相機用整片感光元件錄的 3:2 畫面；放進 16:9 會是左右黑邊）
+  const LETTERBOXES = ['none', '2.39', '2.00', '1.85', '1.50'];
   // 可以打關鍵影格的參數 → [最小, 最大]（和 sanitize 的範圍一致）。f 是「片段內影格」（0 = 片段第一格），
   //   可以超出片段範圍（修剪、切開後留著，邊界附近的內插才不會變）。
   const KF_PATHS = {
@@ -253,6 +255,7 @@
   // 接受 '2.39'、2.39、'2'、2 這類寫法，統一成 LETTERBOXES 裡的字串；不認得回 null
   function letterboxValue(v) {
     if (v == null || v === '' || v === 'none') return v == null || v === '' ? null : 'none';
+    if (/^open\s*gate$/i.test(String(v)) || String(v) === '3:2') return '1.50';
     const n = Number(v);
     const s = isFinite(n) && n > 0 ? n.toFixed(2) : String(v);
     return LETTERBOXES.includes(s) ? s : null;
@@ -260,10 +263,19 @@
   // 上下各一條黑邊的高度（專案像素，四捨五入成整數）；畫面本來就比目標比例寬（或沒設定）時是 0。
   // 直式專案一樣用「畫面寬度 ÷ 比例」當中間畫面的高度，所以 9:16 的 2.39 黑邊很厚（這就是電影感直式的樣子）。
   function letterboxBar(p) {
+    const r = letterboxRect(p);
+    return r ? r.y : 0;
+  }
+  // 黑邊中間的畫面範圍 { x, y, w, h }（專案像素、整數）；沒有黑邊（或比例剛好一樣）時是 null
+  function letterboxRect(p) {
     const v = p && p.letterbox;
-    if (!v || v === 'none' || !LETTERBOXES.includes(v)) return 0;
-    const W = p.width, H = p.height, inner = W / Number(v);
-    return inner >= H ? 0 : Math.max(0, Math.round((H - inner) / 2));
+    if (!v || v === 'none' || !LETTERBOXES.includes(v)) return null;
+    const W = p.width, H = p.height, r = Number(v);
+    if (!(W > 0 && H > 0)) return null;
+    const y = W / r < H ? Math.max(0, Math.round((H - W / r) / 2)) : 0;     // 上下
+    const x = H * r < W ? Math.max(0, Math.round((W - H * r) / 2)) : 0;     // 左右
+    if (!x && !y) return null;
+    return { x, y, w: W - 2 * x, h: H - 2 * y };
   }
 
   // =====================================================================================
@@ -533,7 +545,7 @@
     const tk = new Map(p.tracks.map(t => [t.id, t]));
     if (tk.size !== p.tracks.length) add('track', '軌道 id 重複');
     if (!Number.isInteger(p.fps) || p.fps <= 0) add('fps', '專案 fps 不正確');
-    if (p.letterbox != null && !LETTERBOXES.includes(p.letterbox)) add('letterbox', '電影黑邊只能是「不加」、2.39、2.00 或 1.85');
+    if (p.letterbox != null && !LETTERBOXES.includes(p.letterbox)) add('letterbox', '電影黑邊只能是「不加」、2.39、2.00、1.85 或 Open Gate（1.50）');
     const byTrack = new Map();
     for (const [id, c] of Object.entries(p.clips)) {
       const nm = clipLabel(c);
@@ -2073,7 +2085,7 @@
   // 電影黑邊（專案層級，不屬於任何軌道，所以不受軌道鎖定影響）；一筆復原
   const setLetterbox = guard((p, v) => {
     const lb = letterboxValue(v);
-    if (!lb) return fail('電影黑邊只能是「不加」、2.39、2.00 或 1.85');
+    if (!lb) return fail('電影黑邊只能是「不加」、2.39、2.00、1.85 或 Open Gate（1.50）');
     return tx(p, q => { q.letterbox = lb; return {}; }, { lockCheck: false });
   });
 
@@ -2157,7 +2169,7 @@
     // 專案、軌道、媒體
     createProject, clone, serialize, deserialize,
     addTrack, removeTrack, setTrackProps, getTrack, tracksOf,
-    registerMediaInfo, unregisterMediaInfo, setAspect, setLetterbox, letterboxBar,
+    registerMediaInfo, unregisterMediaInfo, setAspect, setLetterbox, letterboxBar, letterboxRect,
     // 查詢
     getClip, clipEnd, clipsOnTrack, clipAt, clipsAt, projectDuration, linkedClips, expandLinked, linkOffset,
     sourceTimeAt, sourceSpan, maxExtend, snapTargets, snap, transitionRange, transitionsOfClip, transitionSide, transitionAtEdge,

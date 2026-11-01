@@ -204,7 +204,7 @@ t('unregisterMediaInfo：有片段在用就不能移除', () => {
 t('setAspect：9:16／16:9／4:5／source（偶數化、長邊上限 3840）', () => {
   const p = setup();
   assert.deepStrictEqual([p.width, p.height], [1280, 720]);
-  for (const [a, w, h] of [['9:16', 1080, 1920], ['16:9', 1920, 1080], ['4:5', 1080, 1350], ['1:1', 1080, 1080]]) {
+  for (const [a, w, h] of [['9:16', 1080, 1920], ['16:9', 1920, 1080], ['4:5', 1080, 1350], ['1:1', 1080, 1080], ['3:2', 1620, 1080]]) {
     assert.ok(core.setAspect(p, a).ok);
     assert.deepStrictEqual([p.aspect, p.width, p.height], [a, w, h]);
   }
@@ -2134,8 +2134,26 @@ t('電影黑邊：黑邊高度（16:9、9:16、本來就比目標寬）', () => 
   core.setAspect(p, '9:16');
   core.setLetterbox(p, '2.39');
   assert.strictEqual(core.letterboxBar(p), Math.round((1920 - 1080 / 2.39) / 2));   // 734：直式一樣以寬度為準
-  const wide = core.clone(p); wide.width = 2400; wide.height = 1000;               // 比 2.39 還寬：不加
+  const wide = core.clone(p); wide.width = 2400; wide.height = 1000;               // 比 2.39 還寬：左右加，上下沒有
   assert.strictEqual(core.letterboxBar(wide), 0);
+  assert.deepStrictEqual(core.letterboxRect(wide), { x: Math.round((2400 - 1000 * 2.39) / 2), y: 0, w: 2400 - 2 * Math.round((2400 - 1000 * 2.39) / 2), h: 1000 });
+  return p;
+});
+
+t('電影黑邊：Open Gate 3:2 ——16:9 左右黑邊、9:16 上下黑邊；輸出比例 3:2 剛好不用黑邊', () => {
+  const p = setup();
+  core.setAspect(p, '16:9');
+  assert.ok(core.setLetterbox(p, 'openGate').ok);
+  assert.strictEqual(p.letterbox, '1.50', 'openGate → 1.50');
+  assert.deepStrictEqual(core.letterboxRect(p), { x: 150, y: 0, w: 1620, h: 1080 }, '16:9：左右各 150px');
+  assert.strictEqual(core.letterboxBar(p), 0);
+  core.setAspect(p, '9:16');
+  assert.deepStrictEqual(core.letterboxRect(p), { x: 0, y: 600, w: 1080, h: 720 }, '9:16：上下各 600px');
+  core.setAspect(p, '3:2');
+  assert.deepStrictEqual([p.width, p.height], [1620, 1080]);
+  assert.strictEqual(core.letterboxRect(p), null, '輸出就是 3:2：不用黑邊');
+  assert.ok(core.setLetterbox(p, '3:2').ok);
+  assert.strictEqual(p.letterbox, '1.50');
   return p;
 });
 

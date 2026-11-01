@@ -677,6 +677,19 @@ function check(name, ok, detail) {
   check('不加黑邊：上下邊緣就是畫面', lbNone.bar === 0 && lbNone.full.top > 60 && lbNone.full.bottom > 60 && lbNone.preview.top > 60 && lbNone.preview.bottom > 60, lbNone);
   check('字幕蓋在黑邊上面（黑邊裡看得到白字）', lbTitle.full.barWhite > 200 && lb169.full.barWhite === 0, { title: lbTitle.full.barWhite, none: lb169.full.barWhite });
 
+  // Open Gate 3:2 在 16:9 裡：左右黑邊（pillarbox）
+  const og = await page.evaluate(async () => {
+    const R = QPTEdit.render, C = QPTEdit.core;
+    const p = T.put(T.project({ width: 1280, height: 720, letterbox: '1.50' }),
+      T.clip('s1', 'v1', { type: 'solid', mediaId: null, duration: 60, solidColor: '#ffffff', audio: null }));
+    const r = C.letterboxRect(p);
+    const cv = T.canvas(p.width, p.height), g = cv.getContext('2d');
+    await R.renderFrame(g, p, 10);
+    const col = x => T.mean(g.getImageData(x, 72, 1, 576).data);
+    return { r, left: col(r.x - 3), inL: col(r.x + 3), mid: col(640), inR: col(r.x + r.w - 4), right: col(r.x + r.w + 2), top: T.mean(g.getImageData(400, 2, 480, 1).data) };
+  });
+  check('Open Gate 3:2＋16:9：左右各 100px 黑邊（720p），上下沒有', og.r && og.r.x === 100 && og.r.y === 0 && og.left < 5 && og.right < 5 && og.inL > 200 && og.inR > 200 && og.mid > 200 && og.top > 200, og);
+
   // 匯出：真的跑 exporter.run（edit-export.js 逐格 drawFrame → render.compose → 編碼），再用 ffmpeg 解第 5 格
   await page.addScriptTag({ url: '/repo/edit-export.js' });
   const ex = await page.evaluate(async () => {

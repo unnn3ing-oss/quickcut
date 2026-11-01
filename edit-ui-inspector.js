@@ -224,11 +224,11 @@
     const lbT = el('dt'), lbD = el('dd');
     const lbL = el('label', null, '電影黑邊'); lbL.htmlFor = 'edLetterbox'; lbT.appendChild(lbL);
     const lb = el('select'); lb.id = 'edLetterbox';
-    lb.title = '在畫面上下加黑邊，做出寬銀幕電影的感覺（蓋在影片上、字幕下面，預覽和匯出一樣）';
-    for (const [v, t] of [['none', '不加'], ['2.39', '2.39：1 寬銀幕'], ['2.00', '2：1'], ['1.85', '1.85：1 遮幅']]) { const o = el('option', null, t); o.value = v; lb.appendChild(o); }
+    lb.title = '加黑邊做出電影畫幅：寬銀幕是上下黑邊；Open Gate（3:2）放在 16:9 裡是左右黑邊（蓋在影片上、字幕下面，預覽和匯出一樣）';
+    for (const [v, t] of [['none', '不加'], ['2.39', '2.39：1 寬銀幕'], ['2.00', '2：1'], ['1.85', '1.85：1 遮幅'], ['1.50', 'Open Gate（3:2）']]) { const o = el('option', null, t); o.value = v; lb.appendChild(o); }
     lb.addEventListener('change', () => {
       const v = lb.value;
-      const r = op('電影黑邊', p => C.setLetterbox(p, v), v === 'none' ? '已拿掉電影黑邊' : `已加上 ${v}：1 電影黑邊`);
+      const r = op('電影黑邊', p => C.setLetterbox(p, v), v === 'none' ? '已拿掉電影黑邊' : (v === '1.50' ? '已加上 Open Gate（3:2）黑邊' : `已加上 ${v}：1 電影黑邊`));
       if (!r.ok) lb.value = state.project.letterbox || 'none';
     });
     lbD.appendChild(lb); dl.append(lbT, lbD);
