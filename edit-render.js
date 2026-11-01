@@ -469,7 +469,7 @@
       if (clip.type === 'title') {
         if (typeof F.drawTitle === 'function') F.drawTitle(ctx, clip, W, H, fIn, p.fps);
       } else if (clip.type === 'solid') {
-        if (typeof F.drawSolid === 'function') F.drawSolid(ctx, clip, W, H, fIn);
+        if (typeof F.drawSolid === 'function') F.drawSolid(ctx, clip, W, H, fIn, p.fps);
         else {
           ctx.globalAlpha *= param(clip, 'video.transform.opacity', fIn, 1);
           ctx.fillStyle = clip.solidColor || '#000000';
@@ -480,7 +480,7 @@
         if (!src) return;
         const [sw, sh] = sourceSize(src);
         if (!sw || !sh) return;
-        if (typeof F.drawClipVisual === 'function') F.drawClipVisual(ctx, clip, src, sw, sh, W, H, fIn);
+        if (typeof F.drawClipVisual === 'function') F.drawClipVisual(ctx, clip, src, sw, sh, W, H, fIn, p.fps);
         else {     // fx 還沒載入：照比例放進畫面
           const k = Math.min(W / sw, H / sh);
           ctx.drawImage(src, (W - sw * k) / 2, (H - sh * k) / 2, sw * k, sh * k);

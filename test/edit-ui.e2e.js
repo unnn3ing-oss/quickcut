@@ -490,7 +490,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   await settle(page);
   await page.click('.ed-tab[data-tab="trans"]');
   ok(await page.isVisible('#edTransList .ed-gitem'), '轉場分頁：列出轉場縮圖');
-  eq(await page.evaluate(() => document.querySelectorAll('#edTransList .ed-gitem').length), 19, '列出 19 種轉場（8 種基本＋11 種 WebGL）');
+  eq(await page.evaluate(() => document.querySelectorAll('#edTransList .ed-gitem').length), 21, '列出 21 種轉場（8 種基本＋11 種 WebGL＋4.30 的負片閃、光線劃開）');
   await page.click('#edTransAdd');
   await settle(page);
   let trs = await proj(page, p => Object.values(p.transitions));
@@ -656,7 +656,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   // ---------------------------------------------------------------- 字幕
   console.log('字幕');
   await page.click('.ed-tab[data-tab="title"]');
-  eq(await page.evaluate(() => document.querySelectorAll('#edTitleList .ed-gitem').length), 6, '字幕分頁：列出 6 種樣式');
+  eq(await page.evaluate(() => document.querySelectorAll('#edTitleList .ed-gitem').length), 9, '字幕分頁：列出 9 種樣式（含 4.30 黑底小字幕、對話氣泡、留言卡）');
   await page.evaluate(() => QPTEdit.ui.seekTimeline(30));
   await page.click('#edTitleAdd');
   await settle(page);
@@ -683,7 +683,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   const heads = () => page.evaluate(() => [...document.querySelectorAll('.ed-panel:not([hidden]) .ed-ghead')].map(h => h.textContent));
   eq(await page.textContent('.ed-tab[data-tab="trans"]'), '特效', '分頁「轉場」改名為「特效」');
   eq(await heads(), ['字幕清單', '字幕過場', '字幕樣式'], '字幕分頁分成「字幕清單」「字幕過場」「字幕樣式」');
-  eq(await page.evaluate(() => document.querySelectorAll('#edTStyleList .ed-gitem').length), 17, '列出 17 種字幕樣式（基本 5＋綜藝 6＋社群 6）');
+  eq(await page.evaluate(() => document.querySelectorAll('#edTStyleList .ed-gitem').length), 21, '列出 21 種字幕樣式（基本 5＋綜藝 6＋社群 10）');
   const [tA, tB] = on(await clips(page), 'V2');
   const tOf = id => proj(page, (p, Q, id) => p.clips[id].title, id);
   const selClip = async id => { const b = await clipBox(page, id); await page.mouse.click(b.x + b.w / 2, b.y + b.h / 2); await settle(page); };
@@ -714,7 +714,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   // 字體特效（在「特效」分頁）
   await page.click('.ed-tab[data-tab="trans"]');
   eq(await heads(), ['轉場特效', '字體特效'], '特效分頁分成「轉場特效」「字體特效」');
-  eq(await page.evaluate(() => [...document.querySelectorAll('#edTextFxList .ed-gitem')].map(i => i.dataset.textfx)), ['none', 'pop', 'popLine', 'popChar', 'jump', 'jumpLine', 'jumpChar', 'impact', 'typeCursor', 'slideLeft', 'slideRight', 'slideBottom', 'blurIn'], '字體特效（進場）：原本 7 種＋衝擊放大／打字機＋游標／左右下滑入／模糊浮現');
+  eq(await page.evaluate(() => [...document.querySelectorAll('#edTextFxList .ed-gitem')].map(i => i.dataset.textfx)), ['none', 'pop', 'popLine', 'popChar', 'jump', 'jumpLine', 'jumpChar', 'impact', 'typeCursor', 'slideLeft', 'slideRight', 'slideBottom', 'fade', 'fadeLine', 'fadeChar', 'blurIn', 'echo', 'smear'], '字體特效（進場）：原本 7 種＋衝擊放大／打字機＋游標／左右下滑入＋淡入／逐行淡入／逐字淡入／模糊浮現／殘影／拖影上衝（波浪移到持續特效）');
   await selClip(tA.id);
   await page.click('#edTextFxList .ed-gitem[data-textfx="jumpChar"]');
   await page.click('#edTextFxApply');
