@@ -21,11 +21,15 @@
   const Q = root.QPTEdit = root.QPTEdit || {};
 
   const FPS_CHOICES = [24, 25, 30, 50, 60];
-  const ASPECTS = { '9:16': [1080, 1920], '16:9': [1920, 1080], '4:5': [1080, 1350], '1:1': [1080, 1080] };
+  const ASPECTS = { '9:16': [1080, 1920], '16:9': [1920, 1080], '4:5': [1080, 1350], '1:1': [1080, 1080], '3:2': [1620, 1080] };   // 3:2＝Open Gate（整片感光元件）
   // 片段放進輸出畫面的方式：fit＝完整（黑邊）、blur＝完整＋同一畫面的模糊放大當背景、fill＝填滿（裁切）、stretch＝拉伸
   const FIT_MODES = ['fit', 'blur', 'fill', 'stretch'];
   // 濾鏡（video.look）：none＝原色、warm＝暖陽、cool＝冷調、mono＝黑白；video.lookAmt 0~100（強度，預設 100）
   const LOOKS = ['none', 'warm', 'cool', 'mono'];
+  // 電影黑邊（專案層級 p.letterbox）：none＝不加；其他是「黑邊之間畫面」的寬高比，顏色固定黑色。
+  //   畫面比目標比例「高」→ 上下加黑邊（以寬度為準）；比目標比例「寬」→ 左右加黑邊（以高度為準）。
+  //   1.50＝Open Gate（相機用整片感光元件錄的 3:2 畫面；放進 16:9 會是左右黑邊）
+  const LETTERBOXES = ['none', '2.39', '2.00', '1.85', '1.50'];
   // 可以打關鍵影格的參數 → [最小, 最大]（和 sanitize 的範圍一致）。f 是「片段內影格」（0 = 片段第一格），
   //   可以超出片段範圍（修剪、切開後留著，邊界附近的內插才不會變）。
   const KF_PATHS = {
@@ -100,7 +104,7 @@
   function createProject(opts = {}) {
     const p = {
       version: 1, fps: snapFps(opts.fps || 30), aspect: 'source', width: 1920, height: 1080,
-      bgColor: opts.bgColor || '#000000',
+      bgColor: opts.bgColor || '#000000', letterbox: 'none',
       tracks: [], clips: {}, transitions: {}, markers: [],
       inPoint: null, outPoint: null, nextId: 1, mediaInfo: {},
     };
@@ -139,6 +143,7 @@
       if (!tr.trackId) { const c = p.clips[tr.leftClipId] || p.clips[tr.rightClipId]; if (c) tr.trackId = c.trackId; }
     }
     if (!isFinite(p.nextId) || p.nextId < 1) p.nextId = 1;
+    p.letterbox = letterboxValue(p.letterbox) || 'none';    // 舊專案沒有、或手改成不認得的值：不加黑邊
     normalize(p);
     return p;
   }
@@ -244,6 +249,33 @@
     } else [w, h] = ASPECTS[aspect];
     p.aspect = aspect; p.width = w; p.height = h;
     return { ok: true, width: w, height: h };
+  }
+
+  // ---- 電影黑邊 -------------------------------------------------------------------------
+  // 接受 '2.39'、2.39、'2'、2 這類寫法，統一成 LETTERBOXES 裡的字串；不認得回 null
+  function letterboxValue(v) {
+    if (v == null || v === '' || v === 'none') return v == null || v === '' ? null : 'none';
+    if (/^open\s*gate$/i.test(String(v)) || String(v) === '3:2') return '1.50';
+    const n = Number(v);
+    const s = isFinite(n) && n > 0 ? n.toFixed(2) : String(v);
+    return LETTERBOXES.includes(s) ? s : null;
+  }
+  // 上下各一條黑邊的高度（專案像素，四捨五入成整數）；畫面本來就比目標比例寬（或沒設定）時是 0。
+  // 直式專案一樣用「畫面寬度 ÷ 比例」當中間畫面的高度，所以 9:16 的 2.39 黑邊很厚（這就是電影感直式的樣子）。
+  function letterboxBar(p) {
+    const r = letterboxRect(p);
+    return r ? r.y : 0;
+  }
+  // 黑邊中間的畫面範圍 { x, y, w, h }（專案像素、整數）；沒有黑邊（或比例剛好一樣）時是 null
+  function letterboxRect(p) {
+    const v = p && p.letterbox;
+    if (!v || v === 'none' || !LETTERBOXES.includes(v)) return null;
+    const W = p.width, H = p.height, r = Number(v);
+    if (!(W > 0 && H > 0)) return null;
+    const y = W / r < H ? Math.max(0, Math.round((H - W / r) / 2)) : 0;     // 上下
+    const x = H * r < W ? Math.max(0, Math.round((W - H * r) / 2)) : 0;     // 左右
+    if (!x && !y) return null;
+    return { x, y, w: W - 2 * x, h: H - 2 * y };
   }
 
   // =====================================================================================
@@ -513,6 +545,7 @@
     const tk = new Map(p.tracks.map(t => [t.id, t]));
     if (tk.size !== p.tracks.length) add('track', '軌道 id 重複');
     if (!Number.isInteger(p.fps) || p.fps <= 0) add('fps', '專案 fps 不正確');
+    if (p.letterbox != null && !LETTERBOXES.includes(p.letterbox)) add('letterbox', '電影黑邊只能是「不加」、2.39、2.00、1.85 或 Open Gate（1.50）');
     const byTrack = new Map();
     for (const [id, c] of Object.entries(p.clips)) {
       const nm = clipLabel(c);
@@ -1423,10 +1456,11 @@
   // ---- 一鍵成片（4.10） --------------------------------------------------------------
   // 風格：every＝每幾拍換一段（有音樂時）；sec＝沒有音樂時每段幾秒；motions 依序輪流套用；
   //   trans：轉場種類／顏色／秒數，transEvery＝每幾個剪接點放一個（其餘直接切）；look：濾鏡；fade：開頭結尾淡入淡出（秒）
+  //   letterbox：順便設定專案的電影黑邊（同一筆交易，復原一起拿掉；沒寫＝不動使用者原本的設定）
   const AUTO_STYLES = {
     beat: { name: '節奏感', every: 2, sec: 1.2, motions: ['zoomIn', 'zoomOut'], trans: { type: 'dipToColor', color: '#ffffff', sec: 0.27 }, transEvery: 2, look: null, lookAmt: 0, fade: 0 },
     gentle: { name: '溫柔回憶', every: 4, sec: 3, motions: ['zoomIn', 'panLeft', 'zoomOut', 'panRight'], trans: { type: 'crossDissolve', sec: 0.6 }, transEvery: 1, look: 'warm', lookAmt: 50, fade: 0.5 },
-    cinema: { name: '電影感', every: 4, sec: 3.5, motions: ['zoomIn'], trans: { type: 'dipToColor', color: '#000000', sec: 0.5 }, transEvery: 1, look: 'cool', lookAmt: 40, fade: 1 },
+    cinema: { name: '電影感', every: 4, sec: 3.5, motions: ['zoomIn'], trans: { type: 'dipToColor', color: '#000000', sec: 0.5 }, transEvery: 1, look: 'cool', lookAmt: 40, fade: 1, letterbox: '2.39' },
   };
   // o：{ mediaIds（影片／圖片，依序）, musicId（音訊或有聲影片；null＝不要音樂）, beats（音樂裡的拍點，來源秒數）, style }
   // 從時間軸目前的結尾開始排：影片／圖片接在第一條影片軌；有音樂時放第二條音訊軌（沒有就新增），素材原聲不放；
@@ -1535,6 +1569,7 @@
           mc.audio.fadeOut = Math.min(Math.round(1.5 * fps), Math.floor(mc.duration / 3));
         }
       }
+      if (st.letterbox) q.letterbox = st.letterbox;
       return { ids: vids, musicId, start, end, count: vids.length, every };
     });
   });
@@ -2074,6 +2109,13 @@
     return r.ok ? { ok: true, count: ids.length } : r;
   });
 
+  // 電影黑邊（專案層級，不屬於任何軌道，所以不受軌道鎖定影響）；一筆復原
+  const setLetterbox = guard((p, v) => {
+    const lb = letterboxValue(v);
+    if (!lb) return fail('電影黑邊只能是「不加」、2.39、2.00、1.85 或 Open Gate（1.50）');
+    return tx(p, q => { q.letterbox = lb; return {}; }, { lockCheck: false });
+  });
+
   // =====================================================================================
   // 復原／重做
   // =====================================================================================
@@ -2149,12 +2191,12 @@
 
   const api = {
     // 常數、預設值
-    FPS_CHOICES, ASPECTS, FIT_MODES, LOOKS, MARKER_COLORS, TRANSITION_TYPES, TRANSITION_COLORS, transitionColor, EDIT_MODES, IMAGE_DEFAULT_SEC, DEFAULT_FREEZE_SEC, SPEED_MIN, SPEED_MAX,
+    FPS_CHOICES, ASPECTS, FIT_MODES, LOOKS, LETTERBOXES, MARKER_COLORS, TRANSITION_TYPES, TRANSITION_COLORS, transitionColor, EDIT_MODES, IMAGE_DEFAULT_SEC, DEFAULT_FREEZE_SEC, SPEED_MIN, SPEED_MAX,
     defaultVideo, defaultAudio, defaultTitle, defaultTransform, defaultEq, snapFps,
     // 專案、軌道、媒體
     createProject, clone, serialize, deserialize,
     addTrack, removeTrack, setTrackProps, getTrack, tracksOf,
-    registerMediaInfo, unregisterMediaInfo, setAspect,
+    registerMediaInfo, unregisterMediaInfo, setAspect, setLetterbox, letterboxBar, letterboxRect,
     // 查詢
     getClip, clipEnd, clipsOnTrack, clipAt, clipsAt, projectDuration, linkedClips, expandLinked, linkOffset,
     sourceTimeAt, sourceSpan, maxExtend, snapTargets, snap, transitionRange, transitionsOfClip, transitionSide, transitionAtEdge,

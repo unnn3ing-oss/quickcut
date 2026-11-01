@@ -1154,7 +1154,7 @@
     { id: 'fb', name: 'Facebook 影片', sub: '1080p 橫式（16:9）', aspect: '16:9', size: 1080, mbps: () => 8, akbps: 192 },
     { id: 'fbreels', name: 'Facebook Reels', sub: '1080×1920 直式（9:16）', aspect: '9:16', size: 1080, mbps: () => 8, akbps: 192 },
   ];
-  const ASPECT_RATIO = { '16:9': 16 / 9, '9:16': 9 / 16, '4:5': 4 / 5 };
+  const ASPECT_RATIO = { '16:9': 16 / 9, '9:16': 9 / 16, '4:5': 4 / 5, '3:2': 3 / 2 };
   const SIZES = [2160, 1440, 1080, 720, 480];
   const AUDIO_KBPS = [128, 192, 256, 320, 384];
   const DEFAULTS = { preset: 'custom', size: 'project', quality: 'high', mbps: 8, video: 'auto', audio: 'auto', akbps: 'auto', container: 'mp4', gop: null, toDisk: true };
