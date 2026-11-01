@@ -187,6 +187,15 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
 .ed-mdel:hover { background: var(--ed-err-bg); color: var(--ed-danger); }
 .ed-mdel .ed-ic { width: 11px; height: 11px; }
 .ed-mdel .ed-ic svg { fill: none; }
+.ed-madd {
+  position: absolute; right: 2px; bottom: 2px; width: 24px; height: 24px; padding: 0; border: none; border-radius: 50%; background: var(--accent);
+  color: #fff; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; opacity: .75;
+}
+.ed-mitem:hover .ed-madd, .ed-madd:focus-visible { opacity: 1; }
+.ed-madd:hover { filter: brightness(1.1); }
+.ed-madd .ed-ic { width: 12px; height: 12px; }
+.ed-madd .ed-ic svg { fill: none; }
+.ed-mlist.grid .ed-madd { right: 32px; top: 6px; bottom: auto; }
 .ed-mfoot { flex: none; font-size: 11px; color: var(--muted); line-height: 1.5; }
 /* 媒體庫顯示方式（列表／網格） */
 .ed-mbar { flex: none; display: flex; align-items: center; gap: 6px; }
@@ -323,7 +332,14 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
 .ed-tl-scroll[data-cursor="cut"] { cursor: crosshair; }
 .ed-app.dragging, .ed-app.dragging * { cursor: grabbing !important; }
 .ed-tl-inner { position: relative; min-width: 100%; }
-.ed-ruler-row { position: sticky; top: 0; z-index: 8; display: flex; height: 26px; background: var(--ed-ruler-bg); }
+.ed-tl-head { position: sticky; top: 0; z-index: 8; }
+.ed-ruler-row { display: flex; height: 26px; background: var(--ed-ruler-bg); }
+.ed-mk-row { display: flex; height: 18px; background: var(--ed-mk-bg, var(--ed-tl-bg)); }
+.ed-mk-corner {
+  position: sticky; left: 0; z-index: 9; flex: none; width: 150px; height: 18px; box-sizing: border-box; background: var(--ed-corner-bg); border-right: 1px solid var(--ed-line); border-bottom: 1px solid var(--ed-line);
+  font-size: 10.5px; line-height: 17px; text-align: center; color: var(--muted); font-weight: 600;
+}
+.ed-mklane { position: relative; flex: none; height: 18px; box-sizing: border-box; border-bottom: 1px solid var(--ed-line); cursor: pointer; }
 .ed-corner {
   position: sticky; left: 0; z-index: 9; flex: none; width: 150px; height: 26px; background: var(--ed-corner-bg); border-right: 1px solid var(--ed-line); border-bottom: 1px solid var(--ed-line);
   font: 600 12px/26px ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-align: center; color: var(--accent); font-variant-numeric: tabular-nums;
@@ -336,10 +352,11 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
 .ed-io-flag.in { border-right: none; margin-left: -1px; }
 .ed-io-flag.out { border-left: none; margin-left: -9px; }
 /* 標記：元素往左退半個旗子寬（6px），旗子的箭頭尖端剛好對準那一格（和播放頭一樣置中）；區間標記的底線從那一格畫到結束 */
-.ed-mk { position: absolute; bottom: 0; height: 16px; width: calc(var(--w, 0px) + 12px); margin-left: -6px; cursor: pointer; z-index: 3; }
+.ed-mk { position: absolute; top: 1px; height: 16px; width: calc(var(--w, 0px) + 12px); margin-left: -6px; cursor: pointer; z-index: 3; }
 .ed-mk::before { content: ""; position: absolute; left: 0; top: 0; width: 12px; height: 14px; background: var(--c); clip-path: polygon(0 0, 100% 0, 100% 62%, 50% 100%, 0 62%); }
 .ed-mk::after { content: ""; position: absolute; left: 6px; bottom: 0; right: 6px; height: 3px; background: var(--c); opacity: .55; border-radius: 2px; }
 .ed-mk:hover::before { filter: brightness(.88); }
+.ed-mk-name { position: absolute; left: 14px; top: 1px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; line-height: 13px; color: var(--ed-text, inherit); pointer-events: none; }
 .ed-ph-head { position: absolute; left: -7px; top: 3px; width: 14px; height: 18px; background: var(--ed-playhead); clip-path: polygon(0 0, 100% 0, 100% 58%, 50% 100%, 0 58%); z-index: 5; pointer-events: none; will-change: transform; }
 .ed-track { display: flex; position: relative; border-bottom: 1px solid var(--ed-line); }
 .ed-th {
@@ -441,7 +458,7 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
 
 /* 覆蓋層（播放頭、吸附線…）：不接收滑鼠 */
 .ed-overlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 6; overflow: hidden; }
-.ed-playhead { position: absolute; left: 0; top: 26px; bottom: 0; width: 0; border-left: 2px solid var(--ed-playhead); margin-left: -1px; will-change: transform; }
+.ed-playhead { position: absolute; left: 0; top: 44px; bottom: 0; width: 0; border-left: 2px solid var(--ed-playhead); margin-left: -1px; will-change: transform; }
 .ed-snapline, .ed-bladeline, .ed-dropline { position: absolute; left: 0; bottom: 0; width: 0; will-change: transform; }
 .ed-snapline { border-left: 1px dashed #f59e0b; }
 .ed-bladeline { border-left: 1.5px solid var(--ed-playhead); }
@@ -452,7 +469,7 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
 .ed-edgetc[data-edge="start"] { transform: translate(calc(-100% - 6px), -50%); }
 .ed-edgetc[hidden] { display: none; }
 .ed-marquee { position: absolute; border: 1px solid var(--accent); background: var(--ed-marq); }
-.ed-tl-empty { position: absolute; left: 170px; top: 40px; max-width: 420px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.ed-tl-empty { position: absolute; left: 170px; top: 58px; max-width: 420px; font-size: 13px; line-height: 1.6; color: var(--muted); }
 .ed-tl-foot { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 12px; border-top: 1px solid var(--ed-line); font-size: 11.5px; min-height: 26px; }
 .ed-status { color: var(--muted); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ed-status[data-kind="error"] { color: var(--ed-err-fg); }

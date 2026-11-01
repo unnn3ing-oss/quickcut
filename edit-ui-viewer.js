@@ -98,7 +98,7 @@
     tr.append(group, jkl, vm, time);
 
     const empty = $('edEmpty');
-    empty.innerHTML = '<div class="ed-empty-box"><strong>把影片、音訊或圖片拖進來開始剪輯</strong><span>拖到左側「媒體」，或直接拖到這裡；也可以按下面的按鈕選檔案。<br><em class="ed-pro-only">雙擊素材先預覽，再按 F10（覆蓋）、F9（插入）或「加到結尾」放上時間軸。</em><em class="ed-simple-only">加進來的影片、照片會自動依序排到時間軸，音樂放到「音樂」軌。</em></span></div>';
+    empty.innerHTML = '<div class="ed-empty-box"><strong>把影片、音訊或圖片拖進來開始剪輯</strong><span>拖到左側「媒體」，或直接拖到這裡；也可以按下面的按鈕選檔案。<br><em class="ed-pro-only">雙擊素材先預覽，再按 F10（覆蓋）、F9（插入）或「加到結尾」放上時間軸。</em><em class="ed-simple-only">加進來的素材先放在媒體庫，按「排到時間軸」依序排好（音樂放到「音樂」軌），或按素材上的「＋」一個一個加。</em></span></div>';
     const eb = el('button', 'ed-btn primary', '選擇檔案'); eb.type = 'button';
     eb.addEventListener('click', () => $('edFile').click());
     empty.firstChild.appendChild(eb);

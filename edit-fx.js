@@ -89,7 +89,8 @@
     const st = stickerState(kind, (fInClip || 0) / fps, amt);
     if (!st) return m;
     // 以片段畫面中心 C 為軸：先縮放、旋轉，再位移（位移單位依輸出短邊換算，短邊 1080 時為像素）
-    const cx0 = center ? center[0] : srcW / 2, cy0 = center ? center[1] : srcH / 2;
+    const cc = center || contentCenter(clip, srcW, srcH, outW, outH, fInClip);
+    const cx0 = cc[0], cy0 = cc[1];
     const Cx = m[0] * cx0 + m[2] * cy0 + m[4], Cy = m[1] * cx0 + m[3] * cy0 + m[5];
     const u = Math.min(outW, outH) / 1080, rad = st.rot * Math.PI / 180;
     const la = Math.cos(rad) * st.s, lb = Math.sin(rad) * st.s, lc = -lb, ld = la;
@@ -124,6 +125,21 @@
     }
     return null;
   }
+  // 物件本身的中心（來源座標）：字幕＝字幕那一塊的中心；影像／色塊＝裁切後範圍的中心。
+  //   4.50 起縮放、旋轉、翻轉都以這個中心（再加上錨點）為軸心，字幕不在畫面正中間、或裁掉一邊時也不會繞著畫面中心轉。
+  const titleBoxCache = new WeakMap();      // clip.title 物件 → { w, h, box }（core 改字幕時會換新物件，所以用物件當 key 就不會拿到舊值）
+  function contentCenter(clip, srcW, srcH, outW, outH, fInClip) {
+    if (clip && clip.type === 'title') {
+      if (!clip.title) return [srcW / 2, srcH / 2];
+      let e = titleBoxCache.get(clip.title);
+      if (!e || e.w !== outW || e.h !== outH) { e = { w: outW, h: outH, box: titleLocalBox(clip, outW, outH) }; titleBoxCache.set(clip.title, e); }
+      const b = e.box;
+      return [b[0] + b[2] / 2, b[1] + b[3] / 2];
+    }
+    if (!clip || !clip.video || !clip.video.crop && !(clip.keyframes && Object.keys(clip.keyframes).some(k => k.startsWith('video.crop.')))) return [srcW / 2, srcH / 2];
+    const r = cropRect(clip, srcW, srcH, fInClip || 0);
+    return [r.sx + r.sw / 2, r.sy + r.sh / 2];
+  }
   function baseMatrix(clip, srcW, srcH, outW, outH, fInClip) {
     const g = n => getParam(clip, 'video.transform.' + n, fInClip);
     const fit = fitRect(srcW, srcH, outW, outH, getParam(clip, 'video.fit', fInClip));
@@ -131,9 +147,14 @@
     const linked = g('zoomLinked') !== false;
     const zy = linked ? zx : num(g('zoomY'), 1);
     const fh = g('flipH') ? -1 : 1, fv = g('flipV') ? -1 : 1;
-    const ax = num(g('anchorX'), 0), ay = num(g('anchorY'), 0);
+    let ax = num(g('anchorX'), 0), ay = num(g('anchorY'), 0);
     const px = num(g('posX'), 0), py = num(g('posY'), 0);
     const rad = num(g('rotation'), 0) * Math.PI / 180;
+    // 軸心移到物件中心（沒有縮放／旋轉／翻轉時軸心在哪都一樣，省掉計算）
+    if (rad !== 0 || zx !== 1 || zy !== 1 || fh < 0 || fv < 0) {
+      const cc = contentCenter(clip, srcW, srcH, outW, outH, fInClip);
+      ax += fit.sx * (cc[0] - srcW / 2); ay += fit.sy * (cc[1] - srcH / 2);
+    }
     const cos = Math.cos(rad), sin = Math.sin(rad);
     // L = R · S · F
     const l00 = cos * zx * fh, l01 = -sin * zy * fv;
@@ -328,8 +349,91 @@
     return s.canvas;
   }
 
-  function drawClipVisual(ctx, clip, source, srcW, srcH, outW, outH, fInClip, fps) {
+  // ---------------------------------------------------------------------------------
+  // 色彩還原＋LUT（4.50）：在濾鏡之前。順序：色彩還原（自動色階＋白平衡）→ LUT → 濾鏡（video.look）
+  // ---------------------------------------------------------------------------------
+  // 色彩還原：把畫面縮成 64×36 統計每個色版的 1%／99% 亮度與平均，
+  //   ① 各色版拉開到 0～1（自動色階，偏色、霧霧的畫面會變清楚）② 灰色世界白平衡（三個色版平均拉到一樣，去掉偏色）。
+  //   每一格各自算（同一格永遠一樣，預覽和匯出一致）；色階最多拉 4 倍、白平衡每色版 0.7～1.4 倍，避免暗場被放大雜訊。
+  //   回傳 out = in × mul + add（0～1）的 { mul:[r,g,b], add:[r,g,b] }；amt 0～1 是強度。看不出來（全黑、讀不到像素）回 null。
+  function restoreFromStats(hist, means, count, amt) {
+    if (!(count > 0) || !(amt > 0)) return null;
+    const pct = (h, q) => { let acc = 0; const lim = q * count; for (let i = 0; i < 256; i++) { acc += h[i]; if (acc >= lim) return i / 255; } return 1; };
+    const lo = [], hi = [], m = [];
+    for (let c = 0; c < 3; c++) {
+      let l = pct(hist[c], 0.01), h = pct(hist[c], 0.99);
+      if (h - l < 0.25) { const mid = (h + l) / 2; l = Math.max(0, mid - 0.125); h = Math.min(1, l + 0.25); }
+      lo.push(l); hi.push(h);
+      m.push(clamp((means[c] / 255 - l) / (h - l), 0.02, 1));
+    }
+    const M = (m[0] + m[1] + m[2]) / 3;
+    const mul = [], add = [];
+    for (let c = 0; c < 3; c++) {
+      const g = clamp(M / m[c], 0.7, 1.4), k = g / (hi[c] - lo[c]);
+      mul.push(1 + (k - 1) * amt); add.push(-lo[c] * k * amt);
+    }
+    return { mul, add };
+  }
+  let statCanvas = null;
+  function restoreParams(source, srcW, srcH, amt) {
+    if (!(amt > 0)) return null;
+    try {
+      if (!statCanvas) { const cv = canvasFactory(64, 36); statCanvas = { canvas: cv, ctx: cv.getContext('2d', { willReadFrequently: true }) }; }
+      const c = statCanvas.ctx;
+      if (!c || typeof c.getImageData !== 'function') return null;
+      c.clearRect(0, 0, 64, 36);
+      c.drawImage(source, 0, 0, srcW, srcH, 0, 0, 64, 36);
+      const d = c.getImageData(0, 0, 64, 36).data;
+      const hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)], sum = [0, 0, 0];
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] < 128) continue;              // 去背圖的透明處不算
+        n++;
+        for (let k = 0; k < 3; k++) { hist[k][d[i + k]]++; sum[k] += d[i + k]; }
+      }
+      return restoreFromStats(hist, sum.map(v => (n ? v / n : 0)), n, amt);
+    } catch (_) { return null; }       // 讀不到像素（跨來源等）就不調
+  }
+  // CPU 版（沒有 WebGL 時）：直接改像素。lut＝{ size, data }、la＝LUT 強度 0～1、rp＝restoreParams 的結果
+  function gradePixels(d, rp, lut, la) {
+    const C = root.QPTEdit && root.QPTEdit.core;
+    for (let i = 0; i < d.length; i += 4) {
+      let r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
+      if (rp) { r = clamp(r * rp.mul[0] + rp.add[0], 0, 1); g = clamp(g * rp.mul[1] + rp.add[1], 0, 1); b = clamp(b * rp.mul[2] + rp.add[2], 0, 1); }
+      if (lut && la > 0 && C) {
+        const v = C.lutLookup(lut.data, lut.size, r, g, b);
+        r += (v[0] - r) * la; g += (v[1] - g) * la; b += (v[2] - b) * la;
+      }
+      d[i] = Math.round(r * 255); d[i + 1] = Math.round(g * 255); d[i + 2] = Math.round(b * 255);
+    }
+    return d;
+  }
+  function gradeSource(clip, source, srcW, srcH, project) {
+    const v = clip && clip.video;
+    if (!v) return source;
+    const C = root.QPTEdit && root.QPTEdit.core;
+    const lut = v.lut && C && C.lutData ? C.lutData(project, v.lut) : null;
+    const la = lut ? clamp(num(v.lutAmt, 100), 0, 100) / 100 : 0;
+    const ra = clamp(num(v.restore, 0), 0, 100) / 100;
+    if (!(la > 0) && !(ra > 0)) return source;
+    const rp = ra > 0 ? restoreParams(source, srcW, srcH, ra) : null;
+    if (!rp && !(la > 0)) return source;
+    const G = root.QPTEdit && root.QPTEdit.fxgl;
+    const out = G && G.grade ? G.grade(source, srcW, srcH, { rp, lut: la > 0 ? lut : null, lutAmt: la }) : null;
+    if (out) return out;
+    try {                                      // 沒有 WebGL：CPU 慢慢算（大畫面會比較慢，但結果一樣）
+      const s = scratch('grade', srcW, srcH), c = s.ctx;
+      c.drawImage(source, 0, 0, srcW, srcH);
+      const img = c.getImageData(0, 0, Math.round(srcW), Math.round(srcH));
+      gradePixels(img.data, rp, la > 0 ? lut : null, la);
+      c.putImageData(img, 0, 0);
+      return s.canvas;
+    } catch (_) { return source; }
+  }
+
+  function drawClipVisual(ctx, clip, source, srcW, srcH, outW, outH, fInClip, fps, project) {
     if (!source || !(srcW > 0) || !(srcH > 0)) return;
+    source = gradeSource(clip, source, srcW, srcH, project);
     source = lookSource(clip, source, srcW, srcH);
     if (getParam(clip, 'video.fit', fInClip || 0) === 'blur') drawBlurBackground(ctx, clip, source, srcW, srcH, outW, outH, fInClip || 0);
     drawBox(ctx, clip, srcW, srcH, outW, outH, fInClip || 0, (c, r) => {
@@ -1436,8 +1540,10 @@
     }
     const m = clipMatrix(clip, srcW, srcH, W, H, f);
     const pts = [[box[0], box[1]], [box[0] + box[2], box[1]], [box[0] + box[2], box[1] + box[3]], [box[0], box[1] + box[3]]].map(([x, y]) => applyMatrix(m, x, y));
+    // 軸心：物件中心（套用變形後）＋錨點（錨點不受縮放／旋轉影響）
     const g = n => num(getParam(clip, 'video.transform.' + n, f), 0);
-    return { pts, m, pivot: [g('anchorX') + W / 2 + g('posX'), g('anchorY') + H / 2 + g('posY')] };
+    const cc = contentCenter(clip, srcW, srcH, W, H, f), fit = fitRect(srcW, srcH, W, H, getParam(clip, 'video.fit', f));
+    return { pts, m, pivot: [g('anchorX') + fit.sx * (cc[0] - srcW / 2) + W / 2 + g('posX'), g('anchorY') + fit.sy * (cc[1] - srcH / 2) + H / 2 + g('posY')] };
   }
   // 字幕在輸出畫面上佔的範圍（套用變形後的外接矩形），給預覽點選用。沒有字幕回 null。
   function titleBounds(clip, outW, outH, fInClip) {
@@ -1761,7 +1867,8 @@
       // kfReset：重設時順便清掉這一類參數的關鍵影格（例如 'video.transform.'），交給詳細內容一次做完（一筆復原）
       b.addEventListener('click', () => {
         const x = st.ctx;
-        if (def.kfReset && x && x.kf) x.kf.reset(def.kfReset, def.patch(st.subject), st.subject);
+        if (def.run) def.run(st.subject, x);
+        else if (def.kfReset && x && x.kf) x.kf.reset(def.kfReset, def.patch(st.subject), st.subject);
         else emit(def.patch(st.subject), false);
       });
       row.append(b);
@@ -2058,6 +2165,23 @@
       },
     },
     {
+      // 4.50：色彩還原＋LUT（只給影片／圖片片段）。LUT 選單的選項來自專案（ctx.luts），換了清單就重建這一區
+      id: 'color', title: '色彩',
+      appliesTo: c => !!c && !isTransition(c) && !!c.video && c.type === 'media',
+      render(host, clip, commit, ctx) {
+        const luts = (ctx && ctx.luts) || {};
+        const opts = [['', '無'], ...Object.entries(luts).map(([id, r]) => [id, `${r.name}（${r.size} 點）`])];
+        buildSection(host, 'color:' + clip.id + ':' + Object.keys(luts).join(','), clip, commit, [
+          { type: 'num', label: '色彩還原', get: c => num(c.video && c.video.restore, 0), def: 0, min: 0, max: 100, dpp: 0.5, dec: 0, unit: '%', slider: [0, 100], sliderStep: 1, patch: v => ({ video: { restore: v } }) },
+          { type: 'hint', label: '色彩還原：自動拉開色階、校正偏色（白平衡），適合手機或舊影片顏色灰灰、偏黃偏藍的畫面。' },
+          { type: 'select', label: 'LUT', options: opts, get: c => (c.video && c.video.lut && luts[c.video.lut] ? c.video.lut : ''), patch: v => ({ video: { lut: v || null } }) },
+          { type: 'num', label: 'LUT 強度', show: c => !!(c.video && c.video.lut && luts[c.video.lut]), get: c => num(c.video && c.video.lutAmt, 100), def: 100, min: 0, max: 100, dpp: 0.5, dec: 0, unit: '%', slider: [0, 100], sliderStep: 1, patch: v => ({ video: { lutAmt: v } }) },
+          { type: 'btn', label: '載入 LUT 檔（.cube）…', run: c => ctx && ctx.loadLut && ctx.loadLut(c) },
+          { type: 'btn', label: '從專案移除這個 LUT', show: c => !!(c.video && c.video.lut && luts[c.video.lut]), run: c => ctx && ctx.removeLut && ctx.removeLut(c.video.lut) },
+        ], ctx);
+      },
+    },
+    {
       id: 'crop', title: '裁切',
       appliesTo: c => !!c && !isTransition(c) && !!c.video,
       render(host, clip, commit, ctx) {
@@ -2191,7 +2315,7 @@
   const api = {
     DEFAULT_TRANSFORM, DEFAULT_CROP, defaultTransform, defaultCrop, defaultVideo,
     fitRect, clipMatrix, applyMatrix, cropRect, getParam, FIT_OPTIONS, BG_BLUR_DEFAULT,
-    drawClipVisual, drawSolid, drawTitle, titleBounds, clipQuad, LOOKS, LOOK_OPTIONS,
+    drawClipVisual, drawSolid, drawTitle, titleBounds, clipQuad, LOOKS, LOOK_OPTIONS, restoreFromStats, gradePixels, gradeSource,
     TRANSITIONS, ease, TITLE_PRESETS, TITLE_STYLES, TITLE_STYLE_GROUPS, SHAPES, GRADIENTS, TEXT_FX, TEXT_LOOP, TEXT_OUT, BG_TAILS, STICKER_FX, STICKER_OPTIONS, stickerState, textOutState,
     fxPlan, fxAt, makeTitle, normTitle, parseAccent, buildAccent, parseSrt, formatSrt, fitCues, planSubtitleMark, wrapText, parseColor, formatColor,
     ready, get fontLoaded() { return defaultFontLoaded(); }, FONTS, loadFont, onFontLoad, fontIsLoaded,

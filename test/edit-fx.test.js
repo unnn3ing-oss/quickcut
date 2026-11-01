@@ -154,6 +154,22 @@ test('parseColor／formatColor', () => {
   assert.deepEqual(fx.parseColor(fx.formatColor('#123456', 0.25)), { hex: '#123456', a: 0.25 });
 });
 
+// ---- 4.50：縮放／旋轉以物件中心為軸心 ----
+test('物件中心軸心：裁切後的中心、字幕那一塊的中心；clipQuad 的 pivot 一致', () => {
+  const W = 200, H = 100;
+  const c = clipOf({ rotation: 90 });
+  c.video.crop.left = 0.5;                     // 看得到的是右半邊，中心 (150, 50)
+  const m = fx.clipMatrix(c, W, H, W, H, 0);
+  const p = fx.applyMatrix ? fx.applyMatrix(m, 150, 50) : [m[0] * 150 + m[2] * 50 + m[4], m[1] * 150 + m[3] * 50 + m[5]];
+  assert.deepEqual(p.map(v => +v.toFixed(6)), [150, 50], '裁切後的中心旋轉後不動');
+  const t = { id: 't', type: 'title', start: 0, duration: 30, title: { text: 'AB', x: 0.25, y: 0.8, size: 40 }, video: { transform: { zoomX: 2, zoomY: 2, zoomLinked: true, posX: 0, posY: 0, rotation: 30, anchorX: 0, anchorY: 0, opacity: 1 } } };
+  fx._setCanvasFactory((w, h) => { const cx = mockCtx(); return { width: w, height: h, getContext: () => cx }; });
+  const q = fx.clipQuad(t, { width: 1920, height: 1080, mediaInfo: {} }, 0);
+  const cx = (q.pts[0][0] + q.pts[2][0]) / 2, cy = (q.pts[0][1] + q.pts[2][1]) / 2;
+  assert.ok(Math.abs(cx - q.pivot[0]) < 1e-6 && Math.abs(cy - q.pivot[1]) < 1e-6, `字幕的四角中心＝軸心 ${[cx, cy]} vs ${q.pivot}`);
+  assert.ok(Math.abs(q.pivot[0] - 1920 * 0.25) < 1e-6 && Math.abs(q.pivot[1] - 1080 * 0.8) < 1e-6, '軸心在字幕位置，不是畫面中心');
+});
+
 // ---- drawClipVisual / drawSolid ----
 test('drawClipVisual：套矩陣、裁切來源、不透明度', () => {
   const ctx = mockCtx();
@@ -161,7 +177,8 @@ test('drawClipVisual：套矩陣、裁切來源、不透明度', () => {
   c.video.crop.left = 0.5;
   fx.drawClipVisual(ctx, c, { tag: 'src' }, 200, 100, 200, 100, 0);
   const [, ...args] = calls(ctx, 'transform')[0];
-  assert.deepEqual(args.map(v => +v.toFixed(6)), [2, 0, 0, 2, -100, -50]);
+  // 4.50：以裁切後範圍的中心（x＝150）為軸心放大 2 倍 → e＝2·(0−150)+150＝−150
+  assert.deepEqual(args.map(v => +v.toFixed(6)), [2, 0, 0, 2, -150, -50]);
   const [, , sx, sy, sw, sh] = calls(ctx, 'drawImage')[0];
   assert.deepEqual([sx, sy, sw, sh], [100, 0, 100, 100]);
   assert.ok(ctx.__log.some(e => e[0] === 'set:globalAlpha' && e[1] === 0.5));
@@ -374,8 +391,8 @@ test('drawTitle：不透明度為 0 不畫', () => {
 // ---- 檢查器（資料面；DOM 部分在 e2e 測） ----
 test('inspector.sections：id、標題與適用對象', () => {
   const s = fx.inspector.sections;
-  assert.deepEqual(s.map(x => x.id), ['transform', 'crop', 'title', 'titleLook', 'titleAnim', 'transition']);
-  assert.deepEqual(s.map(x => x.title), ['變形', '裁切', '字幕文字', '字幕外觀', '字幕動畫', '轉場']);
+  assert.deepEqual(s.map(x => x.id), ['transform', 'color', 'crop', 'title', 'titleLook', 'titleAnim', 'transition']);
+  assert.deepEqual(s.map(x => x.title), ['變形', '色彩', '裁切', '字幕文字', '字幕外觀', '字幕動畫', '轉場']);
   const by = id => s.find(x => x.id === id);
   const media = { id: 'a', type: 'media', video: fx.defaultVideo() };
   const title = titleClip('static', 'x');
@@ -383,6 +400,7 @@ test('inspector.sections：id、標題與適用對象', () => {
   const tr = { id: 'tr1', trackId: 't', leftClipId: 'a', rightClipId: null, type: 'wipe', duration: 15 };
   assert.ok(by('transform').appliesTo(media) && by('transform').appliesTo(title) && !by('transform').appliesTo(audioOnly) && !by('transform').appliesTo(tr));
   assert.ok(by('crop').appliesTo(media) && !by('crop').appliesTo(tr));
+  assert.ok(by('color').appliesTo(media) && !by('color').appliesTo(title) && !by('color').appliesTo(audioOnly) && !by('color').appliesTo(tr), '色彩只給影片／圖片');
   for (const id of ['title', 'titleLook', 'titleAnim']) assert.ok(by(id).appliesTo(title) && !by(id).appliesTo(media) && !by(id).appliesTo(tr), id);
   assert.ok(by('transition').appliesTo(tr) && !by('transition').appliesTo(media));
 });
@@ -863,4 +881,31 @@ test('波浪文字：每格每個字的位置不同，整段都在動', () => {
   const a = ys(100), b = ys(103), c = ys(107);
   assert.notDeepEqual(a, b); assert.notDeepEqual(b, c); assert.notDeepEqual(a, c);
   assert.equal(calls((() => { const ctx = mockCtx(); fx.drawTitle(ctx, titleClip('static', '波浪來', 300, { textFx: 'wave' }), 1000, 1000, 250, 30); return ctx; })(), 'fillText').length, 3, '很後面的影格仍然畫出每個字');
+});
+
+// ---- 4.50：色彩還原＋LUT（CPU 版，WebGL 版在 e2e 比對）----
+test('色彩還原：偏藍又霧霧的畫面 → 色階拉開、三色平均拉齊；amt＝0 不調', () => {
+  // 每色版 lo/hi：R 60~180、G 60~180、B 100~240（偏藍）
+  const mk = (lo, hi) => { const h = new Uint32Array(256); for (let v = lo; v <= hi; v++) h[v] = 10; return h; };
+  const hist = [mk(60, 180), mk(60, 180), mk(100, 240)], n = 121 * 10, mean = [120, 120, 170];
+  const rp = fx.restoreFromStats(hist, mean, n, 1);
+  const apply = (v, c) => v / 255 * rp.mul[c] + rp.add[c];
+  assert.ok(apply(60, 0) < 0.05 && apply(180, 0) > 0.9, `R 色階拉開 ${apply(60, 0)} ${apply(180, 0)}`);
+  const outMean = [0, 1, 2].map(c => apply(mean[c], c));
+  assert.ok(Math.max(...outMean) - Math.min(...outMean) < 0.02, `平均拉齊 ${outMean}`);
+  assert.equal(fx.restoreFromStats(hist, mean, n, 0), null);
+  const half = fx.restoreFromStats(hist, mean, n, 0.5);
+  assert.ok(Math.abs(half.mul[0] - (1 + (rp.mul[0] - 1) / 2)) < 1e-9, '強度 50%＝一半');
+});
+test('gradePixels：LUT 強度、色彩還原都套在像素上', () => {
+  const n = 2, data = new Uint8Array([255, 255, 255, 0, 255, 255, 255, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255, 0, 255, 0, 0, 0, 0, 0]);   // 反相 LUT
+  const px = new Uint8ClampedArray([255, 0, 0, 255, 0, 128, 255, 255]);
+  fx.gradePixels(px, null, { size: n, data }, 1);
+  assert.deepEqual([...px.slice(0, 3)], [0, 255, 255], '紅 → 青');
+  const px2 = new Uint8ClampedArray([200, 100, 50, 255]);
+  fx.gradePixels(px2, null, { size: n, data }, 0.5);
+  assert.deepEqual([...px2.slice(0, 3)], [Math.round(255 * (200 / 255 + (55 / 255 - 200 / 255) * 0.5)), 128, Math.round(255 * (50 / 255 + (205 / 255 - 50 / 255) * 0.5))], '強度 50%');
+  const px3 = new Uint8ClampedArray([100, 100, 100, 255]);
+  fx.gradePixels(px3, { mul: [2, 1, 1], add: [0, 0.1, 0] }, null, 0);
+  assert.deepEqual([...px3.slice(0, 3)], [200, 126, 100], '色彩還原 mul／add');
 });

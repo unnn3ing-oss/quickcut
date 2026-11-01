@@ -133,6 +133,39 @@
   }
 
   // 詳細內容的關鍵影格操作（edit-fx 的 ◇ 按鈕、工具列、一鍵動畫會呼叫）。f 一律是「播放頭在片段內第幾格」。
+  // ---- LUT（4.50）：選 .cube 檔 → 解析 → 存進專案，套到選取的影片／圖片片段（一筆復原）----
+  function lutTargets(clip) {
+    const ids = selIds().filter(id => { const k = clipOf(id); return k && k.video && k.type === 'media'; });
+    return ids.length ? ids : clip ? [clip.id] : [];
+  }
+  function loadLut(clip) {
+    const inp = el('input'); inp.type = 'file'; inp.accept = '.cube'; inp.hidden = true; inp.id = 'edLutFile';
+    inp.addEventListener('change', async () => {
+      const f = inp.files && inp.files[0];
+      inp.remove();
+      if (f) await applyLutFile(f, lutTargets(clip));
+    });
+    doc.body.appendChild(inp);
+    inp.click();
+  }
+  async function applyLutFile(file, ids) {
+    let text;
+    try { text = await file.text(); } catch (_) { say('讀不到 LUT 檔', 'error'); return null; }
+    const lut = C.parseCube(text, file.name);
+    if (!lut.ok) { say(lut.reason, 'error'); return lut; }
+    return op('套用 LUT', p => {
+      const a = C.addLut(p, lut);
+      if (!a.ok) return a;
+      return ids.length ? C.setClipProps(p, ids, { video: { lut: a.id, lutAmt: 100 } }) : a;
+    }, `已套用 LUT「${lut.name}」${ids.length > 1 ? `到 ${ids.length} 個片段` : ''}`);
+  }
+  function removeLut(id) {
+    const r = state.project.luts && state.project.luts[id];
+    if (!r) return;
+    op('移除 LUT', p => C.removeLut(p, id), `已從專案移除 LUT「${r.name}」（用到它的片段改回無）`);
+  }
+  UI.applyLutFile = applyLutFile;
+
   function kfCtx(c) {
     const f = state.playhead - c.start;
     const inRange = state.mode === 'timeline' && f >= 0 && f < c.duration;
@@ -140,6 +173,8 @@
     const need = () => { if (!inRange) { say('先把播放頭移到這個片段上', 'error'); return false; } return true; };
     return {
       f, inRange,
+      luts: state.project.luts || {},
+      loadLut, removeLut,
       kf: {
         // ◇：這格有關鍵影格就刪掉，沒有就用目前看到的值新增
         toggle(paths, clip) {
@@ -485,7 +520,7 @@
         ['xform', '變形', fx('transform', 'crop')], ['info', '資訊', [insp.info]]] };
     }
     const kind = c.video ? c.type : 'audio';
-    return { kind, pages: [['xform', '變形', fx('transform')], ['crop', '裁切', fx('crop')], ['audio', '音訊', [audio]], ['speed', '速度', [speed]], ['info', '資訊', [insp.info]]] };
+    return { kind, pages: [['xform', '變形', fx('transform')], ['color', '色彩', fx('color')], ['crop', '裁切', fx('crop')], ['audio', '音訊', [audio]], ['speed', '速度', [speed]], ['info', '資訊', [insp.info]]] };
   }
   function loadTabOf() {
     if (!insp.tabOf) { insp.tabOf = {}; try { insp.tabOf = JSON.parse(root.localStorage.getItem('qc-itab')) || {}; } catch (_) { /* 讀不到就用預設 */ } }

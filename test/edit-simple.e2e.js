@@ -1,5 +1,5 @@
 // =====================================================================================
-// 簡易模式（4.00）的瀏覽器流程測試：預設介面、開始畫面、三步教學、匯入自動排到時間軸、
+// 簡易模式（4.00）的瀏覽器流程測試：預設介面、開始畫面、三步教學、匯入後按「排到時間軸」、
 // 快速調整（畫面／動態／轉場／速度／音量／濾鏡；字幕的文字／樣式／特效／位置／大小）、大按鈕工具列、簡易／專業切換、白話軌道名稱。
 //
 // 執行：node test/edit-simple.e2e.js
@@ -137,7 +137,7 @@ async function main() {
   ok(await page.isVisible('#edUiMode'), '頁首有「簡易｜專業」切換');
   eq(await pressed(page), [['simple', 'true'], ['pro', 'false']], '切換鈕：簡易 aria-pressed＝true');
   eq(await page.evaluate(() => [...document.querySelectorAll('#edSimpleBar .ed-sbtn')].map(b => b.id)),
-    ['edSAdd', 'edSCut', 'edSDel', 'edSGaps', 'edSUndo', 'edSRedo', 'edSText', 'edSSticker', 'edSMusic', 'edSBeat', 'edSAuto'], '大按鈕工具列的按鈕');
+    ['edSAdd', 'edSPlace', 'edSCut', 'edSDel', 'edSGaps', 'edSUndo', 'edSRedo', 'edSText', 'edSSticker', 'edSMusic', 'edSBeat', 'edSAuto'], '大按鈕工具列的按鈕');
   eq(await ls(page, 'qc-ui'), null, '還沒切換過：不寫 qc-ui');
   eq(await proj(page, p => p.aspect), 'source', '專案一開始是「依素材」比例');
   await shot(page, 'S1-start');
@@ -166,11 +166,15 @@ async function main() {
   ok(!(await page.$('#edTip')), '三步走完：泡泡消失');
   eq(await ls(page, 'qc-tips'), 'done', '走完教學：qc-tips＝done');
 
-  // ---------------------------------------------------------------- 4. 匯入：自動排到時間軸
-  console.log('匯入素材自動排到時間軸');
+  // ---------------------------------------------------------------- 4. 匯入只進媒體庫；按「排到時間軸」才排（4.50）
+  console.log('匯入素材 → 排到時間軸');
   await page.setInputFiles('#edFile', [FILES.land, FILES.port, FILES.mute, FILES.still, FILES.music].map(f => path.join(fix, f)));
-  await page.waitForFunction(() => window.QPTEdit.render.media.list().length === 5 && Object.keys(window.QPTEdit.ui.state.project.clips).length >= 7, null, { timeout: 90000 });
+  await page.waitForFunction(() => window.QPTEdit.render.media.list().length === 5 && !window.QPTEdit.ui.state.importing, null, { timeout: 90000 });
   await settle(page);
+  eq(await proj(page, p => Object.keys(p.clips).length), 0, '匯入不自動排到時間軸');
+  eq(await page.locator('.ed-mitem .ed-madd').count(), 5, '每個素材都有「＋」');
+  await page.click('#edSPlace'); await settle(page);
+  await page.waitForFunction(() => Object.keys(window.QPTEdit.ui.state.project.clips).length >= 7, null, { timeout: 30000 });
   let T = await byTrack(page);
   eq(Object.keys(T), ['V1', 'V2', 'A1', 'A2'], '新專案本來就有 V1／V2／A1／A2，不會多加軌道');
   eq(T.V1.map(c => c.name), [FILES.land, FILES.port, FILES.mute, FILES.still], '影片／圖片依序排在 V1');
@@ -214,13 +218,13 @@ async function main() {
   let q = await quickState(page);
   ok(q.shown, '選取影片片段：顯示快速調整');
   ok(await page.evaluate(() => document.querySelector('.ed-insp-body').hidden), '詳細內容的一般區段藏起來');
-  eq(Object.keys(q.secs), ['edQFit', 'edQMotion', 'edQTrans', 'edQSpeed', 'edQVol', 'edQLook'], '影片片段：畫面／動態／轉場／速度／音量／濾鏡');
-  eq(q.secs, { edQFit: 'blur', edQMotion: 'none', edQTrans: 'none', edQSpeed: 'normal', edQVol: '100', edQLook: 'none' }, '目前值：模糊背景、不動、直接切、正常、100%、原色');
+  eq(Object.keys(q.secs), ['edQFit', 'edQMotion', 'edQTrans', 'edQSpeed', 'edQVol', 'edQLook', 'edQRestore'], '影片片段：畫面／動態／轉場／速度／音量／濾鏡／色彩還原');
+  eq(q.secs, { edQFit: 'blur', edQMotion: 'none', edQTrans: 'none', edQSpeed: 'normal', edQVol: '100', edQLook: 'none', edQRestore: '0' }, '目前值：模糊背景、不動、直接切、正常、100%、原色、色彩還原關');
   ok(q.aria, '.on 與 aria-checked 一致');
   ok((await page.textContent('#edInspHead')).startsWith('快速調整'), '標題是「快速調整」');
   eq(await page.evaluate(() => [...document.querySelectorAll('#edQuick .ed-qsec')].map(s => [s.id, [...s.querySelectorAll('.ed-qchip')].map(b => b.dataset.k)]).filter(x => x[1].length)),
     [['edQFit', ['blur', 'fill', 'fit']], ['edQMotion', ['none', 'zoomIn', 'zoomOut', 'panLeft', 'panRight']], ['edQTrans', ['none', 'crossDissolve', 'push', 'flash', 'zoom']],
-      ['edQSpeed', ['normal', 'slow', 'bullet', 'fast']], ['edQLook', ['none', 'warm', 'cool', 'mono', 'mist', 'film']]], '各區段的選項');
+      ['edQSpeed', ['normal', 'slow', 'bullet', 'fast']], ['edQLook', ['none', 'warm', 'cool', 'mono', 'mist', 'film']], ['edQRestore', ['0', '50', '100']]], '各區段的選項');
   await shot(page, 'S3-quick');
 
   // 畫面
@@ -321,13 +325,18 @@ async function main() {
   await page.click('#edSUndo'); await page.click('#edSUndo'); await settle(page);
   ok(['none', undefined, null].includes((await clip(page, land.id)).video.look), '復原兩次：回到原色');
   eq((await quickState(page)).secs.edQLook, 'none', 'chip：原色');
+  // 色彩還原（4.50）
+  await chip(page, 'edQRestore', '50');
+  eq((await clip(page, land.id)).video.restore, 50, '色彩還原：自然 → video.restore＝50');
+  await page.click('#edSUndo'); await settle(page);
+  ok(!(await clip(page, land.id)).video.restore, '按「復原」：色彩還原關');
 
   // 其他種類的片段
   await page.click(`.ed-clip[data-clip="${still.id}"]`); await settle(page);
   q = await quickState(page);
-  eq(Object.keys(q.secs), ['edQFit', 'edQMotion', 'edQTrans', 'edQLook'], '圖片：沒有速度、音量');
+  eq(Object.keys(q.secs), ['edQFit', 'edQMotion', 'edQTrans', 'edQLook', 'edQRestore'], '圖片：沒有速度、音量');
   await page.click(`.ed-clip[data-clip="${mute.id}"]`); await settle(page);
-  eq(Object.keys((await quickState(page)).secs), ['edQFit', 'edQMotion', 'edQTrans', 'edQSpeed', 'edQLook'], '沒聲音的影片：沒有音量');
+  eq(Object.keys((await quickState(page)).secs), ['edQFit', 'edQMotion', 'edQTrans', 'edQSpeed', 'edQLook', 'edQRestore'], '沒聲音的影片：沒有音量');
   await page.click(`.ed-clip[data-clip="${music.id}"]`); await settle(page);
   eq(Object.keys((await quickState(page)).secs), ['edQSpeed', 'edQVol'], '音樂：只有速度、音量');
   ok((await page.textContent('#edQVol')).includes('音量') && !(await page.textContent('#edQVol')).includes('原聲'), '音樂片段的標籤是「音量」');
@@ -358,7 +367,7 @@ async function main() {
   await page.click('#edSDel'); await settle(page);
   T = await byTrack(page);
   ok(!T.V1.some(c => c.id === mute.id), '刪除：選取的片段不見了');
-  eq(T.V1.find(c => c.id === still.id).s, mute.s, '刪除是波紋刪除：後面的往前補');
+  eq(T.V1.find(c => c.id === still.id).s, still.s, '刪除預設留空：後面的不動');
   eq(await selNow(), [], '刪除後沒有選取');
   await page.click('#edSUndo'); await settle(page);
   eq((await byTrack(page)).V1.map(c => c.id), [land.id, port.id, mute.id, still.id], '復原：刪掉的片段回來');
@@ -462,6 +471,9 @@ async function main() {
   eq(await proj(page, p => p.tracks.map(t => t.name)), ['V1', 'V2', 'A1'], '（先刪掉 A2）');
   if (await page.$('#edTip')) { await page.click('#edTip .ed-linkbtn'); await settle(page); }
   await page.setInputFiles('#edFile', [path.join(fix, FILES.music)]);
+  await page.waitForFunction(() => window.QPTEdit.render.media.list().length === 1 && !window.QPTEdit.ui.state.importing, null, { timeout: 60000 });
+  await settle(page);
+  await page.click('.ed-mitem .ed-madd');
   await page.waitForFunction(() => Object.keys(window.QPTEdit.ui.state.project.clips).length === 1, null, { timeout: 60000 });
   await settle(page);
   const T2 = await byTrack(page);
@@ -482,6 +494,9 @@ async function main() {
   await page.keyboard.press('Escape'); await settle(page);                    // 直式 9:16
   if (await page.$('#edTip')) { await page.click('#edTip .ed-linkbtn'); await settle(page); }
   await page.setInputFiles('#edFile', [path.join(fix, FILES.land)]);
+  await page.waitForFunction(() => window.QPTEdit.render.media.list().length === 1 && !window.QPTEdit.ui.state.importing, null, { timeout: 60000 });
+  await settle(page);
+  await page.click('#edSPlace');
   await page.waitForFunction(() => Object.keys(window.QPTEdit.ui.state.project.clips).length >= 1, null, { timeout: 60000 });
   await settle(page);
   const landE = (await byTrack(page)).V1[0];

@@ -897,7 +897,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   await settle(page);
   if (!(await page.isVisible('.ed-sec[data-sec="fx-transform"]'))) console.log('       DEBUG', JSON.stringify(await page.evaluate(() => ({ sel: [...QPTEdit.ui.state.selection], prim: QPTEdit.ui.state.primary, tr: QPTEdit.ui.state.selTransition, secs: [...document.querySelectorAll('.ed-sec')].map(s => s.dataset.sec + ':' + s.hidden), head: document.getElementById('edInspHead').textContent }))), JSON.stringify(cb));
   ok(await page.isVisible('.ed-sec[data-sec="fx-transform"]'), '選取影片片段：檢查器出現「變形」區段');
-  eq(await page.evaluate(() => [...document.querySelectorAll('#edInspTabs .ed-itab')].map(b => b.textContent)), ['變形', '裁切', '音訊', '速度', '資訊'], '選取影片片段：詳細內容分頁＝變形／裁切／音訊／速度／資訊');
+  eq(await page.evaluate(() => [...document.querySelectorAll('#edInspTabs .ed-itab')].map(b => b.textContent)), ['變形', '色彩', '裁切', '音訊', '速度', '資訊'], '選取影片片段：詳細內容分頁＝變形／色彩／裁切／音訊／速度／資訊');
   ok(!(await page.isVisible('.ed-sec[data-sec="info"]')) && !(await page.isVisible('.ed-sec[data-sec="audio"]')), '一次只顯示一個分頁的內容');
   await page.click('.ed-itab[data-itab="info"]');
   ok(await page.isVisible('.ed-sec[data-sec="info"]') && !(await page.isVisible('.ed-sec[data-sec="fx-transform"]')), '檢查器：切到「資訊」分頁看片段資訊');
@@ -1134,6 +1134,48 @@ async function runViewport(browser, base, fix, [W, H]) {
   const mk0 = await page.evaluate(() => { const r = document.querySelector('.ed-mk').getBoundingClientRect(); return { x: r.left + 4, y: r.top + 6 }; });
   await drag(page, mk0, { x: mk0.x + 40, y: mk0.y });
   eq(await proj(page, p => p.markers[0].frame), 65, '拖曳標記：移到 65 格');
+  // 4.50：標記在時間尺下方獨立的一列
+  const mkGeo = await page.evaluate(() => {
+    const r = document.querySelector('.ed-ruler').getBoundingClientRect(), m = document.querySelector('.ed-mk').getBoundingClientRect();
+    return { inRow: !!document.querySelector('.ed-mk-row .ed-mk'), inRuler: !!document.querySelector('.ed-ruler .ed-mk'), below: m.top >= r.bottom - 1, name: (document.querySelector('.ed-mk .ed-mk-name') || {}).textContent || '' };
+  });
+  ok(mkGeo.inRow && !mkGeo.inRuler && mkGeo.below, '標記畫在時間尺下方的「標記」列 ' + JSON.stringify(mkGeo));
+  // 4.50：拖時間尺時，播放頭吸附到剪接點（吸附開著；Alt 不吸）
+  {
+    const ce = await proj(page, p => { const v1 = p.tracks.find(t => t.name === 'V1'); const cs = Object.values(p.clips).filter(c => c.trackId === v1.id).sort((a, b) => a.start - b.start); return cs[0].start + cs[0].duration; });
+    const ry = await page.evaluate(() => { const r = document.querySelector('.ed-ruler').getBoundingClientRect(); return r.top + r.height / 2; });
+    const x0 = await frameX(page, ce), kpx = (await frameX(page, ce + 10)) - x0;     // 10 格的像素
+    ok(kpx / 10 < 14, '這個縮放下 8px 至少差一格 ' + kpx);
+    const snapOn = await state(page, 'snapping');
+    if (!snapOn) await page.keyboard.press('n');
+    await page.mouse.click(x0 + 8, ry); await settle(page);
+    eq(await state(page, 'playhead'), ce, `點時間尺在剪接點旁 8px：播放頭吸到剪接點（${ce}）`);
+    await page.keyboard.down('Alt'); await page.mouse.click(x0 + 8, ry); await page.keyboard.up('Alt'); await settle(page);
+    ok(await state(page, 'playhead') !== ce, '按住 Alt：不吸附');
+    await page.keyboard.press('n');
+    await page.mouse.click(x0 + 8, ry); await settle(page);
+    ok(await state(page, 'playhead') !== ce, '吸附關掉：不吸附');
+    await page.keyboard.press('n');
+  }
+  // 4.50：色彩還原＋LUT（詳細內容 → 色彩）
+  {
+    const v1c = on(await clips(page), 'V1')[0].id;
+    await selClip(v1c);
+    await page.click('#edInspTabs [data-itab="color"]'); await settle(page);
+    ok(await page.isVisible('.ed-sec[data-sec="fx-color"]'), '選影片片段：詳細內容有「色彩」分頁');
+    const cube = ['LUT_3D_SIZE 2', '0 0 0', '1 0 0', '0 1 0', '1 1 0', '0 0 1', '1 0 1', '0 1 1', '1 1 1'].join('\n');
+    const r = await page.evaluate(async ([id, txt]) => { const x = await QPTEdit.uiParts.applyLutFile(new File([txt], 'ident.cube'), [id]); return x && x.ok; }, [v1c, cube]);
+    ok(r, '載入 .cube 並套用');
+    const lv = await proj(page, (p, Q, id) => ({ lut: p.clips[id].video.lut, amt: p.clips[id].video.lutAmt, n: Object.keys(p.luts).length, name: Object.values(p.luts)[0].name }), v1c);
+    ok(lv.lut && lv.amt === 100 && lv.n === 1 && lv.name === 'ident', 'LUT 存進專案、片段指向它 ' + JSON.stringify(lv));
+    await settle(page);
+    ok(await page.evaluate(() => [...document.querySelectorAll('.ed-sec[data-sec="fx-color"] select option')].some(o => o.textContent.startsWith('ident'))), 'LUT 選單列出載入的 LUT');
+    const bad = await page.evaluate(async id => { const x = await QPTEdit.uiParts.applyLutFile(new File(['hello'], 'bad.cube'), [id]); return x && x.reason; }, v1c);
+    ok(/LUT/.test(bad || ''), '壞掉的 .cube：說明原因 ' + bad);
+    await page.keyboard.press('Control+z'); await settle(page);
+    eq(await proj(page, p => Object.keys(p.luts).length), 0, '復原：LUT 跟著拿掉');
+    await page.click('#edInspTabs [data-itab="xform"]'); await settle(page);
+  }
   // 旗標
   cl = await clips(page);
   cb = await clipBox(page, on(cl, 'V1')[0].id);
@@ -1471,8 +1513,12 @@ async function runViewport(browser, base, fix, [W, H]) {
   eq(await invariants(page), [], '不變式 OK');
   // 框選（選取工具，在空白處拖出矩形）與 Ctrl+A
   await page.keyboard.press('Escape');
+  // 4.50 時間軸頂端多了標記列（44px）：起點、終點夾在看得到的軌道範圍內（不要按到 sticky 的頂端或捲軸）
+  const visY = await page.evaluate(() => { const r = document.querySelector('.ed-tl-scroll').getBoundingClientRect(); return { t: r.top + 44 + 2, b: r.bottom - 18 }; });
+  const vy = y => Math.max(visY.t, Math.min(visY.b, y));
+  await page.evaluate(() => { document.querySelector('.ed-tl-scroll').scrollTop = 0; }); await settle(page);
   const lv2 = await laneBox(page, 'V2'), la2 = await laneBox(page, 'A2');
-  await drag(page, { x: await frameX(page, 450), y: lv2.y + 4 }, { x: await frameX(page, 5), y: la2.y + la2.h - 4 }, { steps: 12 });
+  await drag(page, { x: await frameX(page, 450), y: vy(lv2.y + 4) }, { x: await frameX(page, 5), y: vy(la2.y + la2.h - 4) }, { steps: 12 });
   eq(await proj(page, p => Q.ui.state.selection.size), 4, '框選：拖出矩形選到 4 個片段');
   await page.keyboard.press('Escape');
   eq(await proj(page, p => Q.ui.state.selection.size), 0, 'Esc：取消選取');
@@ -1486,7 +1532,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   const scr = await page.evaluate(() => { const r = document.querySelector('.ed-tl-scroll').getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; });
   const lv2b = await laneBox(page, 'V2'), la2b = await laneBox(page, 'A2');
   ok(await page.evaluate(() => document.querySelector('.ed-tl-scroll').scrollLeft > 0), '放大後時間軸捲到右邊（前段片段在畫面外）');
-  await drag(page, { x: scr.r - 60, y: lv2b.y + 4 }, { x: scr.l + 30, y: la2b.y + la2b.h - 4 }, { steps: 12, hold: 2500 });
+  await drag(page, { x: scr.r - 60, y: vy(lv2b.y + 4) }, { x: scr.l + 30, y: vy(la2b.y + la2b.h - 4) }, { steps: 12, hold: 2500 });
   eq(await page.evaluate(() => document.querySelector('.ed-tl-scroll').scrollLeft), 0, '框選拖到左邊：自動捲到最前面');
   eq(await proj(page, p => Q.ui.state.selection.size), 4, '框選＋自動捲動：捲進來的片段也選到（4 個）');
   await page.keyboard.press('Escape');

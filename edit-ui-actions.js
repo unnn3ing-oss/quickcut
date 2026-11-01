@@ -740,8 +740,8 @@
       btn('edAppend', '加到結尾', 'F12', '加到結尾：把來源接在目的軌道最後一個片段後面', () => doEdit('append'), 'strong'));
 
     grp('del',
-      btn('edDelete', '刪除', '', '刪除選取的片段（留下空隙）。快捷鍵 Delete', () => deleteSelection(false)),
-      btn('edRipple', '波紋刪除', '', '波紋刪除：刪掉並把後面的片段補上來。快捷鍵 Shift+Delete 或 Backspace', () => deleteSelection(true)),
+      btn('edDelete', '刪除', '', '刪除選取的片段（留下空隙）。快捷鍵 Delete 或 Backspace', () => deleteSelection(false)),
+      btn('edRipple', '波紋刪除', '', '波紋刪除：刪掉並把後面的片段補上來。快捷鍵 Shift+Delete 或 Shift+Backspace', () => deleteSelection(true)),
       btn('edCloseGaps', '清除空隙', '', '清除空隙：把選取片段所在的軌（沒選取時是第一條影像軌）所有片段之間的空白一次收掉，其他軌跟著移、保持同步', () => closeGaps()));
 
     const bl = btn('edToggleLink', '連結選取', '', '連結選取：開啟時連結的影像與聲音一起選、一起動。快捷鍵 ' + MOD + 'Shift+L', toggleLink, 'toggle');
@@ -837,7 +837,7 @@
       case 'Home': done(); seekView(0); return;
       case 'End': done(); seekView(viewDuration()); return;
       case 'Delete': done(); if (fresh) deleteSelection(shift); return;
-      case 'Backspace': done(); if (fresh) deleteSelection(true); return;
+      case 'Backspace': done(); if (fresh) deleteSelection(shift); return;
       case 'F9': done(); if (fresh) doEdit('insert'); return;
       case 'F10': done(); if (fresh) doEdit('overwrite'); return;
       case 'F11': done(); if (fresh) doEdit('replace'); return;
