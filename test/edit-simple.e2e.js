@@ -489,7 +489,7 @@ async function main() {
   await page.click('#edSText'); await settle(page);
   const t1 = (await proj(page, p => Object.values(p.clips).filter(c => c.type === 'title').map(c => c.id)))[0];
   const ttl = id => proj(page, (p, Q, id) => p.clips[id].title, id);
-  const REG = await page.evaluate(() => { const F = window.QPTEdit.fx; return { st: Object.keys(F.TITLE_STYLES), fx: Object.keys(F.TEXT_FX), loop: Object.keys(F.TEXT_LOOP), out: Object.keys(F.TEXT_OUT), lib: window.QPTEdit.uiParts.lib.tstyle }; });
+  const REG = await page.evaluate(() => { const F = window.QPTEdit.fx; return { st: Object.keys(F.TITLE_STYLES), fx: Object.keys(F.TEXT_FX).filter(k => !F.TEXT_FX[k].hidden), loop: Object.keys(F.TEXT_LOOP), out: Object.keys(F.TEXT_OUT), lib: window.QPTEdit.uiParts.lib.tstyle }; });
   // patch 的每個欄位都和字幕一樣（物件只比 patch 有的子欄位）
   const styleApplied = (id, k) => proj(page, (p, Q, [id, k]) => {
     const sub = (a, b) => Array.isArray(a) ? a.every((x, i) => sub(x, b[i])) : a && typeof a === 'object' ? !!b && Object.keys(a).every(j => sub(a[j], b[j])) : String(a).toLowerCase() === String(b).toLowerCase();
@@ -503,7 +503,7 @@ async function main() {
   eq(Object.keys(q.secs), wantSecs, `字幕的區段：${wantSecs.join('、')}（持續／出場的註冊表只有「無」時不顯示）`);
   const chipKeys = sec => page.evaluate(sec => [...document.querySelectorAll(`#${sec} .ed-qchip`)].map(b => b.dataset.k), sec);
   eq(await chipKeys('edQStyle'), REG.st, '樣式選項＝TITLE_STYLES 的全部 key（依序）');
-  eq(await chipKeys('edQIn'), REG.fx, '進場選項＝TEXT_FX 的全部 key');
+  eq(await chipKeys('edQIn'), REG.fx, '進場選項＝TEXT_FX 的全部 key（hidden 的舊 key 不列）');
   eq(await page.evaluate(() => [...document.querySelectorAll('#edQStyle .ed-qchip')].every(b => b.querySelector('canvas') && b.textContent.trim())), true, '每個樣式都有縮圖和名稱');
   eq(await chipKeys('edQPos'), ['top', 'mid', 'bottom'], '位置：上方／中間／下方');
   eq(await chipKeys('edQSize'), ['s', 'm', 'l'], '大小：小／中／大');
