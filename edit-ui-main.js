@@ -159,7 +159,7 @@
 
   Object.assign(Q.ui, {
     init, importFiles, importSrt, exportSrt, markSubtitle, doEdit, selectClips, selectTrack, applyTitleStyle, applyTextFx, selectTransition, seekTimeline, setTool, undo, redo, openSource, setMode, addTitle, addTransitionAt, addTransitionToSelection,
-    setZoom, zoomFit, renderNow, bladeAtPlayhead, deleteSelection, markIn, markOut, clearInOut, addMarkerHere, toggleLink, toggleSnap, ensureMediaInfo,
+    setZoom, zoomFit, renderNow, bladeAtPlayhead, deleteSelection, closeGaps: id => UI.closeGaps(id), markIn, markOut, clearInOut, addMarkerHere, toggleLink, toggleSnap, ensureMediaInfo,
     openSpeedPop, openFreezePop, tl, tc, setTheme: t => applyTheme(t, true), setUiMode: m => UI.setUiMode(m),
     replaceProject, mediaChanged, hasContent, renderMedia, showMsgs,
     markSaved: () => { state.dirty = false; },

@@ -501,7 +501,20 @@
     if (cw !== W || ch !== H) ctx.scale(cw / W, ch / H);
     ctx.imageSmoothingQuality = 'high';
     const F = fx();
+    // 電影黑邊：蓋在影像上、字幕下面——畫在「最下面一條有字幕片段的影片軌」之前（整個專案看，不是只看這一格，
+    //   所以同一條軌上的畫中畫不會因為字幕出現／消失而忽上忽下）；沒有字幕就畫在最上面。
+    const box = letterboxRectOf(p), bar = !!box;
+    let barAt = Infinity, barDone = !bar;
+    if (bar) {
+      const vt = tracksOf(p, 'video'), withTitle = new Set();
+      for (const c of Object.values(p.clips || {})) if (c.type === 'title') withTitle.add(c.trackId);
+      const i = vt.findIndex(t => withTitle.has(t.id));
+      if (i >= 0) barAt = i;
+    }
+    const trackIdx = new Map(tracksOf(p, 'video').map((t, i) => [t.id, i]));
+    const drawBars = () => { barDone = true; drawLetterbox(ctx, W, H, box); };
     for (const l of layersAt(p, frame)) {
+      if (!barDone && trackIdx.get(l.kind === 'clip' ? l.clip.trackId : l.tr.trackId) >= barAt) drawBars();
       if (l.kind === 'clip') { drawClip(ctx, p, l.clip, frame, getSource); continue; }
       const t = clamp((frame - l.from + 0.5) / (l.to - l.from), 0, 1);   // 線性；緩動由 fx 的轉場自己套（opts.ease）
       const drawA = c => { if (l.L) drawClip(c, p, l.L, frame, getSource); };
@@ -517,6 +530,21 @@
         }
       } finally { ctx.restore(); }
     }
+    if (!barDone) drawBars();
+    ctx.restore();
+  }
+  // 黑邊中間的畫面範圍（專案像素）；core 還沒載入時當作沒有
+  function letterboxRectOf(p) {
+    const C = core();
+    return typeof C.letterboxRect === 'function' ? C.letterboxRect(p) : null;
+  }
+  // 中間畫面以外都塗黑：上下（letterbox）或左右（pillarbox，例如 16:9 裡的 Open Gate 3:2）
+  function drawLetterbox(ctx, W, H, r) {
+    ctx.save();
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
+    ctx.fillStyle = '#000000';
+    if (r.y) { ctx.fillRect(0, 0, W, r.y); ctx.fillRect(0, r.y + r.h, W, H - r.y - r.h); }
+    if (r.x) { ctx.fillRect(0, 0, r.x, H); ctx.fillRect(r.x + r.w, 0, W - r.x - r.w, H); }
     ctx.restore();
   }
 

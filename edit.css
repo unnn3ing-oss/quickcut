@@ -335,9 +335,10 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
 .ed-io-flag { position: absolute; bottom: 0; width: 8px; height: 14px; pointer-events: none; border: 2px solid var(--accent); border-bottom: none; }
 .ed-io-flag.in { border-right: none; margin-left: -1px; }
 .ed-io-flag.out { border-left: none; margin-left: -9px; }
-.ed-mk { position: absolute; bottom: 0; height: 16px; min-width: 12px; width: var(--w, 12px); margin-left: -1px; cursor: pointer; z-index: 3; }
+/* 標記：元素往左退半個旗子寬（6px），旗子的箭頭尖端剛好對準那一格（和播放頭一樣置中）；區間標記的底線從那一格畫到結束 */
+.ed-mk { position: absolute; bottom: 0; height: 16px; width: calc(var(--w, 0px) + 12px); margin-left: -6px; cursor: pointer; z-index: 3; }
 .ed-mk::before { content: ""; position: absolute; left: 0; top: 0; width: 12px; height: 14px; background: var(--c); clip-path: polygon(0 0, 100% 0, 100% 62%, 50% 100%, 0 62%); }
-.ed-mk::after { content: ""; position: absolute; left: 0; bottom: 0; right: 0; height: 3px; background: var(--c); opacity: .55; border-radius: 2px; }
+.ed-mk::after { content: ""; position: absolute; left: 6px; bottom: 0; right: 6px; height: 3px; background: var(--c); opacity: .55; border-radius: 2px; }
 .ed-mk:hover::before { filter: brightness(.88); }
 .ed-ph-head { position: absolute; left: -7px; top: 3px; width: 14px; height: 18px; background: var(--ed-playhead); clip-path: polygon(0 0, 100% 0, 100% 58%, 50% 100%, 0 58%); z-index: 5; pointer-events: none; will-change: transform; }
 .ed-track { display: flex; position: relative; border-bottom: 1px solid var(--ed-line); }
@@ -404,7 +405,7 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
 .ed-ckf { position: absolute; left: 0; right: 0; bottom: 14px; height: 8px; pointer-events: none; z-index: 3; }
 .ed-ckf i { position: absolute; top: 0; width: 6px; height: 6px; margin-left: -3px; background: #ffc233; border: 1px solid rgba(0,0,0,.45); transform: rotate(45deg); }
 .ed-clip.sel .ed-ckf i { background: #ffd666; border-color: #000; }
-.ed-cmark { position: absolute; bottom: 3px; width: 9px; height: 9px; margin-left: -4px; background: var(--c); border: 1.5px solid #fff; transform: rotate(45deg); z-index: 4; cursor: pointer; }
+.ed-cmark { position: absolute; bottom: 3px; width: 9px; height: 9px; margin-left: -4.5px; background: var(--c); border: 1.5px solid #fff; transform: rotate(45deg); z-index: 4; cursor: pointer; }
 .ed-fadesvg { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 1; }
 .ed-fade-area { fill: rgba(10, 30, 25, 0.4); }
 .ed-fade-line { fill: none; stroke: #fff; stroke-width: 1.6; }

@@ -204,7 +204,7 @@ t('unregisterMediaInfo：有片段在用就不能移除', () => {
 t('setAspect：9:16／16:9／4:5／source（偶數化、長邊上限 3840）', () => {
   const p = setup();
   assert.deepStrictEqual([p.width, p.height], [1280, 720]);
-  for (const [a, w, h] of [['9:16', 1080, 1920], ['16:9', 1920, 1080], ['4:5', 1080, 1350], ['1:1', 1080, 1080]]) {
+  for (const [a, w, h] of [['9:16', 1080, 1920], ['16:9', 1920, 1080], ['4:5', 1080, 1350], ['1:1', 1080, 1080], ['3:2', 1620, 1080]]) {
     assert.ok(core.setAspect(p, a).ok);
     assert.deepStrictEqual([p.aspect, p.width, p.height], [a, w, h]);
   }
@@ -650,6 +650,35 @@ t('rippleDelete：別的軌擋住失敗不改、鎖定失敗、lift 只刪不補
   assert.ok(r.ok);
   assert.deepStrictEqual(core.clipsOnTrack(p, A(p)).map(c => c.start), [0, 60], '抬起不補位');
   return p;
+});
+
+t('closeAllGaps：開頭＋片段之間的空隙一次收掉，其他軌跟著移；擋住的跳過；沒空隙／鎖定', () => {
+  const p = setup();
+  const [a] = put(p, 'mn', 10, 0, 1, { video: V(p) });   // [10,40)
+  const [b] = put(p, 'mn', 50, 0, 1, { video: V(p) });   // [50,80)
+  const [c] = put(p, 'mn', 100, 0, 1, { video: V(p) });  // [100,130)
+  const ti = core.addClip(p, { type: 'title', trackId: V(p, 1), start: 55, duration: 5 });
+  let r = core.closeAllGaps(p);
+  assert.ok(r.ok, r.reason);
+  assert.deepStrictEqual([r.closed, r.skipped, r.frames], [3, 0, 40]);
+  assert.deepStrictEqual([a, b, c].map(i => C(p, i).start), [0, 30, 60]);
+  assert.strictEqual(C(p, ti.id).start, 35, '字幕跟著它上面的畫面移');
+  unchanged(p, () => core.closeAllGaps(p, V(p)), /沒有空隙/);
+  // 第一個空隙被 A1 擋住：跳過它，後面的照收
+  const q = setup();
+  put(q, 'mn', 0, 0, 1, { video: V(q) });                 // [0,30)
+  const [y] = put(q, 'mn', 50, 0, 1, { video: V(q) });     // [50,80)
+  const [z] = put(q, 'mn', 100, 0, 1, { video: V(q) });    // [100,130)
+  put(q, 'ma', 20, 0, 1);                                  // A1 [20,50) 在第一個空隙裡
+  put(q, 'ma', 50, 0, 1);                                  // A1 [50,80)
+  r = core.closeAllGaps(q, V(q));
+  assert.ok(r.ok, r.reason);
+  assert.deepStrictEqual([r.closed, r.skipped, r.frames], [1, 1, 20]);
+  assert.deepStrictEqual([C(q, y).start, C(q, z).start], [50, 80]);
+  lock(q, V(q));
+  unchanged(q, () => core.closeAllGaps(q, V(q)), /鎖定/);
+  unchanged(q, () => core.closeAllGaps(q, 'nope'), /找不到/);
+  return [p, q];
 });
 
 t('deleteGap：收合空隙、不是空隙／最後面／鎖定／別的軌擋住', () => {
@@ -2098,4 +2127,94 @@ t('autoEdit 失敗：沒選素材、音訊當畫面、不認得的風格、鎖�
   lock(p, V(p));
   unchanged(p, () => core.autoEdit(p, { mediaIds: ['mi'] }), /鎖定/);
   return p;
+});
+
+// ---- 電影黑邊（專案層級 p.letterbox） ----------------------------------------------------
+t('電影黑邊：預設不加；setLetterbox 驗證、一筆復原；鎖定軌不影響', () => {
+  const p = setup();
+  assert.strictEqual(p.letterbox, 'none');
+  assert.strictEqual(core.letterboxBar(p), 0);
+  unchanged(p, () => core.setLetterbox(p, '3.00'), /電影黑邊/);
+  unchanged(p, () => core.setLetterbox(p, 'abc'), /電影黑邊/);
+  unchanged(p, () => core.setLetterbox(p, null), /電影黑邊/);
+  for (const tr of p.tracks) lock(p, tr.id);
+  const h = core.createHistory(() => p, () => {});
+  const r = h.run('電影黑邊', q => core.setLetterbox(q, 2.39));        // 數字也收，統一成字串
+  assert.ok(r.ok, r.reason);
+  assert.strictEqual(p.letterbox, '2.39');
+  const c2 = core.clone(p);
+  assert.ok(core.setLetterbox(c2, 2).ok);
+  assert.strictEqual(c2.letterbox, '2.00', '2 → 2.00');
+  assert.ok(h.undo());
+  assert.strictEqual(p.letterbox, 'none');
+  assert.ok(h.redo());
+  assert.strictEqual(p.letterbox, '2.39');
+  for (const v of core.LETTERBOXES) assert.ok(core.setLetterbox(p, v).ok, v);
+  return p;
+});
+
+t('電影黑邊：黑邊高度（16:9、9:16、本來就比目標寬）', () => {
+  const p = setup();
+  core.setAspect(p, '16:9');
+  core.setLetterbox(p, '2.39');
+  assert.strictEqual(core.letterboxBar(p), Math.round((1080 - 1920 / 2.39) / 2));   // 138
+  core.setLetterbox(p, '1.85');
+  assert.strictEqual(core.letterboxBar(p), Math.round((1080 - 1920 / 1.85) / 2));   // 21
+  core.setAspect(p, '9:16');
+  core.setLetterbox(p, '2.39');
+  assert.strictEqual(core.letterboxBar(p), Math.round((1920 - 1080 / 2.39) / 2));   // 734：直式一樣以寬度為準
+  const wide = core.clone(p); wide.width = 2400; wide.height = 1000;               // 比 2.39 還寬：左右加，上下沒有
+  assert.strictEqual(core.letterboxBar(wide), 0);
+  assert.deepStrictEqual(core.letterboxRect(wide), { x: Math.round((2400 - 1000 * 2.39) / 2), y: 0, w: 2400 - 2 * Math.round((2400 - 1000 * 2.39) / 2), h: 1000 });
+  return p;
+});
+
+t('電影黑邊：Open Gate 3:2 ——16:9 左右黑邊、9:16 上下黑邊；輸出比例 3:2 剛好不用黑邊', () => {
+  const p = setup();
+  core.setAspect(p, '16:9');
+  assert.ok(core.setLetterbox(p, 'openGate').ok);
+  assert.strictEqual(p.letterbox, '1.50', 'openGate → 1.50');
+  assert.deepStrictEqual(core.letterboxRect(p), { x: 150, y: 0, w: 1620, h: 1080 }, '16:9：左右各 150px');
+  assert.strictEqual(core.letterboxBar(p), 0);
+  core.setAspect(p, '9:16');
+  assert.deepStrictEqual(core.letterboxRect(p), { x: 0, y: 600, w: 1080, h: 720 }, '9:16：上下各 600px');
+  core.setAspect(p, '3:2');
+  assert.deepStrictEqual([p.width, p.height], [1620, 1080]);
+  assert.strictEqual(core.letterboxRect(p), null, '輸出就是 3:2：不用黑邊');
+  assert.ok(core.setLetterbox(p, '3:2').ok);
+  assert.strictEqual(p.letterbox, '1.50');
+  return p;
+});
+
+t('電影黑邊：存檔讀回一樣；舊專案沒有＝不加；不認得的值讀回變不加、檢查器會擋', () => {
+  const p = setup();
+  core.setLetterbox(p, '2.00');
+  const q = core.deserialize(core.serialize(p));
+  assert.strictEqual(q.letterbox, '2.00');
+  assert.strictEqual(core.serialize(q), core.serialize(p));
+  const old = JSON.parse(core.serialize(p)); delete old.letterbox;
+  assert.strictEqual(core.deserialize(old).letterbox, 'none');
+  old.letterbox = '9.99';
+  assert.strictEqual(core.deserialize(old).letterbox, 'none');
+  const bad = core.clone(p); bad.letterbox = 'wide';
+  assert.ok(core.checkInvariants(bad).some(m => /電影黑邊/.test(m)));
+  return [p, q];
+});
+
+t('電影黑邊：一鍵成片的電影感順便加 2.39，同一筆復原；其他風格不動原本的設定', () => {
+  const p = setup();
+  const h = core.createHistory(() => p, () => {});
+  const r = h.run('一鍵成片', q => core.autoEdit(q, { mediaIds: ['mi', 'mi'], style: 'cinema' }));
+  assert.ok(r.ok, r.reason);
+  assert.strictEqual(p.letterbox, '2.39');
+  assert.ok(h.undo());
+  assert.strictEqual(p.letterbox, 'none');
+  assert.strictEqual(Object.keys(p.clips).length, 0, '片段也一起復原');
+  const g = setup();
+  core.setLetterbox(g, '1.85');
+  assert.ok(core.autoEdit(g, { mediaIds: ['mi'], style: 'gentle' }).ok);
+  assert.strictEqual(g.letterbox, '1.85');
+  assert.ok(core.autoEdit(g, { mediaIds: ['mi'], style: 'beat' }).ok);
+  assert.strictEqual(g.letterbox, '1.85');
+  return [p, g];
 });
