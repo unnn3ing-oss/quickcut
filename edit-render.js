@@ -659,17 +659,30 @@
     const timeOf = F => map.t0 + (F - map.F0) / (fps * rate);
     const speed = clip.speed > 0 ? clip.speed : 1;
     const span = sourceSpan(p, clip);
-    const used = (a - clip.start) / fps * speed;     // 從片段起點到 a 消耗的來源秒數（交叉淡化提早開始時是負的：從前面的把手播）
+    const C = core(), ramp = !clip.reverse && clip.retime && typeof C.srcOffset === 'function' && typeof C.retimeFactor === 'function';
+    const rf = F => (ramp ? C.retimeFactor(clip, F) : 1);
+    // 從片段起點到 a 消耗的來源秒數（交叉淡化提早開始時是負的：從前面的把手播）；曲線變速時是速度曲線的積分
+    const used = ramp ? C.srcOffset(p, clip, a - clip.start) : (a - clip.start) / fps * speed;
     const m = reg.get(clip.mediaId);
     const src = ctx.createBufferSource();
     let offset;
     if (clip.reverse) { src.buffer = reversedOf(m, buf); offset = buf.duration - (span.to - used); }
     else { src.buffer = buf; offset = span.from + used; }
     let startT = timeOf(a);
-    if (offset < 0) { startT += -offset / (speed * rate); offset = 0; }  // 來源前段沒有聲音（例如音軌比影片短）
+    if (offset < 0) { startT += -offset / (speed * rf(a) * rate); offset = 0; }  // 來源前段沒有聲音（例如音軌比影片短）
     const stopT = timeOf(b);
     if (offset >= buf.duration || startT >= stopT) return null;
-    src.playbackRate.value = speed * rate;
+    src.playbackRate.value = speed * rf(a) * rate;
+    if (ramp) {
+      // 曲線變速：在曲線的每個轉折點排線性漸變，播放速度的積分剛好等於 srcOffset（兩邊都是分段線性）
+      src.playbackRate.setValueAtTime(speed * rf(a) * rate, Math.max(0, startT));
+      const D = clip.duration;
+      for (const q of clip.retime.points) {
+        const F = clip.start + q.u * D;
+        if (F > a && F < b) src.playbackRate.linearRampToValueAtTime(speed * q.s * rate, timeOf(F));
+      }
+      src.playbackRate.linearRampToValueAtTime(speed * rf(b) * rate, stopT);
+    }
 
     const gain = ctx.createGain();
     const pts = env.pts;
@@ -809,11 +822,14 @@
         live.add(r.clip.id); e.used = t;
         if (el.readyState < 1) return;            // 還在讀 metadata；讀好會 kick 再來
         const target = seekTarget(m, r.time), clip = r.clip;
-        const sp = (clip.speed > 0 ? clip.speed : 1) * rate;
+        const C = core(), ramp = !clip.reverse && clip.retime && typeof C.srcOffset === 'function' && typeof C.retimeFactor === 'function';
+        // 曲線變速：速度跟著播放頭一直變（每次 tick 更新 playbackRate），位置用曲線的積分
+        const sp = (clip.speed > 0 ? clip.speed : 1) * (ramp ? C.retimeFactor(clip, pos) : 1) * rate;
         e.native = active && rate > 0 && !clip.reverse && !clip.freeze && sp >= 0.0625 && sp <= 16;
         if (e.native) {
-          const want = clamp(target + (pos - frame) / p.fps * clip.speed, 0, m.duration);
-          if (el.playbackRate !== sp) el.playbackRate = sp;
+          const adv = ramp ? C.srcOffset(p, clip, pos - clip.start) - C.srcOffset(p, clip, frame - clip.start) : (pos - frame) / p.fps * clip.speed;
+          const want = clamp(target + adv, 0, m.duration);
+          if (Math.abs(el.playbackRate - sp) > sp * 0.01) el.playbackRate = sp;
           if (el.paused) {
             if (Math.abs(el.currentTime - want) > 0.04) el.currentTime = want;
             const pr = el.play();

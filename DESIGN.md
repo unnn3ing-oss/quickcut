@@ -136,6 +136,17 @@
 - **打拍子**：`state.beatTap` 開著且正在播放時，M 直接加節拍標記（不開標記視窗、不加片段標記）；停止播放就結束。［程式碼］
 - **卡點**（`core.fitClipsToBeats`）：取選取片段最多的那條軌，依 start 排序；第一段開頭不動、結尾對齊之後的節拍（不到半段長就用下一個，避免一閃而過），之後每段 `every` 拍。影片不夠長用到最長（`maxExtend`）、留空隙；節拍不夠時剩下的照原長度接上。連結片段跟著平移（同起點同長度的也跟著改長度），範圍後面沒選到的片段一起推拉；兩邊不再相鄰的轉場拿掉、太長的縮短。範圍中間夾著沒選到的片段時拒絕（不知道它該去哪）。［程式碼］
 
+### 曲線變速（Speed Ramp，3.50）
+- **資料**：`clip.retime = { preset, strength, base, points: [{ u, s }] }`。`u` 是片段內位置比例（0～1），`s` 是相對 `c.speed` 的倍率，點之間線性；**整段平均一定是 1**（`problems()` 會檢查）。所以 `c.speed` 就是平均速度，`srcLen = 長度 × speed / fps` 照舊成立——修剪、連結同步、媒體長度檢查、`sourceSpan`、模糊測試的不變式都不用改。［程式碼］［推論：如果 `s` 存「真正速度」，所有用到 `speed` 的地方都要改成積分，風險大很多］
+- **畫面位置**：`srcOffset(p, c, x) = speed / fps × D × ∫₀^{x/D} s`（`rtIntegral`，分段線性所以是精確的梯形面積）；`sourceTimeAt` 正播時改用它。片段外（轉場借用的把手）用頭尾的速度延伸。`retimeFactor(c, frame)` 是時間軸某一格的相對倍率。［程式碼］
+- **曲線黏在來源上**：切開、修剪都走 `retimeCrop(p, c, a, b)`——把片段裁成片段內 `[a, b)`，重新算新的 `srcIn`、`speed`（新範圍的平均）與正規化後的點，裁完每一格看到的畫面和裁之前一樣（單元測試逐格比對）。裁到剩下一段平的曲線時 `retime` 變回 `null`。［程式碼］
+- **套用**：`setRetime(p, id, { preset, strength, base, ripple, linked })` 在同一個交易裡先拿掉舊曲線、用一般的 `setSpeed` 把速度改成 `base × 曲線平均`（波紋就是來源用量不變、長度跟著變），再寫上 `retime`；`clearRetime` 反過來回到 `base`。所以波紋推拉、連結同步、鎖定、媒體長度限制都沿用 `setSpeed`，不用重寫。`setSpeed` 單獨改速度時 `base` 等比例縮放（整條曲線一起變快變慢）。［程式碼］
+- **預設曲線**：`RETIME_PRESETS` 是少數幾個控制點，`retimeCurve` 在控制點之間用 smoothstep 補 8 點，速度變化是平滑的（不會有轉角）；`strength` 在對數空間往 1 靠（50%＝速度倍率開平方），快慢對稱。［程式碼］
+- **不能和倒播、定格並存**：倒播時「第一格＝來源最後一格」，曲線要反過來積分，介面也很難說明；定格沒有速度。`setSpeed` 遇到有曲線的片段要倒播會拒絕並說明。換片段來源（取代）、定格會清掉曲線。［程式碼］［推論：短影音幾乎不會同時要倒播＋曲線變速］
+- **聲音**：`scheduleClip` 起點用 `srcOffset` 算，`playbackRate` 在曲線每個轉折點排 `linearRampToValueAtTime`——播放速度線性變化的積分剛好是梯形面積，和 `srcOffset` 完全一致（e2e 檢查自動化的積分、以及 440Hz 正弦在中段實際變成 132Hz）。預覽和匯出都走 `scheduleClip`，所以一致；音高會跟著變。［程式碼］
+- **預覽影片**：原生播放時 `playbackRate = speed × retimeFactor × rate`，每個 tick 依播放頭更新（差超過 1% 才改，避免一直重設）；目標位置用 `srcOffset` 的差算，漂移太多才校正。速度超出瀏覽器範圍（1/16～16 倍）的那一段自動改成逐格 seek。匯出逐格用 `sourceTimeAt`，不受影響。［程式碼］
+- **介面**：變速對話框的格子按鈕（小圖：橫軸時間、縱軸速度對數刻度、虛線＝100%），選了曲線才出現強度、「速度」改名「基準速度」、倒播反灰。時間軸片段用「曲線」標籤取代速度百分比；縮圖、波形本來就是用 `sourceTimeAt` 取樣，不用改。節拍偵測換算「來源秒數 → 影格」時，有曲線的片段用二分搜尋 `sourceTimeAt`。［程式碼］
+
 ### 深色模式、工具列與直式版面（只動 UI，不動專案資料）
 - **預設深色**：`<html data-ed-theme="dark|light">`（`edit-ui.js` 設定，選擇存 `localStorage` 的 `qc-theme`，讀寫都包 try/catch，讀不到就用深色），`edit.css` 用 `html[data-ed-theme="dark"]` 覆寫 `base.css` 的 `--bg --card-bg --field-bg --text --muted --border --accent…` 與全部 `--ed-*`。［程式碼］
 - 顏色變數一律定義在 `:root`（淺色預設值）與上面那個深色選擇器，**不再寫死在 `#editApp` 上**，因為 `fx` 與匯出對話框插入的樣式、右鍵選單、`<dialog>` 也要讀同一組；`--ed-primary` 是「白字按鈕」專用的底色（深色時用較深的藍，因為深色的 `--accent` 是淺藍、白字會看不清楚）。［程式碼］
@@ -171,7 +182,7 @@
 - **字幕字型**：`fx.FONTS` 是字型清單（id → 名稱、family、檔案、備用字型）。WHZ-Heavy 由 `base.css` 的 @font-face 提供；仙人掌明體（Cactus Classical Serif，SIL OFL 1.1，授權檔 `fonts/OFL-CactusClassicalSerif.txt`）原檔 28.5 MB，用 `pyftsubset --unicodes='*'` 保留全字集（約 5.8 萬字）只轉成 woff2，約 10 MB（另評估過 Big5 子集約 2.2 MB，但罕用字會退回系統字型，使用者選了全字集）。用到才下載：`fontString()` 遇到還沒載入的字型會呼叫 `loadFont()`（FontFace API），載入前先用備用字型畫，載入後 `fontGen` +1 讓排版快取失效，並透過 `onFontLoad` 通知 UI 重畫與顯示狀態。匯出前 `fx.ready(project)` 會等專案用到的所有字型（最多 60 秒）。［程式碼］［推論：檔案大，所以一定要用到才下載；GitHub Pages 會帶快取標頭，第二次之後不用重抓］
 
 ### 還沒做
-- Speed Ramp（平滑變速曲線，預計 3.50：要改 `sourceTimeAt`、預覽播放、聲音與匯出）、音量關鍵影格、影像穩定（`edit-stab.js` 目前是佔位）。［程式碼］
+- 自訂曲線（拖曳控制點）、保留音高的變速、音量關鍵影格、影像穩定（`edit-stab.js` 目前是佔位）。［程式碼］
 
 ## 4. 專案存檔與重新連結素材（`edit-project.js`）
 
