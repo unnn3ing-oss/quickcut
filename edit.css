@@ -522,7 +522,7 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
   position: fixed; z-index: 10001; background: var(--ed-pop-bg); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 18px 40px -16px var(--ed-pop-shadow);
   color: var(--text); font-size: 12.5px;
 }
-.ed-pop { padding: 12px; width: 288px; max-width: calc(100vw - 16px); }
+.ed-pop { padding: 12px; width: 288px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; }
 
 .ed-pop.fit { width: 320px; }
 .ed-pop.beat { width: 320px; }
@@ -558,6 +558,18 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
 .ed-chk { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; line-height: 1.45; cursor: pointer; }
 .ed-chk input { margin: 2px 0 0; }
 .ed-presets { display: flex; gap: 4px; flex-wrap: wrap; }
+.ed-pop.speed { width: 330px; }
+.ed-rt-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.ed-rt-opt { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 52px; padding: 5px 2px 4px; font: inherit; font-size: 11px; line-height: 1.2;
+  border-radius: 8px; border: 1px solid var(--ed-border); background: var(--ed-field); color: var(--ed-text); cursor: pointer; }
+.ed-rt-opt:hover, .ed-rt-opt:focus-visible { border-color: var(--ed-accent); }
+.ed-rt-opt.on { border-color: var(--ed-accent); box-shadow: 0 0 0 1px var(--ed-accent); background: var(--ed-tint); }
+.ed-rt-svg { width: 100%; max-width: 64px; height: 26px; }
+.ed-rt-mid { stroke: var(--ed-grid-strong); stroke-width: 1; stroke-dasharray: 2 2; }
+.ed-rt-line { fill: none; stroke: var(--ed-accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.ed-form-row input[type=range] { flex: 1 1 auto; min-width: 0; }
+.ed-chk.off { opacity: .45; cursor: default; }
+.ed-badge.rt { background: var(--ed-sel); color: #222; }
 .ed-swatches { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }
 .ed-swatch { width: 100%; aspect-ratio: 1; padding: 0; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18); cursor: pointer; }
 .ed-swatch.on { box-shadow: 0 0 0 2px var(--accent); }

@@ -389,8 +389,12 @@
   function updateSpeedSection(c) {
     for (const r of insp.speedRows) r.refresh();
     const frozen = !!c.freeze;
+    const ramp = !!(c.retime && !c.reverse);
     for (const r of insp.speedRows) r.input.disabled = frozen;
-    insp.speedNote.textContent = frozen ? '這是定格片段，不能變速。' : '也可以按 ' + MOD + 'R 開啟變速對話框。';
+    insp.speedRows[1].input.disabled = frozen || ramp;           // 曲線變速不能倒播
+    insp.speedNote.textContent = frozen ? '這是定格片段，不能變速。'
+      : ramp ? `曲線變速中（「速度」是整段的平均，改它會讓整條曲線一起變快變慢）。按 ${MOD}R 換曲線或取消。`
+      : '按 ' + MOD + 'R 開啟變速對話框，也可以套用平滑的曲線變速（慢動作、子彈時間）。';
   }
 
   // ---- 字幕清單：每段字幕一行（時間＋文字框）----------------------------------------------

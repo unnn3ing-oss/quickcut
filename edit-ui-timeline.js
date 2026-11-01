@@ -362,7 +362,8 @@
       if (off) { const o = el('span', 'ed-badge bad', (off > 0 ? '+' : '') + fmtNum(off, 0) + ' 格'); o.title = '和連結的片段不同步（正數＝比較晚）'; nm.appendChild(o); }
       if (c.freeze) nm.appendChild(el('span', 'ed-badge', '定格'));
       else {
-        if (Math.abs(c.speed - 1) > 1e-6) nm.appendChild(el('span', 'ed-badge', fmtNum(c.speed * 100, 1) + '%'));
+        if (c.retime && !c.reverse) { const b = el('span', 'ed-badge rt', '曲線'); b.title = `曲線變速（平均 ${fmtNum(c.speed * 100, 1)}%）`; nm.appendChild(b); }
+        else if (Math.abs(c.speed - 1) > 1e-6) nm.appendChild(el('span', 'ed-badge', fmtNum(c.speed * 100, 1) + '%'));
         if (c.reverse) nm.appendChild(el('span', 'ed-badge', '倒播'));
       }
       e.appendChild(nm);
@@ -490,7 +491,7 @@
   // 畫布內容取決於這些值；都沒變（例如只是移動位置）就沿用上次畫好的
   function paintSig(p, c, e) {
     const m = c.mediaId ? mediaOf(c.mediaId) : null, th = m && m.thumbs;
-    return [colors.rev, e.classList.contains('video') ? 'v' : 'a', c.type, c.solidColor, c.mediaId, c.srcIn, c.speed, c.reverse ? 1 : 0, c.freeze ? 1 : 0, c.duration,
+    return [colors.rev, e.classList.contains('video') ? 'v' : 'a', c.type, c.solidColor, c.mediaId, c.srcIn, c.speed, c.retime ? JSON.stringify(c.retime.points) : '', c.reverse ? 1 : 0, c.freeze ? 1 : 0, c.duration,
       c.audio ? c.audio.gainDb : 0, p.fps, m ? m.kind + '/' + m.duration : '', th ? th.length + (th[0] && th[0].bitmap ? 'b' : '') : 0, m && m.peaks ? m.peaks.length : 0].join('|');
   }
   function paintClipCanvas(p, c, t, cv, a, H) {

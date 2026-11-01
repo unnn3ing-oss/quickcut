@@ -522,6 +522,43 @@ function check(name, ok, detail) {
   check('預覽排程與 renderAudio 的增益包絡一致（含片段淡入 × 轉場淡化）', ['aa', 'ab'].every(id => xf.envDiff[id].d < 0.005) && Math.abs(xf.envDiff.aa.mid - Math.SQRT1_2) < 0.005 && Math.abs(xf.envDiff.ab.mid - Math.SQRT1_2) < 0.005, xf.envDiff);
 
   // ---------------------------------------------------------------------------------
+  console.log('曲線變速（聲音）');
+  const rt = await page.evaluate(async () => {
+    const R = QPTEdit.render, C = QPTEdit.core;
+    // 440Hz 正弦的影片聲音，套「中段慢動作」：中間真正速度 30% → 聽起來 132Hz；頭尾 100% → 440Hz
+    const curve = C.retimeCurve(C.RETIME_PRESETS.slowMid, 1);
+    let mean = 0;
+    for (let i = 1; i < curve.length; i++) mean += (curve[i][1] + curve[i - 1][1]) / 2 * (curve[i][0] - curve[i - 1][0]);
+    const p = T.put(T.project(), T.clip('a', 'a1', { mediaId: M.L, duration: 120, srcIn: 0.5, speed: mean, video: null,
+      retime: { preset: 'slowMid', strength: 1, base: 1, points: curve.map(([u, v]) => ({ u, s: v / mean })) } }));
+    const out = { problems: C.checkInvariants(p) };
+    // 記錄 BufferSource 的 playbackRate 自動化
+    const log = [];
+    const P = AudioParam.prototype, S = AudioBufferSourceNode.prototype;
+    const o1 = P.setValueAtTime, o2 = P.linearRampToValueAtTime, o3 = S.start;
+    P.setValueAtTime = function (v, t) { log.push({ par: this, v, t }); return o1.call(this, v, t); };
+    P.linearRampToValueAtTime = function (v, t) { log.push({ par: this, v, t }); return o2.call(this, v, t); };
+    let started = null;
+    S.start = function (when, off) { started = { node: this, when, off }; return o3.call(this, when, off); };
+    const buf = await R.renderAudio(p, { sampleRate: 48000, channels: 1, from: 0, to: 120 });
+    P.setValueAtTime = o1; P.linearRampToValueAtTime = o2; S.start = o3;
+    const pr = log.filter(e => e.par === started.node.playbackRate);
+    let used = 0;
+    for (let i = 1; i < pr.length; i++) used += (pr[i].v + pr[i - 1].v) / 2 * (pr[i].t - pr[i - 1].t);
+    out.off = [started.off, 0.5];
+    out.used = [used, C.srcOffset(p, p.clips.a, 120)];
+    out.rates = [pr[0].v, Math.min(...pr.map(e => e.v)), pr[pr.length - 1].v];
+    const x = buf.getChannelData(0), hz = F => T.crossings(x, Math.round((F - 4) * 1600), Math.round((F + 4) * 1600)) / 2 / (8 / 30);
+    out.hz = [hz(10), hz(60), hz(110)];
+    return out;
+  });
+  check('曲線變速片段通過不變式', rt.problems.length === 0, rt.problems);
+  check('聲音從 srcIn 開始播', Math.abs(rt.off[0] - rt.off[1]) < 1e-6, rt.off);
+  check('playbackRate 自動化的積分＝曲線算出的來源用量', Math.abs(rt.used[0] - rt.used[1]) < 0.01, rt.used);
+  check('playbackRate：頭 100%、中間 30%、尾 100%', Math.abs(rt.rates[0] - 1) < 0.01 && Math.abs(rt.rates[1] - 0.3) < 0.01 && Math.abs(rt.rates[2] - 1) < 0.01, rt.rates);
+  check('聽起來：頭尾 440Hz、中段慢動作降到 132Hz', Math.abs(rt.hz[0] - 440) < 20 && Math.abs(rt.hz[1] - 132) < 10 && Math.abs(rt.hz[2] - 440) < 20, rt.hz);
+
+  // ---------------------------------------------------------------------------------
   console.log('播放器');
   const pl = await page.evaluate(async () => {
     const R = QPTEdit.render, C = QPTEdit.core;

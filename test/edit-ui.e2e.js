@@ -2172,6 +2172,89 @@ async function runAnimBeatTests(browser, base, fix, [W, H]) {
   return problems;
 }
 
+async function runRetimeTests(browser, base, fix, [W, H]) {
+  console.log(`\n==== 曲線變速 ${W}x${H} ====`);
+  const problems = [];
+  const ctx = await browser.newContext({ viewport: { width: W, height: H } });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => problems.push('pageerror: ' + e.message));
+  page.on('console', m => { if (m.type() === 'error') problems.push('console.error: ' + m.text()); });
+  await page.goto(base);
+  await settle(page);
+  await page.setInputFiles('#edFile', [{ name: FILES.land, mimeType: 'video/webm', buffer: fs.readFileSync(path.join(fix, FILES.land)) }, { name: FILES.still, mimeType: 'image/png', buffer: fs.readFileSync(path.join(fix, FILES.still)) }]);
+  await page.waitForFunction(() => QPTEdit.render.media.list().length === 2 && QPTEdit.render.media.list().every(m => m.duration > 0 || m.kind === 'image'), null, { timeout: 30000 });
+  await settle(page);
+  // 影片 2 秒（0.5~2.5 秒，連結聲音）在 [0,60)，後面接一張圖 [60,120)
+  const [vid, aud, img] = await page.evaluate(() => {
+    const Q = QPTEdit, U = Q.uiParts, C = Q.core, p = Q.ui.state.project;
+    const L = Q.render.media.list(), v = L.find(m => m.kind === 'video'), im = L.find(m => m.kind === 'image');
+    const V = C.tracksOf(p, 'video')[0].id, A = C.tracksOf(p, 'audio')[0].id;
+    const r = U.op('放', q => C.editToTimeline(q, { mode: 'overwrite', mediaId: v.id, frame: 0, srcIn: 0.5, srcOut: 2.5, trackIds: { video: V, audio: A } }));
+    const r2 = U.op('放', q => C.editToTimeline(q, { mode: 'overwrite', mediaId: im.id, frame: 60, srcIn: 0, srcOut: 2, trackIds: { video: V, audio: null } }));
+    const ids = r.ids.slice().sort((a, b) => (p.clips[a].video ? -1 : 1));
+    return [ids[0], ids[1], r2.ids[0]];
+  });
+  await page.evaluate(id => { QPTEdit.ui.selectClips([id]); QPTEdit.ui.seekTimeline(5); }, vid);
+  await settle(page);
+  await page.keyboard.press('Control+r'); await settle(page);
+  eq(await page.locator('#edRetimeGrid .ed-rt-opt').count(), 7, '變速視窗：7 個曲線選項（不用曲線＋6 個預設）');
+  eq(await page.getAttribute('#edRetimeGrid .ed-rt-opt[data-preset="none"]', 'aria-pressed'), 'true', '一開始是「不用曲線」');
+  ok(!(await page.isVisible('#edRetimeStr')), '不用曲線時不顯示強度');
+  await page.click('#edRetimeGrid .ed-rt-opt[data-preset="slowMid"]'); await settle(page);
+  ok(await page.isVisible('#edRetimeStr'), '選了曲線：出現強度滑桿');
+  ok(await page.isDisabled('#edSpeedRev'), '選了曲線：倒播不能勾');
+  ok((await page.textContent('.ed-pop.speed')).includes('基準速度'), '選了曲線：「速度」改叫「基準速度」');
+  await page.check('#edSpeedRipple');
+  await page.click('#edSpeedOk'); await settle(page);
+  const st = await proj(page, (p, Q, [v, a, i]) => ({ v: p.clips[v], a: p.clips[a], i: p.clips[i], probs: Q.core.checkInvariants(p) }), [vid, aud, img]);
+  eq([st.v.retime && st.v.retime.preset, st.a.retime && st.a.retime.preset], ['slowMid', 'slowMid'], '套用「中段慢動作」：影片和連結的聲音都有曲線');
+  ok(st.v.duration > 60 && st.v.duration === st.a.duration, `波紋：慢動作讓片段變長（60 → ${st.v.duration} 格），聲音同長`);
+  eq(st.i.start, st.v.duration, '後面的圖片被推到影片結尾');
+  eq(st.probs, [], '專案沒有問題');
+  ok((await page.locator(`.ed-clip[data-clip="${vid}"] .ed-badge.rt`).count()) === 1, '時間軸片段上顯示「曲線」標籤');
+  ok((await page.textContent('#edUndoLab')).includes('曲線變速'), '復原標籤：曲線變速');
+  // 預覽：暫停時畫面停在 sourceTimeAt；播放時影片速度跟著曲線變
+  const mid = Math.floor(st.v.duration / 2);
+  await page.evaluate(f => QPTEdit.ui.seekTimeline(f), mid); await settle(page);
+  const seekOk = await page.evaluate(([id, f]) => { const C = QPTEdit.core, p = QPTEdit.ui.state.project; const t = C.sourceTimeAt(p, p.clips[id], f); return t > 1.0 && t < 2.0; }, [vid, mid]);
+  ok(seekOk, '中間那一格看到的是來源中段的畫面');
+  // 檢查器：速度區塊有說明、倒播不能勾
+  await page.evaluate(() => { const b = document.querySelector('.ed-itab[data-itab="speed"]'); if (b) b.click(); }); await settle(page);
+  ok((await page.textContent('#edInspector')).includes('曲線變速中'), '檢查器速度分頁：顯示曲線變速中');
+  ok(await page.locator('#edInspector .ed-fx-chk', { hasText: '倒播' }).locator('input').isDisabled(), '檢查器：曲線變速時倒播不能勾');
+  // 再開視窗：記得目前的曲線與強度；換成強度 50%
+  await page.keyboard.press('Control+r'); await settle(page);
+  eq(await page.getAttribute('#edRetimeGrid .ed-rt-opt[data-preset="slowMid"]', 'aria-pressed'), 'true', '再開視窗：選著目前的曲線');
+  await page.fill('#edSpeedPct', '100');
+  await page.evaluate(() => { const s = document.getElementById('edRetimeStr'); s.value = 50; s.dispatchEvent(new Event('input')); });
+  await page.click('#edSpeedOk'); await settle(page);
+  const d50 = await proj(page, (p, Q, v) => [p.clips[v].retime.strength, p.clips[v].duration], vid);
+  ok(d50[0] === 0.5 && d50[1] < st.v.duration && d50[1] > 60, `強度 50%：慢動作變短（${st.v.duration} → ${d50[1]} 格）`);
+  // 取消曲線：回到 100%、60 格
+  await page.keyboard.press('Control+r'); await settle(page);
+  await page.click('#edRetimeGrid .ed-rt-opt[data-preset="none"]'); await settle(page);
+  await page.click('#edSpeedOk'); await settle(page);
+  eq(await proj(page, (p, Q, [v, a]) => [p.clips[v].retime, p.clips[a].retime, p.clips[v].speed, p.clips[v].duration], [vid, aud]), [null, null, 1, 60], '選「不用曲線」：取消曲線，回到 100%、60 格');
+  await page.keyboard.press('Control+z'); await settle(page);
+  eq(await proj(page, (p, Q, v) => [p.clips[v].retime && p.clips[v].retime.strength, p.clips[v].duration], vid), d50, '復原：曲線回來');
+  // 切開：兩半都還是曲線、畫面不跳
+  const before = await page.evaluate(id => { const C = QPTEdit.core, p = QPTEdit.ui.state.project, c = p.clips[id]; const a = []; for (let f = c.start; f < c.start + c.duration; f++) a.push(C.sourceTimeAt(p, c, f)); return a; }, vid);
+  await page.evaluate(f => QPTEdit.ui.seekTimeline(f), Math.floor(d50[1] / 3)); await settle(page);
+  await page.evaluate(() => QPTEdit.ui.selectClips([]));
+  await page.keyboard.press('Control+b'); await settle(page);
+  const after = await page.evaluate(() => {
+    const C = QPTEdit.core, p = QPTEdit.ui.state.project, V = C.tracksOf(p, 'video')[0].id;
+    const cs = Object.values(p.clips).filter(c => c.trackId === V && c.type === 'media' && c.retime).sort((a, b) => a.start - b.start);
+    const a = []; for (const c of cs) for (let f = c.start; f < c.start + c.duration; f++) a.push(C.sourceTimeAt(p, c, f));
+    return { n: cs.length, a };
+  });
+  eq(after.n, 2, '在播放頭切開（Ctrl+B）：兩半都保留曲線');
+  ok(after.a.length === before.length && after.a.every((x, i) => Math.abs(x - before[i]) < 1e-6), '切開後每一格的畫面都和切之前一樣');
+  eq(await invariants(page), [], '切開後專案沒有問題');
+  await ctx.close();
+  return problems;
+}
+
 (async () => {
   const fix = fixturesDir();
   const { server, base } = await serve();
@@ -2181,6 +2264,7 @@ async function runAnimBeatTests(browser, base, fix, [W, H]) {
     for (const vp of VIEWPORTS) all = all.concat(await runLayoutTests(browser, base, vp));
     for (const vp of VIEWPORTS) all = all.concat(await runStageTests(browser, base, vp));
     all = all.concat(await runAnimBeatTests(browser, base, fix, VIEWPORTS[0]));
+    all = all.concat(await runRetimeTests(browser, base, fix, VIEWPORTS[0]));
     for (const vp of VIEWPORTS) all = all.concat(await runViewport(browser, base, fix, vp));
   } catch (e) { failed++; console.log('  FAIL 測試中斷：', e && e.stack || e); }
   ok(all.length === 0, '整段流程沒有 console error／頁面例外／CSP 違規' + (all.length ? '：' + all.join(' | ') : ''));

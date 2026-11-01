@@ -282,11 +282,60 @@
     return m && m.kind !== 'image' && isFinite(m.duration) && m.duration > 0 ? m.duration : null;
   }
   const srcLen = (p, c) => (c.freeze ? 0 : c.duration * c.speed / p.fps);
+
+  // ---- 曲線變速（Speed Ramp）-------------------------------------------------------
+  // c.retime = { preset, strength, base, points: [{ u, s }] }
+  //   u：片段內位置的比例（0＝第一格、1＝結尾），遞增，頭尾一定是 0 和 1
+  //   s：相對 c.speed 的倍率，點與點之間線性變化；整段平均一定是 1，
+  //     所以「片段長度 × c.speed」仍是總來源用量（srcLen、修剪、連結、媒體長度檢查都照舊），曲線只改片段內的快慢分配。
+  //   真正的速度＝c.speed × s；base＝套曲線前的基準速度（換別的曲線或取消時回到它）。
+  //   片段外（轉場借用的把手）用頭尾的速度延伸。
+  function rtSpeed(pts, u) {
+    if (u <= pts[0].u) return pts[0].s;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      if (u <= b.u) return b.u > a.u ? a.s + (b.s - a.s) * (u - a.u) / (b.u - a.u) : b.s;
+    }
+    return pts[pts.length - 1].s;
+  }
+  // ∫₀ᵘ s（u 可以小於 0 或大於 1）
+  function rtIntegral(pts, u) {
+    if (u <= 0) return u * pts[0].s;
+    let acc = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1], w = b.u - a.u;
+      if (w <= 0) continue;
+      if (u <= b.u) { const x = u - a.u, sx = a.s + (b.s - a.s) * x / w; return acc + (a.s + sx) / 2 * x; }
+      acc += (a.s + b.s) / 2 * w;
+    }
+    return acc + (u - 1) * pts[pts.length - 1].s;
+  }
+  const ramped = c => !!(c && c.retime && Array.isArray(c.retime.points) && c.retime.points.length >= 2 && !c.reverse && !c.freeze);
+  // 片段內第 x 格（可以有小數、可以超出片段）相對 srcIn 用掉的來源秒數
+  const srcOffset = (p, c, x) => (ramped(c) ? c.speed / p.fps * c.duration * rtIntegral(c.retime.points, x / c.duration) : x * c.speed / p.fps);
+  // 時間軸第 frame 格的相對速度倍率（沒有曲線＝1）；預覽播放、聲音排程用
+  const retimeFactor = (c, frame) => (ramped(c) ? rtSpeed(c.retime.points, (frame - c.start) / c.duration) : 1);
+  // 把片段裁成「片段內 [a, b) 格」（a 可以 < 0、b 可以 > 長度：用頭尾速度延伸）。曲線黏在來源上：
+  //   裁完之後每一格看到的畫面和裁之前一樣（切開、修剪都用這支）。呼叫端自己改 start。
+  function retimeCrop(p, c, a, b) {
+    const pts = c.retime.points, D = c.duration, ua = a / D, ub = b / D;
+    const T = D * (rtIntegral(pts, ub) - rtIntegral(pts, ua));   // 這段用掉的「基準格數」
+    const Dn = b - a;
+    if (!(T > 0) || Dn < 1) bail('曲線變速的片段至少要 1 格');
+    c.srcIn = r9(c.srcIn + c.speed / p.fps * D * rtIntegral(pts, ua));
+    const k = Dn / T;
+    const us = [ua, ...pts.map(q => q.u).filter(u => u > ua + 1e-9 && u < ub - 1e-9), ub];
+    const np = us.map(u => ({ u: r9((u - ua) / (ub - ua)), s: r9(rtSpeed(pts, u) * k) }));
+    np[0].u = 0; np[np.length - 1].u = 1;
+    c.speed = c.speed * T / Dn;
+    c.duration = Dn;
+    c.retime = np.every(q => Math.abs(q.s - 1) < 1e-4) ? null : Object.assign({}, c.retime, { points: np });
+  }
   // 有時間軸的來源（影片、音訊）：修剪、切開、滑移時要跟著調整 srcIn；圖片、標題、色塊不用
   const timed = (p, c) => { const m = mediaOf(p, c); return c.type === 'media' && !(m && m.kind === 'image'); };
 
   // 這一格要顯示的來源秒數。frame 是時間軸影格，可以超出片段範圍（轉場向把手借畫面時），結果夾在媒體範圍內。
-  //   正播：srcIn + (frame-start) × speed / fps
+  //   正播：srcIn + (frame-start) × speed / fps（有曲線變速時是速度曲線的積分，見 srcOffset）
   //   倒播：片段第一格 = 來源區段的最後一格，最後一格 = srcIn
   //   定格：永遠是 srcIn
   // 標題、色塊回傳「片段內經過的秒數」；圖片回傳 0。
@@ -300,7 +349,7 @@
     let t;
     if (c.freeze) t = c.srcIn;
     else if (c.reverse) t = c.srcIn + (c.duration - 1 - local) * c.speed / p.fps;
-    else t = c.srcIn + local * c.speed / p.fps;
+    else t = c.srcIn + srcOffset(p, c, local);
     const D = finiteDur(p, c);
     return clamp(r9(t), 0, D == null ? Infinity : Math.max(0, D - END_EPS));
   }
@@ -320,7 +369,8 @@
     if (D == null || c.freeze) return Infinity;
     const before = c.srcIn, after = D - (c.srcIn + srcLen(p, c));
     const room = (edge === 'start') !== !!c.reverse ? before : after;
-    return Math.max(0, Math.floor(room * p.fps / c.speed + EPS));
+    const edgeS = ramped(c) ? c.retime.points[edge === 'start' ? 0 : c.retime.points.length - 1].s : 1;
+    return Math.max(0, Math.floor(room * p.fps / (c.speed * edgeS) + EPS));
   }
 
   // 連結片段的同步位置：同一個來源、同速度時用「來源對齊」算（J-cut／L-cut 不算不同步），否則比 start
@@ -329,7 +379,7 @@
     const k = p.fps / c.speed;
     return c.reverse ? c.start + c.duration + c.srcIn * k : c.start - c.srcIn * k;
   }
-  const sameSource = (a, b) => a.type === 'media' && b.type === 'media' && a.mediaId === b.mediaId && a.speed === b.speed && !!a.reverse === !!b.reverse && !a.freeze && !b.freeze;
+  const sameSource = (a, b) => a.type === 'media' && b.type === 'media' && a.mediaId === b.mediaId && a.speed === b.speed && !!a.reverse === !!b.reverse && !a.freeze && !b.freeze && !ramped(a) && !ramped(b);
   // 群組的基準片段：最下層的影片軌上的那個（沒有就第一個音訊）
   function linkRef(p, c) {
     const g = [c, ...linkedClips(p, c.id)];
@@ -470,6 +520,13 @@
       if (!Number.isInteger(c.start) || c.start < 0) add('start', `${nm}不能放在時間軸開頭之前`);
       if (!Number.isInteger(c.duration) || c.duration < 1) add('duration', `${nm}的長度至少要 1 格`);
       if (!(c.speed > 0) || !isFinite(c.speed)) add('speed', `${nm}的速度不正確`);
+      if (c.retime) {
+        const pts = c.retime.points;
+        const okPts = Array.isArray(pts) && pts.length >= 2 && pts[0].u === 0 && pts[pts.length - 1].u === 1 &&
+          pts.every((x, i) => x.s > 0 && isFinite(x.s) && (!i || x.u >= pts[i - 1].u));
+        if (!okPts || Math.abs(rtIntegral(pts, 1) - 1) > 1e-3) add('retime', `${nm}的變速曲線不正確`);
+        else if (c.reverse || c.freeze) add('retime', `${nm}不能同時倒播（或定格）和曲線變速`);
+      }
       if (!isFinite(c.srcIn) || (timed(p, c) && c.srcIn < -EPS)) add('srcStart', `${nm}已經用到來源媒體的開頭，沒有更多畫面`);
       if (t.kind === 'audio' && c.type !== 'media') add('kind', '標題和色塊只能放在影片軌');
       const m = mediaOf(p, c);
@@ -723,6 +780,15 @@
   // 改某一側的長度：delta > 0 變長、< 0 變短。'start' 側會移動 start；來源依正播／倒播調整
   function adjustEdge(p, c, edge, delta) {
     if (!delta) return;
+    if (ramped(c) && timed(p, c)) {               // 曲線變速：裁切曲線（曲線黏在來源上，延長的部分用頭尾速度）
+      if (edge === 'start') {
+        retimeCrop(p, c, -delta, c.duration);
+        c.start -= delta;
+        for (const m of c.markers) m.offset += delta;
+        shiftKeyframes(c, delta);
+      } else retimeCrop(p, c, 0, c.duration + delta);
+      return;
+    }
     const ds = c.freeze || !timed(p, c) ? 0 : delta * c.speed / p.fps;
     if (edge === 'start') {
       c.start -= delta; c.duration += delta;
@@ -740,8 +806,13 @@
     const leftDur = frame - c.start, rightDur = clipEnd(c) - frame;
     const r = copy(c);
     r.id = newId(p, 'c'); r.start = frame; r.duration = rightDur; r.linkId = null;
-    c.duration = leftDur;
-    if (!c.freeze && timed(p, c)) {
+    const wasRamped = ramped(c) && timed(p, c);
+    if (wasRamped) {                              // 曲線變速：兩半各自裁出自己那段曲線
+      r.duration = c.duration;
+      retimeCrop(p, r, leftDur, leftDur + rightDur);
+      retimeCrop(p, c, 0, leftDur);
+    } else c.duration = leftDur;
+    if (!wasRamped && !c.freeze && timed(p, c)) {
       const s = c.speed / p.fps;
       if (c.reverse) c.srcIn = r9(c.srcIn + rightDur * s);   // 倒播：前半段顯示的是較晚的來源
       else r.srcIn = r9(c.srcIn + leftDur * s);
@@ -1117,12 +1188,12 @@
       needUnlocked(p, partners);
       const r = tx(p, q => {
         const t = q.clips[target.id];
-        Object.assign(t, { type: 'media', mediaId: o.mediaId, srcIn: Math.max(0, ns), speed: 1, reverse: false, freeze: false, name, title: null, solidColor: null });
+        Object.assign(t, { type: 'media', mediaId: o.mediaId, srcIn: Math.max(0, ns), speed: 1, reverse: false, freeze: false, retime: null, name, title: null, solidColor: null });
         for (const x of partners) {
           const k = q.clips[x.id];
           const kt = getTrack(q, k.trackId);
           if (info.kind === 'video' && kt.kind === 'audio') {
-            if (info.hasAudio) Object.assign(k, { mediaId: o.mediaId, srcIn: r9(Math.max(0, ns + (k.start - t.start) / fps)), speed: 1, reverse: false, freeze: false, name });
+            if (info.hasAudio) Object.assign(k, { mediaId: o.mediaId, srcIn: r9(Math.max(0, ns + (k.start - t.start) / fps)), speed: 1, reverse: false, freeze: false, retime: null, name });
             else removeClip(q, k.id);   // 新媒體沒有聲音：舊的聲音拿掉，不然會配錯畫面
           } else t.linkId = null;       // 替換音訊時：和原本的影像斷開連結
         }
@@ -1381,6 +1452,7 @@
     const sp = o.speed == null ? c.speed : Number(o.speed);
     if (!isFinite(sp) || sp < SPEED_MIN || sp > SPEED_MAX) return fail(`速度要在 ${SPEED_MIN * 100}%～${SPEED_MAX * 100}% 之間`);
     const rev = o.reverse == null ? !!c.reverse : !!o.reverse;
+    if (rev && ramped(c)) return fail('曲線變速的片段不能倒播：先取消曲線變速');
     const group = expandLinked(p, [c.id], o.linked !== false).filter(i => {
       const k = p.clips[i]; const km = mediaOf(p, k);
       return k.type === 'media' && km && km.kind !== 'image' && !k.freeze;
@@ -1401,6 +1473,7 @@
           scaleKeyframes(k, nd / k.duration);
           k.duration = nd;
         }
+        if (ramped(k)) k.retime.base = r9(k.retime.base * sp / k.speed);   // 整條曲線一起變快／變慢
         k.speed = sp; k.reverse = rev;
       }
       if (o.ripple && delta) {
@@ -1418,6 +1491,81 @@
     return rippleReason(r, '無法改變速度');
   });
 
+  // 曲線變速：o：{ preset, strength（0~1，預設 1）, points（自訂：[[u, 真正速度倍率], …]）, base（基準速度，預設沿用）, ripple, linked }
+  //   速度倍率是相對「基準速度」（套曲線前的速度，例如 100%）。套用後 c.speed＝平均速度，
+  //   ripple：來源用量不變、片段長度跟著變（慢動作會變長）並推後方；否則長度不變、改用的來源長度（受媒體長度限制）。
+  //   預設曲線的控制點之間用緩入緩出補點，速度變化是平滑的。
+  const RETIME_PRESETS = {
+    slowMid: [[0, 1], [0.2, 1], [0.35, 0.3], [0.65, 0.3], [0.8, 1], [1, 1]],          // 中段慢動作（中間 30% 的時間用 30% 速度）
+    bullet: [[0, 2], [0.28, 2], [0.42, 0.15], [0.58, 0.15], [0.72, 2], [1, 2]],       // 子彈時間：快→極慢→快
+    speedUp: [[0, 0.5], [1, 2.5]],                                                    // 漸漸加速
+    slowDown: [[0, 2.5], [1, 0.5]],                                                   // 漸漸減速
+    flashIn: [[0, 4], [0.3, 1], [1, 1]],                                              // 快速切入
+    flashOut: [[0, 1], [0.7, 1], [1, 4]],                                             // 快速切出
+  };
+  // 控制點 → 平滑的折線（每段用 smoothstep 補 8 點）；strength 在對數空間往 1 靠（0＝沒有變化）
+  function retimeCurve(ctrl, strength) {
+    const k = clamp(strength == null ? 1 : Number(strength), 0, 1);
+    const pts = [];
+    for (let i = 0; i < ctrl.length; i++) {
+      const [u0, s0] = ctrl[i];
+      pts.push([u0, s0]);
+      if (i + 1 < ctrl.length) {
+        const [u1, s1] = ctrl[i + 1];
+        if (Math.abs(s1 - s0) > 1e-9) for (let j = 1; j < 8; j++) { const x = j / 8, e = x * x * (3 - 2 * x); pts.push([u0 + (u1 - u0) * x, s0 + (s1 - s0) * e]); }
+      }
+    }
+    return pts.map(([u, v]) => [u, Math.exp(k * Math.log(v))]);
+  }
+  function rtGroup(p, c, linked) {
+    return expandLinked(p, [c.id], linked !== false).filter(i => {
+      const k = p.clips[i]; const km = mediaOf(p, k);
+      return k.type === 'media' && km && km.kind !== 'image' && !k.freeze;
+    });
+  }
+  const setRetime = guard((p, id, o = {}) => {
+    const c = needClips(p, id)[0];
+    const m = mediaOf(p, c);
+    if (c.type !== 'media' || !m || m.kind === 'image') return fail('只有影片和音訊片段可以曲線變速');
+    if (c.freeze) return fail('定格片段不能變速');
+    if (c.reverse) return fail('倒播的片段不能曲線變速：先取消倒播');
+    let ctrl = o.points;
+    if (!ctrl) { ctrl = RETIME_PRESETS[o.preset]; if (!ctrl) return fail('不認得的變速曲線'); }
+    ctrl = arr(ctrl).map(x => [Number(x[0]), Number(x[1])]);
+    if (ctrl.length < 2 || ctrl[0][0] !== 0 || ctrl[ctrl.length - 1][0] !== 1 || ctrl.some((x, i) => !(x[1] > 0) || !isFinite(x[1]) || (i && !(x[0] > ctrl[i - 1][0]))))
+      return fail('變速曲線的點不正確');
+    const curve = retimeCurve(ctrl, o.strength);
+    const base = o.base != null ? Number(o.base) : ramped(c) ? c.retime.base : c.speed;
+    if (!(base > 0) || !isFinite(base)) return fail('基準速度不正確');
+    const mean = rtIntegral(curve.map(([u, v]) => ({ u, s: v })), 1);
+    const lo = Math.min(...curve.map(x => x[1])) * base, hi = Math.max(...curve.map(x => x[1])) * base;
+    if (lo < SPEED_MIN - EPS || hi > SPEED_MAX + EPS) return fail(`曲線裡的速度要在 ${SPEED_MIN * 100}%～${SPEED_MAX * 100}% 之間`);
+    const group = rtGroup(p, c, o.linked);
+    const retime = { preset: o.points ? 'custom' : o.preset, strength: clamp(o.strength == null ? 1 : Number(o.strength), 0, 1), base,
+      points: curve.map(([u, v]) => ({ u: r9(u), s: r9(v / mean) })) };
+    const r = tx(p, q => {
+      for (const g of group) q.clips[g].retime = null;            // 先拿掉舊曲線，讓 setSpeed 用一般的方式算長度
+      const sr = setSpeed(q, c.id, { speed: base * mean, ripple: o.ripple, linked: o.linked });
+      if (!sr.ok) return sr;
+      for (const g of group) q.clips[g].retime = copy(retime);
+      return { duration: q.clips[c.id].duration, mean: r9(mean) };
+    });
+    if (!r.ok && /來源媒體的長度不夠/.test(r.reason)) r.reason = '來源媒體的長度不夠，可以勾選「波紋」讓片段長度跟著變';
+    return r;
+  });
+  // 取消曲線變速：回到基準速度（ripple 時長度跟著變）
+  const clearRetime = guard((p, id, o = {}) => {
+    const c = needClips(p, id)[0];
+    if (!ramped(c)) return fail('這個片段沒有曲線變速');
+    const group = rtGroup(p, c, o.linked);
+    const base = c.retime.base;
+    return tx(p, q => {
+      for (const g of group) q.clips[g].retime = null;
+      const sr = setSpeed(q, c.id, { speed: base, ripple: o.ripple, linked: o.linked });
+      return sr.ok ? { duration: q.clips[c.id].duration } : sr;
+    });
+  });
+
   // 定格：o.duration（影格）> 0 → 在 frame 切開，插入這麼長的定格片段，後面波紋推後；
   //        沒給 duration → 整個片段變成定格（停在 frame 那一格的畫面）。UI 對話框的預設長度用 DEFAULT_FREEZE_SEC。
   const freezeFrame = guard((p, id, frame, o = {}) => {
@@ -1431,7 +1579,7 @@
     if (f < c.start || f >= clipEnd(c)) return fail('播放頭要在片段範圍內');
     const t = sourceTimeAt(p, c, f);
     if (o.duration == null || o.duration === 0) {
-      return tx(p, q => { Object.assign(q.clips[c.id], { freeze: true, srcIn: t, speed: 1, reverse: false }); return { id: c.id }; });
+      return tx(p, q => { Object.assign(q.clips[c.id], { freeze: true, srcIn: t, speed: 1, reverse: false, retime: null }); return { id: c.id }; });
     }
     const dur = Math.round(Number(o.duration));
     if (!isFinite(dur) || dur < 1) return fail('定格長度至少要 1 格');
@@ -1503,7 +1651,7 @@
   });
 
   // ---- 屬性 ------------------------------------------------------------------------
-  const PROP_KEYS = ['name', 'enabled', 'video', 'audio', 'title', 'solidColor', 'keyframes', 'retime'];
+  const PROP_KEYS = ['name', 'enabled', 'video', 'audio', 'title', 'solidColor', 'keyframes'];   // 曲線變速走 setRetime
   function sanitize(c) {
     const num = (o, k, a, b, int) => {
       if (!o || o[k] === undefined) return;
@@ -1853,7 +2001,7 @@
     moveClips, trimEdge, blade, rippleTrim, rippleDelete, deleteGap, lift, roll, slip, slide,
     setInOut, clearInOut, editToTimeline, addClip, link, unlink,
     addMarker, updateMarker, removeMarker, addClipMarker, updateClipMarker, removeClipMarker, setFlags,
-    setSpeed, freezeFrame, addTransition, updateTransition, removeTransition, setClipProps, setFitAll, aspectMismatch,
+    setSpeed, setRetime, clearRetime, RETIME_PRESETS, retimeCurve, retimeFactor, srcOffset, freezeFrame, addTransition, updateTransition, removeTransition, setClipProps, setFitAll, aspectMismatch,
     // 節拍
     BEAT_NAME, beatFrames, addBeatMarkers, clearBeatMarkers, fitClipsToBeats,
     // 關鍵影格

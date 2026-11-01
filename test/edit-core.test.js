@@ -1582,6 +1582,8 @@ function fuzz(seed, steps, { strict }) {
   if (!strict) {
     ops.push(
       ['speed', 2, () => core.setSpeed(p, clipId(), { speed: pick([0.25, 0.5, 1, 1.5, 2, 4]), reverse: R() < 0.3, ripple: R() < 0.5, linked: R() < 0.8 })],
+      ['retime', 1.5, () => core.setRetime(p, clipId(), { preset: pick(Object.keys(core.RETIME_PRESETS)), strength: pick([0.3, 0.7, 1]), ripple: R() < 0.7, linked: R() < 0.8 })],
+      ['unretime', 0.5, () => core.clearRetime(p, clipId(), { ripple: R() < 0.5, linked: R() < 0.8 })],
       ['freezeAll', 1, () => { const c = p.clips[clipId()]; return core.freezeFrame(p, c ? c.id : 'nope', c ? ri(c.start, c.start + c.duration - 1) : 0); }],
       ['link', 1, () => core.link(p, [clipId(), clipId()])],
       ['unlink', 1, () => core.unlink(p, [clipId()])],
@@ -1872,4 +1874,94 @@ t('卡點：開頭離第一拍太近時，第一段延到下一個拍子（不�
   const ids = [0, 1, 2].map(i => put(p, 'mi', i * 30, 0, 1, { video: V(p) })[0]);
   assert.ok(core.fitClipsToBeats(p, ids, { beats: [4, 19, 34, 49, 64, 79], every: 2 }).ok);
   assert.deepStrictEqual(ids.map(id => span(C(p, id))), [[0, 19], [19, 49], [49, 79]]);
+});
+
+// =====================================================================================
+// 曲線變速（Speed Ramp）
+// =====================================================================================
+// 每一格看到的來源秒數
+const frames = (p, id, from, to) => { const out = []; for (let f = from; f < to; f++) out.push(core.sourceTimeAt(p, id, f)); return out; };
+
+t('setRetime 波紋：來源用量不變、片段變長；畫面單調前進、頭尾對齊', () => {
+  const p = setup();
+  const [v, a, ] = put(p, 'mv', 0, 2, 4);          // 2 秒來源
+  const fps = p.fps, src0 = core.sourceSpan(p, v);
+  const r = core.setRetime(p, v, { preset: 'slowMid', ripple: true });
+  assert.ok(r.ok, r.reason);
+  assert.ok(C(p, v).duration > 60, '有慢動作，片段變長：' + C(p, v).duration);
+  assert.strictEqual(C(p, a).duration, C(p, v).duration, '連結的聲音一起變');
+  assert.ok(C(p, a).retime, '連結的聲音也有曲線');
+  const sp = core.sourceSpan(p, v);
+  assert.ok(Math.abs(sp.to - src0.to) < 2 / fps, `來源結尾幾乎不變：${sp.to}`);
+  const fr = frames(p, v, 0, C(p, v).duration);
+  near(fr[0], 2, '第一格是 srcIn');
+  for (let i = 1; i < fr.length; i++) assert.ok(fr[i] > fr[i - 1], '畫面單調前進');
+  // 中段慢、頭尾正常：中間每格前進量 ≈ 0.25 倍頭部
+  const D = C(p, v).duration, head = fr[2] - fr[1], mid = fr[Math.floor(D / 2) + 1] - fr[Math.floor(D / 2)];
+  assert.ok(mid < head * 0.4, `中段慢：${mid} vs ${head}`);
+  near(core.retimeFactor(C(p, v), Math.floor(D / 2)) * C(p, v).speed, 0.3, '中段真正速度 30%');
+  return synced(p);
+});
+
+t('setRetime 非波紋：長度不變；媒體不夠時失敗不改；倒播、定格、圖片不能用', () => {
+  const p = setup();
+  const [v] = put(p, 'mv', 0, 0, 2);
+  assert.ok(core.setRetime(p, v, { preset: 'speedUp' }).ok);
+  assert.strictEqual(C(p, v).duration, 60);
+  near(C(p, v).retime.base, 1);
+  unchanged(p, () => core.setSpeed(p, v, { reverse: true }), /曲線變速/);
+  unchanged(p, () => core.setRetime(p, v, { preset: 'nope' }), /不認得/);
+  unchanged(p, () => core.setRetime(p, v, { points: [[0, 1], [0.5, -1], [1, 1]] }), /點不正確/);
+  unchanged(p, () => core.setRetime(p, v, { points: [[0, 1], [1, 200]] }), /速度/);
+  const q = setup();
+  const [x] = put(q, 'mn', 0, 0, 3, { video: V(q) });     // 整支 3 秒用完
+  unchanged(q, () => core.setRetime(q, x, { preset: 'bullet' }), /波紋/);
+  assert.ok(core.setSpeed(q, x, { reverse: true }).ok);
+  unchanged(q, () => core.setRetime(q, x, { preset: 'slowMid', ripple: true }), /倒播/);
+  const img = put(q, 'mi', 200, 0, 1, { video: V(q) })[0];
+  unchanged(q, () => core.setRetime(q, img, { preset: 'slowMid' }), /只有影片和音訊/);
+  return [p, q];
+});
+
+t('clearRetime 回到基準速度；換曲線用同一個基準；整體變速跟著縮放基準', () => {
+  const p = setup();
+  const [v] = put(p, 'mv', 0, 0, 2);
+  assert.ok(core.setRetime(p, v, { preset: 'slowMid', ripple: true }).ok);
+  const d1 = C(p, v).duration;
+  assert.ok(core.setRetime(p, v, { preset: 'slowMid', strength: 0.5, ripple: true }).ok);
+  near(C(p, v).retime.base, 1, '換曲線：基準還是 100%');
+  assert.ok(C(p, v).duration < d1, '強度減半，慢動作比較短');
+  assert.ok(core.setSpeed(p, v, { speed: C(p, v).speed * 2, ripple: true }).ok);
+  near(C(p, v).retime.base, 2, '整體加快兩倍，基準跟著變');
+  assert.ok(core.clearRetime(p, v, { ripple: true }).ok);
+  assert.strictEqual(C(p, v).retime, null);
+  near(C(p, v).speed, 2);
+  unchanged(p, () => core.clearRetime(p, v), /沒有曲線變速/);
+  // strength 0 ＝ 沒有變化
+  const r = core.setRetime(p, v, { preset: 'bullet', strength: 0 });
+  assert.ok(r.ok); near(r.mean, 1);
+  return synced(p);
+});
+
+t('曲線變速＋切開、修剪：每一格看到的畫面不變', () => {
+  const p = setup();
+  const [v] = put(p, 'mv', 30, 1, 4);
+  assert.ok(core.setRetime(p, v, { preset: 'bullet', ripple: true }).ok);
+  const c0 = C(p, v), start = c0.start, end = c0.start + c0.duration;
+  const before = frames(p, v, start, end);
+  const cut = start + Math.round(c0.duration * 0.45);
+  const sr = core.blade(p, cut);
+  assert.ok(sr.ok, sr.reason);
+  const ids = Object.values(p.clips).filter(c => c.trackId === V(p)).sort((a, b) => a.start - b.start).map(c => c.id);
+  assert.strictEqual(ids.length, 2);
+  const after = [...frames(p, ids[0], start, cut), ...frames(p, ids[1], cut, end)];
+  after.forEach((x, i) => assert.ok(Math.abs(x - before[i]) < 1e-6, `第 ${i} 格：${x} ≠ ${before[i]}`));
+  // 修剪右半的開頭往後 5 格
+  const right = ids[1];
+  assert.ok(core.trimEdge(p, right, 'start', 5).ok);
+  frames(p, right, cut + 5, end).forEach((x, i) => assert.ok(Math.abs(x - before[cut + 5 - start + i]) < 1e-6, `修剪後第 ${i} 格`));
+  // 修剪左半的結尾往前 4 格
+  assert.ok(core.trimEdge(p, ids[0], 'end', -4).ok);
+  frames(p, ids[0], start, cut - 4).forEach((x, i) => assert.ok(Math.abs(x - before[i]) < 1e-6, `左半第 ${i} 格`));
+  return synced(p);
 });

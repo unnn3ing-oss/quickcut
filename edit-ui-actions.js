@@ -9,7 +9,7 @@
   const UI = Q && Q.uiParts;
   if (!UI) return;                     // 頁面上沒有剪輯介面
   const { $, MARKER_HEX, MARKER_NAME, app, clearSourceIO, clipOf, clipTitle, closeMenu, closePop, doc, el,
-    ensureMediaInfo, fmtNum, fps, isSubClip, isTextTarget, jumpEdit, lastSel, lib, mediaOf, openPop, report, say,
+    ensureMediaInfo, fitPop, fmtNum, fps, isSubClip, isTextTarget, jumpEdit, lastSel, lib, mediaOf, openPop, report, say,
     seekTimeline, seekView, selIds, setSourceIO, shuttle, state, step, targetTrack, tc, togglePlay,
     videoTracksTopFirst, viewDuration } = UI;
   let C = null, R = null, F = null;
@@ -245,21 +245,86 @@
     if (!c) for (const t of videoTracksTopFirst().concat(C.tracksOf(state.project, 'audio'))) { const x = C.clipAt(state.project, t.id, state.playhead); if (ok(x)) { c = x; break; } }
     return c || null;
   }
+  // 曲線變速的預設（順序就是對話框裡的順序）；名字和說明給初學者看
+  const RETIME_UI = [
+    ['slowMid', '中段慢動作', '前後正常，中間放慢到 30%'],
+    ['bullet', '子彈時間', '快 → 極慢 → 快，動作片、運動精華'],
+    ['speedUp', '漸漸加速', '從 50% 慢慢加速到 250%'],
+    ['slowDown', '漸漸減速', '從 250% 慢慢減速到 50%'],
+    ['flashIn', '快速切入', '開頭 400% 衝進來再回到正常'],
+    ['flashOut', '快速切出', '結尾加速到 400% 離開'],
+  ];
+  // 速度曲線的小圖：橫軸是片段時間，縱軸是速度（對數刻度，中間的虛線是 100%）
+  function retimeSvg(preset, strength) {
+    const NS = 'http://www.w3.org/2000/svg', W = 64, H = 26;
+    const svg = doc.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class', 'ed-rt-svg'); svg.setAttribute('aria-hidden', 'true');
+    const y = s => H / 2 - Math.max(-2.2, Math.min(2.2, Math.log2(s))) * (H / 2 - 2) / 2.2;
+    const mid = doc.createElementNS(NS, 'line');
+    mid.setAttribute('x1', 0); mid.setAttribute('x2', W); mid.setAttribute('y1', H / 2); mid.setAttribute('y2', H / 2); mid.setAttribute('class', 'ed-rt-mid');
+    svg.appendChild(mid);
+    const pts = preset ? C.retimeCurve(C.RETIME_PRESETS[preset], strength) : [[0, 1], [1, 1]];
+    const line = doc.createElementNS(NS, 'polyline');
+    line.setAttribute('points', pts.map(([u, v]) => `${(u * W).toFixed(1)},${y(v).toFixed(1)}`).join(' '));
+    line.setAttribute('class', 'ed-rt-line');
+    svg.appendChild(line);
+    return svg;
+  }
   function openSpeedPop(anchor) {
     const c = speedTarget();
     if (!c) { say('先選取一個影片或音訊片段（圖片、字幕、定格片段不能變速）', 'error'); return; }
-    const id = c.id;
+    const id = c.id, wasRamped = !!(c.retime && !c.reverse);
+    let cur = wasRamped && c.retime.preset !== 'custom' ? c.retime.preset : null;
     const box = el('div', 'ed-form');
     box.append(el('div', 'ed-form-h', `變速：${clipTitle(c)}`));
     const row = el('div', 'ed-form-row');
-    const inp = el('input'); inp.type = 'number'; inp.id = 'edSpeedPct'; inp.min = 1; inp.max = 10000; inp.step = 5; inp.value = fmtNum(c.speed * 100, 2);
+    const lab = el('span', null, '速度');
+    const inp = el('input'); inp.type = 'number'; inp.id = 'edSpeedPct'; inp.min = 1; inp.max = 10000; inp.step = 5;
+    inp.value = fmtNum((wasRamped ? c.retime.base : c.speed) * 100, 2);
     inp.setAttribute('aria-label', '速度百分比');
-    row.append(el('span', null, '速度'), inp, el('span', 'ed-unit', '%'));
+    row.append(lab, inp, el('span', 'ed-unit', '%'));
     const presets = el('div', 'ed-presets');
     for (const v of [25, 50, 100, 200, 400]) { const b = el('button', 'ed-btn small', v + '%'); b.type = 'button'; b.addEventListener('click', () => { inp.value = v; }); presets.appendChild(b); }
+    // 曲線變速
+    const rtH = el('div', 'ed-beat-h', '曲線變速（平滑變快變慢）');
+    const grid = el('div', 'ed-rt-grid'); grid.id = 'edRetimeGrid';
+    const str = el('input'); str.type = 'range'; str.min = 10; str.max = 100; str.step = 5; str.id = 'edRetimeStr';
+    str.value = wasRamped ? Math.round((c.retime.strength == null ? 1 : c.retime.strength) * 100) : 100;
+    str.setAttribute('aria-label', '曲線強度');
+    const strV = el('span', 'ed-unit');
+    const strRow = el('div', 'ed-form-row'); strRow.append(el('span', null, '強度'), str, strV);
+    const desc = el('div', 'ed-hint');
+    const btns = [];
+    const opt = (key, name) => {
+      const b = el('button', 'ed-rt-opt'); b.type = 'button'; b.dataset.preset = key || 'none';
+      b.title = key ? RETIME_UI.find(x => x[0] === key)[2] : '整段同一個速度';
+      b.append(retimeSvg(key, 1), el('span', null, name));
+      b.addEventListener('click', () => { cur = key; sync(); });
+      btns.push(b); grid.appendChild(b);
+    };
+    opt(null, '不用曲線');
+    for (const [k, n] of RETIME_UI) opt(k, n);
     const rev = el('label', 'ed-chk'); const cr = el('input'); cr.type = 'checkbox'; cr.checked = !!c.reverse; cr.id = 'edSpeedRev'; rev.append(cr, doc.createTextNode('倒播'));
     const rip = el('label', 'ed-chk'); const cp = el('input'); cp.type = 'checkbox'; cp.checked = state.rippleSpeed; cp.id = 'edSpeedRipple';
     rip.append(cp, doc.createTextNode('波紋（片段長度跟著變，後面的片段一起推拉）'));
+    function sync() {
+      const k = str.value / 100;
+      strV.textContent = str.value + '%';
+      for (const b of btns) {
+        const on = (b.dataset.preset === 'none' ? null : b.dataset.preset) === cur;
+        b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        if (b.dataset.preset !== 'none') b.firstChild.replaceWith(retimeSvg(b.dataset.preset, k));
+      }
+      strRow.hidden = !cur;
+      lab.textContent = cur ? '基準速度' : '速度';
+      cr.disabled = !!cur; if (cur) cr.checked = false;
+      rev.classList.toggle('off', !!cur);
+      desc.textContent = cur ? RETIME_UI.find(x => x[0] === cur)[2] + '。曲線裡的百分比都是相對「基準速度」；建議勾選波紋，慢動作才不會吃掉後面的畫面。'
+        : wasRamped ? '套用後會取消曲線變速，整段回到同一個速度。' : '';
+      desc.hidden = !desc.textContent;
+      fitPop();                                     // 多了強度、說明，視窗變高：下緣不要跑出畫面
+    }
+    str.addEventListener('input', sync);
     const act = el('div', 'ed-form-act');
     const no = el('button', 'ed-btn small', '取消'); no.type = 'button'; no.addEventListener('click', closePop);
     const ok = el('button', 'ed-btn small primary', '套用'); ok.type = 'button'; ok.id = 'edSpeedOk';
@@ -267,13 +332,24 @@
       const pct = parseFloat(inp.value);
       if (!isFinite(pct) || pct <= 0) { say('請輸入大於 0 的速度百分比', 'error'); return; }
       state.rippleSpeed = cp.checked;
-      const r = op('變速', p => C.setSpeed(p, id, { speed: pct / 100, reverse: cr.checked, ripple: cp.checked, linked: state.linkedSelection }), `速度 ${fmtNum(pct, 2)}%${cr.checked ? '（倒播）' : ''}`);
+      const o = { ripple: cp.checked, linked: state.linkedSelection };
+      let r;
+      if (cur) {
+        const name = RETIME_UI.find(x => x[0] === cur)[1];
+        r = op('曲線變速', p => C.setRetime(p, id, Object.assign({ preset: cur, strength: str.value / 100, base: pct / 100 }, o)), `曲線變速：${name}（基準 ${fmtNum(pct, 2)}%）`);
+      } else {
+        r = op('變速', p => {
+          if (wasRamped) { const x = C.clearRetime(p, id, o); if (!x.ok) return x; }
+          return C.setSpeed(p, id, Object.assign({ speed: pct / 100, reverse: cr.checked }, o));
+        }, `速度 ${fmtNum(pct, 2)}%${cr.checked ? '（倒播）' : ''}`);
+      }
       if (r && r.ok) closePop();
     };
     ok.addEventListener('click', apply);
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); apply(); } });
     act.append(no, ok);
-    box.append(row, presets, rev, rip, act);
+    box.append(row, presets, rtH, grid, strRow, desc, rev, rip, act);
+    sync();
     openPop(anchor, box, 'speed');
     inp.focus(); inp.select();
   }
@@ -300,7 +376,13 @@
     if (density >= 2) list = list.flatMap((t, i) => (i + 1 < list.length ? [t, (t + list[i + 1]) / 2] : [t]));
     else if (density < 1) { const step = Math.round(1 / density); list = list.filter((_, i) => i % step === 0); }
     const span = C.sourceSpan(p, c);
-    return list.map(t => Math.round(c.start + (t - span.from) * fpsv / c.speed)).filter(f => f >= c.start && f < C.clipEnd(c));
+    // 曲線變速：來源秒數和影格不是線性關係，用二分搜尋找畫面最接近的那一格（sourceTimeAt 是遞增的）
+    const toFrame = c.retime && !c.reverse ? t => {
+      let lo = c.start - 1, hi = C.clipEnd(c);
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (C.sourceTimeAt(p, c, m) < t) lo = m; else hi = m; }
+      return lo >= c.start && t - C.sourceTimeAt(p, c, lo) < C.sourceTimeAt(p, c, Math.min(hi, C.clipEnd(c) - 1)) - t ? lo : hi;
+    } : t => Math.round(c.start + (t - span.from) * fpsv / c.speed);
+    return list.map(toFrame).filter(f => f >= c.start && f < C.clipEnd(c));
   }
   async function detectBeatsInto(c, density, out) {
     const m = mediaOf(c.mediaId);
