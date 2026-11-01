@@ -140,6 +140,12 @@
   // ---- 標記、旗標 ------------------------------------------------------------------
   function addMarkerHere() {
     const f = state.playhead;
+    // 打拍子模式：播放中按 M 直接加一個節拍標記（不開小視窗、不加片段標記）
+    if (state.beatTap && state.mode === 'timeline' && UI.player && UI.player.playing) {
+      const r = state.history.run('打拍子', p => C.addBeatMarkers(p, [f], { replace: false }));
+      if (r && r.ok) say(`節拍 ${C.beatFrames(state.project).length}`);
+      return;
+    }
     const c = selIds().map(clipOf).find(x => x && x.start <= f && f < C.clipEnd(x));
     if (c) {
       const had = c.markers.find(m => m.offset === f - c.start);
@@ -271,6 +277,102 @@
     openPop(anchor, box, 'speed');
     inp.focus(); inp.select();
   }
+  // ---- 節拍：偵測、打拍子、卡點 --------------------------------------------------------
+  // 要分析的音樂：選取的片段有聲音就用它，否則音訊軌上第一個音樂（純音訊優先）
+  function beatSource() {
+    const p = state.project;
+    const hasAudio = c => {
+      if (!c || c.type !== 'media' || !c.mediaId || c.freeze) return false;
+      const m = mediaOf(c.mediaId);
+      return !!m && (m.kind === 'audio' || (m.kind === 'video' && m.hasAudio !== false));
+    };
+    const sel = selIds().map(clipOf).filter(hasAudio);
+    const pick = sel.find(c => C.getTrack(p, c.trackId).kind === 'audio') || sel[0];
+    if (pick) return pick;
+    const aud = Object.values(p.clips).filter(c => hasAudio(c) && C.getTrack(p, c.trackId).kind === 'audio').sort((a, b) => a.start - b.start);
+    return aud.find(c => mediaOf(c.mediaId).kind === 'audio') || aud[0] || null;
+  }
+  const BEAT_DENSITY = [['2', '每半拍（快節奏）'], ['1', '每一拍'], ['0.5', '每 2 拍'], ['0.25', '每小節（4 拍）']];
+  // 來源秒數的拍點 → 時間軸影格（片段範圍內）；density 2＝在兩拍中間補一點、0.5＝隔一拍取一點
+  function beatsToFrames(c, beats, density) {
+    const p = state.project, fpsv = p.fps;
+    let list = beats.slice();
+    if (density >= 2) list = list.flatMap((t, i) => (i + 1 < list.length ? [t, (t + list[i + 1]) / 2] : [t]));
+    else if (density < 1) { const step = Math.round(1 / density); list = list.filter((_, i) => i % step === 0); }
+    const span = C.sourceSpan(p, c);
+    return list.map(t => Math.round(c.start + (t - span.from) * fpsv / c.speed)).filter(f => f >= c.start && f < C.clipEnd(c));
+  }
+  async function detectBeatsInto(c, density, out) {
+    const m = mediaOf(c.mediaId);
+    if (c.reverse) { say('倒播的片段不能偵測節拍，先取消倒播', 'error'); return; }
+    out.textContent = '分析中…';
+    let buf = null;
+    try { buf = await R.media.decodeAudio(c.mediaId); } catch (_) { buf = null; }
+    if (!buf) { out.textContent = ''; say(`讀不到「${m ? m.name : '這個素材'}」的聲音`, 'error'); return; }
+    const chans = []; for (let i = 0; i < Math.min(2, buf.numberOfChannels); i++) chans.push(buf.getChannelData(i));
+    const span = C.sourceSpan(state.project, c);
+    const r = Q.beat.detect(chans, buf.sampleRate, { from: span.from, to: span.to });
+    if (!r.beats.length) { out.textContent = '找不到明顯的節拍（片段至少要 2 秒、節奏清楚的音樂比較準）'; return; }
+    const frames = beatsToFrames(c, r.beats, density);
+    const res = op('偵測節拍', p => C.addBeatMarkers(p, frames), `約 ${fmtNum(r.bpm * c.speed, 0)} BPM，加上 ${frames.length} 個節拍標記`);
+    out.textContent = res && res.ok ? `約 ${fmtNum(r.bpm * c.speed, 0)} BPM，加上 ${frames.length} 個節拍標記` : '';
+  }
+  function openBeatPop(anchor) {
+    const box = el('div', 'ed-form ed-beat');
+    box.append(el('div', 'ed-form-h', '節拍標記與卡點'));
+    // 1. 自動偵測
+    const src = beatSource();
+    box.append(el('div', 'ed-beat-h', '① 自動偵測'));
+    box.append(el('div', 'ed-hint', src ? `分析：${clipTitle(src)}` : '時間軸上還沒有音樂：先把音樂放到音訊軌（或選取有聲音的片段）'));
+    const row = el('div', 'ed-form-row');
+    const dens = el('select'); dens.id = 'edBeatDensity'; dens.setAttribute('aria-label', '節拍密度');
+    BEAT_DENSITY.forEach(([v, t]) => { const o = el('option', null, t); o.value = v; dens.append(o); });
+    dens.value = state.beatDensity || '1';
+    const go = el('button', 'ed-btn small primary', '偵測節拍'); go.type = 'button'; go.id = 'edBeatDetect'; go.disabled = !src;
+    row.append(dens, go);
+    const out = el('div', 'ed-hint ed-beat-out'); out.id = 'edBeatOut';
+    go.addEventListener('click', () => { state.beatDensity = dens.value; if (src) detectBeatsInto(clipOf(src.id) || src, Number(dens.value), out); });
+    box.append(row, out);
+    // 2. 打拍子
+    box.append(el('div', 'ed-beat-h', '② 手動打拍子'));
+    const tap = el('button', 'ed-btn small' + (state.beatTap ? ' active' : ''), state.beatTap ? '結束打拍子' : '開始打拍子'); tap.type = 'button'; tap.id = 'edBeatTap';
+    tap.addEventListener('click', () => {
+      state.beatTap = !state.beatTap;
+      closePop();
+      if (state.beatTap) {
+        if (src && (state.playhead < src.start || state.playhead >= C.clipEnd(src))) seekTimeline(src.start);
+        if (UI.player && !UI.player.playing) UI.player.toggle();
+        say('打拍子：跟著音樂按 M，每按一下加一個節拍標記；按空白鍵停止');
+      } else say('已結束打拍子');
+    });
+    box.append(el('div', 'ed-hint', '開始後會播放，跟著音樂按 M 鍵，每按一下就加一個節拍標記。'), tap);
+    // 3. 卡點
+    box.append(el('div', 'ed-beat-h', '③ 卡點：片段跟著節拍換'));
+    const n = selIds().length, nb = C.beatFrames(state.project).length;
+    const row2 = el('div', 'ed-form-row');
+    const every = el('select'); every.id = 'edBeatEvery'; every.setAttribute('aria-label', '每幾拍換一段');
+    [['1', '每 1 拍換一段'], ['2', '每 2 拍換一段'], ['4', '每 4 拍換一段']].forEach(([v, t]) => { const o = el('option', null, t); o.value = v; every.append(o); });
+    every.value = state.beatEvery || '1';
+    const fit = el('button', 'ed-btn small primary', '套用'); fit.type = 'button'; fit.id = 'edBeatFit'; fit.disabled = !n || !nb;
+    fit.addEventListener('click', () => {
+      state.beatEvery = every.value;
+      const r = op('卡點', p => C.fitClipsToBeats(p, selIds(), { every: Number(every.value) }));
+      if (r && r.ok) {
+        closePop();
+        say(`已把 ${r.count} 段片段排到節拍上` + (r.short ? `；${r.short} 段素材不夠長，後面留了空隙` : '') + (r.extra ? `；節拍不夠，${r.extra} 段照原長度接在後面` : ''));
+      }
+    });
+    row2.append(every, fit);
+    box.append(el('div', 'ed-hint', !nb ? '先用 ① 或 ② 加上節拍標記。' : !n ? `有 ${nb} 個節拍標記。在時間軸選取要卡點的圖片或影片（可以框選）。` : `把選取的 ${n} 段片段依時間順序排到 ${nb} 個節拍標記上。`), row2);
+    const act = el('div', 'ed-form-act');
+    const clr = el('button', 'ed-btn small', '清除節拍標記'); clr.type = 'button'; clr.id = 'edBeatClear'; clr.disabled = !nb;
+    clr.addEventListener('click', () => { const r = op('清除節拍標記', p => C.clearBeatMarkers(p)); if (r && r.ok) closePop(); });
+    const no = el('button', 'ed-btn small', '關閉'); no.type = 'button'; no.addEventListener('click', closePop);
+    act.append(clr, no);
+    box.append(act);
+    openPop(anchor, box, 'beat');
+  }
+
   function freezeTarget() {
     const f = state.playhead, p = state.project;
     const ok = c => c && c.type === 'media' && c.mediaId && mediaOf(c.mediaId) && mediaOf(c.mediaId).kind === 'video' && c.start <= f && f < C.clipEnd(c) && C.getTrack(p, c.trackId).kind === 'video';
@@ -554,6 +656,7 @@
       btn('edMarkOut', '設 Out', 'O', '把播放頭設成 Out（來源模式時設來源的 Out）', markOut),
       btn('edClearIO', '清除 In／Out', '', '清除 In／Out。快捷鍵 Alt+X', clearInOut),
       btn('edMarker', '標記', 'M', '在播放頭加標記（選取的片段在播放頭下時加片段標記）', addMarkerHere),
+      btn('edBeat', '節拍', '', '節拍：自動偵測音樂節拍、手動打拍子、讓片段跟著節拍換（卡點）', b => { b.dataset.pop = '1'; openBeatPop(b); }),
       btn('edFlag', '旗標', '', '替選取的片段加旗標顏色', b => { b.dataset.pop = '1'; openFlagPop(b); }),
       btn('edSpeed', '變速', MOD + 'R', '變速：速度百分比、倒播、波紋', b => { b.dataset.pop = '1'; openSpeedPop(b); }),
       btn('edFreeze', '定格', '⇧R', '定格：在播放頭插入定格畫面，或把整個片段變成定格', b => { b.dataset.pop = '1'; openFreezePop(b); }));
@@ -675,7 +778,7 @@
   }
 
   Object.assign(UI, {
-    MOD, TRANS_SIDE_TEXT, addMarkerHere, addTitle, addTransitionAt, addTransitionToSelection, applyTextFx,
+    MOD, TRANS_SIDE_TEXT, addMarkerHere, openBeatPop, addTitle, addTransitionAt, addTransitionToSelection, applyTextFx,
     applyTitleStyle, bladeAtPlayhead, buildToolbar, clearInOut, clickSelect, deleteSelection, doEdit, exportSrt,
     flushPop, importSrt, isSrtFile, linkSelection, markClipRange, markIn, markOut, markSubtitle, onKeyDown, onKeyUp,
     op, openFlagPop, openFreezePop, openMarkerPop, openSpeedPop, redo, sanitizeSelection, selectClips,

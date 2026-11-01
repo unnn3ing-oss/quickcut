@@ -24,6 +24,19 @@
   const ASPECTS = { '9:16': [1080, 1920], '16:9': [1920, 1080], '4:5': [1080, 1350], '1:1': [1080, 1080] };
   // 片段放進輸出畫面的方式：fit＝完整（黑邊）、blur＝完整＋同一畫面的模糊放大當背景、fill＝填滿（裁切）、stretch＝拉伸
   const FIT_MODES = ['fit', 'blur', 'fill', 'stretch'];
+  // 可以打關鍵影格的參數 → [最小, 最大]（和 sanitize 的範圍一致）。f 是「片段內影格」（0 = 片段第一格），
+  //   可以超出片段範圍（修剪、切開後留著，邊界附近的內插才不會變）。
+  const KF_PATHS = {
+    'video.transform.zoomX': [0.01, 100], 'video.transform.zoomY': [0.01, 100],
+    'video.transform.posX': [-1e5, 1e5], 'video.transform.posY': [-1e5, 1e5],
+    'video.transform.rotation': [-36000, 36000], 'video.transform.opacity': [0, 1],
+    'video.transform.anchorX': [-1e5, 1e5], 'video.transform.anchorY': [-1e5, 1e5],
+    'video.crop.left': [0, 1], 'video.crop.right': [0, 1], 'video.crop.top': [0, 1], 'video.crop.bottom': [0, 1],
+  };
+  // 兩個關鍵影格之間怎麼走：linear＝等速、ease＝緩入緩出、hold＝停在前一格的值直到下一格
+  const KF_INTERPS = ['linear', 'ease', 'hold'];
+  // 節拍標記：一般的時間軸標記，用名稱認（使用者也可以自己改名字讓它變回普通標記）
+  const BEAT_NAME = '節拍', BEAT_COLOR = 'yellow';
   const MAX_SIDE = 3840;                  // 'source' 比例的長邊上限
   const MARKER_COLORS = ['blue', 'cyan', 'green', 'yellow', 'red', 'pink', 'purple', 'fuchsia', 'rose', 'lavender', 'sky', 'mint', 'lemon', 'sand', 'cocoa', 'cream'];
   const TRANSITION_TYPES = ['crossDissolve', 'dipToColor', 'fadeToBlack', 'wipe', 'push', 'slide', 'zoom', 'blur',
@@ -715,6 +728,7 @@
       c.start -= delta; c.duration += delta;
       if (!c.reverse) c.srcIn = r9(c.srcIn - ds);
       for (const m of c.markers) m.offset += delta;
+      shiftKeyframes(c, delta);
     } else {
       c.duration += delta;
       if (c.reverse) c.srcIn = r9(c.srcIn - ds);
@@ -734,6 +748,8 @@
     }
     c.markers = c.markers.filter(m => m.offset < leftDur);
     r.markers = r.markers.filter(m => m.offset >= leftDur).map(m => Object.assign(m, { offset: m.offset - leftDur }));
+    shiftKeyframes(r, -leftDur);
+    pruneKeyframes(c); pruneKeyframes(r);
     if (c.audio) { c.audio.fadeOut = 0; r.audio.fadeIn = 0; }
     p.clips[r.id] = r;
     for (const t of Object.values(p.transitions)) if (t.leftClipId === c.id) t.leftClipId = r.id;  // 尾端的轉場跟著右半
@@ -799,6 +815,56 @@
       else if (c.start < from) adjustEdge(p, c, 'end', from - e);
       else adjustEdge(p, c, 'start', c.start - to);
     }
+  }
+
+  // ---- 關鍵影格的時間調整（片段內影格跟著內容走）---------------------------------------
+  function eachKeyframes(c, fn) {
+    if (!c.keyframes) return;
+    for (const path of Object.keys(c.keyframes)) {
+      const a = c.keyframes[path];
+      if (Array.isArray(a) && a.length) fn(a, path); else delete c.keyframes[path];
+    }
+  }
+  // 片段開頭往前／往後長了 delta 格：原本的畫面在片段內的位置跟著移
+  function shiftKeyframes(c, delta) { if (delta) eachKeyframes(c, a => { for (const k of a) k.f += delta; }); }
+  // 長度改變（變速）：關鍵影格依比例伸縮
+  function scaleKeyframes(c, ratio) {
+    if (ratio === 1 || !isFinite(ratio)) return;
+    eachKeyframes(c, a => {
+      for (const k of a) k.f = Math.round(k.f * ratio);
+      dedupeKeys(a);
+    });
+  }
+  function dedupeKeys(a) {
+    a.sort((x, y) => x.f - y.f);
+    for (let i = a.length - 1; i > 0; i--) if (a[i].f === a[i - 1].f) a.splice(i - 1, 1);
+  }
+  // 切開後：只留片段範圍內的，加上兩側各最近的一個（片段內的內插結果完全不變）
+  function pruneKeyframes(c) {
+    eachKeyframes(c, (a, path) => {
+      a.sort((x, y) => x.f - y.f);
+      const inside = a.filter(k => k.f >= 0 && k.f < c.duration);
+      const before = a.filter(k => k.f < 0).pop(), after = a.find(k => k.f >= c.duration);
+      const keep = [before, ...inside, after].filter(Boolean);
+      if (keep.length) c.keyframes[path] = keep; else delete c.keyframes[path];
+    });
+  }
+  // 在片段內第 f 格的值（關鍵影格內插）；fx.getParam 也用這支，預覽和匯出一致
+  function keyframeValue(kfs, f) {
+    const a = kfs.slice().sort((p, q) => p.f - q.f);
+    if (f <= a[0].f) return a[0].v;
+    const last = a[a.length - 1];
+    if (f >= last.f) return last.v;
+    for (let i = 0; i < a.length - 1; i++) {
+      const k0 = a[i], k1 = a[i + 1];
+      if (f >= k0.f && f < k1.f) {
+        if (k0.interp === 'hold' || typeof k0.v !== 'number' || typeof k1.v !== 'number') return k0.v;
+        let u = (f - k0.f) / (k1.f - k0.f);
+        if (k0.interp === 'ease') u = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+        return k0.v + (k1.v - k0.v) * u;
+      }
+    }
+    return last.v;
   }
 
   // 深層合併（陣列裡是物件時依索引合併，null 表示這一格不變）
@@ -1155,6 +1221,105 @@
     if (!p.markers.some(x => x.id === id)) return fail('找不到這個標記');
     return tx(p, q => { q.markers = q.markers.filter(x => x.id !== id); return {}; }, { lockCheck: false });
   };
+  // ---- 節拍標記與卡點 ---------------------------------------------------------------
+  const isBeat = m => m.name === BEAT_NAME;
+  const beatFrames = p => p.markers.filter(isBeat).map(m => m.frame).sort((a, b) => a - b);
+  // 一次加一批節拍標記（一筆復原）。o.replace（預設 true）：先清掉舊的節拍標記；同一格已經有標記就略過
+  const addBeatMarkers = guard((p, frames, o = {}) => {
+    const list = [...new Set(arr(frames).map(f => Math.round(Number(f))).filter(f => isFinite(f) && f >= 0))].sort((a, b) => a - b);
+    if (!list.length) return fail('沒有找到節拍');
+    return tx(p, q => {
+      if (o.replace !== false) q.markers = q.markers.filter(m => !isBeat(m));
+      const used = new Set(q.markers.map(m => m.frame));
+      let count = 0;
+      for (const f of list) {
+        if (used.has(f)) continue;
+        used.add(f); count++;
+        q.markers.push({ id: newId(q, 'k'), frame: f, duration: 0, color: BEAT_COLOR, name: BEAT_NAME, note: '' });
+      }
+      return { count };
+    }, { lockCheck: false });
+  });
+  const clearBeatMarkers = guard(p => {
+    const n = p.markers.filter(isBeat).length;
+    if (!n) return fail('時間軸上沒有節拍標記');
+    return tx(p, q => { q.markers = q.markers.filter(m => !isBeat(m)); return { count: n }; }, { lockCheck: false });
+  });
+
+  // 卡點：把選取的片段（同一條軌）依時間順序排到節拍上，每段長度＝ every 拍。
+  //   第一段的開頭不動，結尾對齊開頭之後的第一個節拍（太近、不到半段長就用下一個）；接著每段佔 every 拍。
+  //   影片素材不夠長時用到最長，後面留空隙（回傳 short）；節拍不夠時剩下的片段照原長度接在後面（回傳 extra）。
+  //   連結的聲音跟著移；同一軌、排序範圍後面沒選到的片段整批往前／往後推，不會被蓋掉。
+  //   o.beats：節拍影格（省略＝時間軸上的節拍標記）；o.every：每幾拍換一段（預設 1）
+  const fitClipsToBeats = guard((p, ids, o = {}) => {
+    const sel = needClips(p, ids);
+    const byTrack = new Map();
+    for (const c of sel) { if (!byTrack.has(c.trackId)) byTrack.set(c.trackId, []); byTrack.get(c.trackId).push(c); }
+    const order = id => p.tracks.findIndex(t => t.id === id);
+    const tid = [...byTrack.keys()].sort((a, b) => byTrack.get(b).length - byTrack.get(a).length || order(a) - order(b))[0];
+    const clips = byTrack.get(tid).slice().sort((a, b) => a.start - b.start);
+    if (clips.length < 1) return fail('先選取要卡點的片段');
+    const every = Math.max(1, Math.round(Number(o.every) || 1));
+    const beats = (o.beats ? arr(o.beats).map(Number) : beatFrames(p)).map(Math.round).filter(isFinite).sort((a, b) => a - b);
+    if (!beats.length) return fail('時間軸上還沒有節拍標記：先偵測節拍或在播放時按 M 打拍子');
+    const first = clips[0].start;
+    const ahead = beats.filter(f => f > first);
+    if (!ahead.length) return fail('第一段片段之後沒有節拍標記');
+    // 第一段至少要有半段長（避免開頭剛好差一點點就到拍子，變成一閃而過的短片段）
+    const gaps = ahead.slice(1).map((f, i) => f - ahead[i]).sort((a, b) => a - b);
+    const seg = (gaps.length ? gaps[Math.floor(gaps.length / 2)] : ahead[0] - first) * every;
+    let k = ahead.findIndex(f => f - first >= seg / 2);
+    if (k < 0) k = ahead.length - 1;
+    const bounds = [first];
+    for (let i = k; i < ahead.length; i += every) bounds.push(ahead[i]);
+    const group = new Set(clips.map(c => c.id));
+    for (const c of clips) for (const x of linkedClips(p, c.id)) group.add(x.id);
+    needUnlocked(p, [...group].map(i => p.clips[i]));
+    const oldEnd = clipEnd(clips[clips.length - 1]);
+    // 範圍內夾著沒選到的片段：不知道該放哪，請使用者處理
+    const between = clipsOnTrack(p, tid).find(c => !group.has(c.id) && c.start < oldEnd && clipEnd(c) > first);
+    if (between) return fail(`${clipLabel(between)}夾在選取的片段中間：一起選取，或先移開再卡點`);
+    let short = 0, extra = 0;
+    return tx(p, q => {
+      let cursor = first;
+      clips.forEach((c0, i) => {
+        const c = q.clips[c0.id];
+        let start, want;
+        if (i + 1 < bounds.length) { start = bounds[i]; want = bounds[i + 1] - bounds[i]; }
+        else { start = cursor; want = c.duration; extra++; }
+        start = Math.max(start, cursor);
+        const room = c.duration + maxExtend(q, c, 'end');
+        let dur = Math.max(1, Math.min(want, room));
+        if (dur < want) short++;
+        const ds = start - c.start, dd = dur - c.duration;
+        for (const x of linkedClips(q, c.id)) {
+          const same = x.start === c.start && x.duration === c.duration;
+          x.start += ds;
+          if (same) adjustEdge(q, x, 'end', dd);
+        }
+        c.start = start;
+        adjustEdge(q, c, 'end', dd);
+        cursor = start + dur;
+      });
+      // 轉場：兩邊不再相鄰就拿掉；變短的片段放不下就縮短轉場
+      for (const tr of Object.values(q.transitions)) {
+        const L = tr.leftClipId && q.clips[tr.leftClipId], R = tr.rightClipId && q.clips[tr.rightClipId];
+        if (!(group.has(tr.leftClipId) || group.has(tr.rightClipId))) continue;
+        if (L && R && R.start !== clipEnd(L)) { delete q.transitions[tr.id]; continue; }
+        const max = L && R ? Math.min(L.duration, R.duration) : (L || R).duration;
+        if (tr.duration > max) tr.duration = max;
+      }
+      const delta = cursor - oldEnd;
+      if (delta) {
+        const shifts = {};
+        const tracks = new Set([...group].map(i => q.clips[i].trackId));
+        for (const k of Object.values(q.clips)) if (!group.has(k.id) && tracks.has(k.trackId) && k.start >= oldEnd) shifts[k.id] = delta;
+        applyShifts(q, shifts, group);
+      }
+      return { count: clips.length, short, extra, end: cursor };
+    });
+  });
+
   // 片段標記：m.offset（相對片段起點）或 m.frame（時間軸影格）擇一
   const addClipMarker = guard((p, clipId, m = {}) => {
     const c = needClips(p, clipId)[0];
@@ -1233,6 +1398,7 @@
           const D = finiteDur(q, k);
           if (D != null && k.srcIn + nd * sp / q.fps > D + EPS) nd = Math.max(1, Math.floor((D - k.srcIn) * q.fps / sp + EPS));
           if (g === c.id) delta = nd - k.duration;
+          scaleKeyframes(k, nd / k.duration);
           k.duration = nd;
         }
         k.speed = sp; k.reverse = rev;
@@ -1389,6 +1555,185 @@
     });
   });
 
+  // ---- 關鍵影格 ----------------------------------------------------------------------
+  // values：{ path: 值 }，一次設定多個參數（例如連結縮放時 zoomX＋zoomY）在片段內第 f 格。
+  //   那一格已經有關鍵影格就改值；沒有就新增。interp 省略時：改值保留原本的、新增用前一個關鍵影格的（都沒有就 linear）。
+  const readPath = (o, path) => path.split('.').reduce((x, k) => (x == null ? undefined : x[k]), o);
+  function writePath(o, path, v) {
+    const ks = path.split('.');
+    let t = o;
+    for (const k of ks.slice(0, -1)) t = t[k];
+    t[ks[ks.length - 1]] = v;
+  }
+  function kfClip(p, id) {
+    const c = needClips(p, id)[0];
+    needUnlocked(p, [c]);
+    if (!c.video) bail('這個片段沒有畫面，不能打關鍵影格');
+    return c;
+  }
+  const kfFrame = (c, f) => {
+    f = Math.round(Number(f));
+    if (!isFinite(f) || f < 0 || f >= c.duration) bail('播放頭要在這個片段的範圍內才能打關鍵影格');
+    return f;
+  };
+  const kfPaths = paths => {
+    const list = arr(paths);
+    if (!list.length) bail('沒有指定要打關鍵影格的參數');
+    for (const x of list) if (!KF_PATHS[x]) bail(`「${x}」不能打關鍵影格`);
+    return list;
+  };
+  const setKeyframe = guard((p, id, f, values = {}, interp) => {
+    const c = kfClip(p, id);
+    f = kfFrame(c, f);
+    const paths = kfPaths(Object.keys(values));
+    if (interp != null && !KF_INTERPS.includes(interp)) return fail('內插方式只能是等速、緩入緩出或停格');
+    const vals = {};
+    for (const x of paths) {
+      const v = Number(values[x]);
+      if (!isFinite(v)) return fail(`數值不正確：${x}`);
+      vals[x] = clamp(v, KF_PATHS[x][0], KF_PATHS[x][1]);
+    }
+    return tx(p, q => {
+      const k = q.clips[c.id];
+      k.keyframes = k.keyframes || {};
+      for (const x of paths) {
+        const a = k.keyframes[x] = Array.isArray(k.keyframes[x]) ? k.keyframes[x] : [];
+        const cur = a.find(e => e.f === f);
+        if (cur) { cur.v = vals[x]; if (interp) cur.interp = interp; }
+        else {
+          const prev = a.filter(e => e.f < f).sort((m, n) => n.f - m.f)[0];
+          a.push({ f, v: vals[x], interp: interp || (prev && prev.interp) || 'linear' });
+          a.sort((m, n) => m.f - n.f);
+        }
+      }
+      return { f };
+    });
+  });
+  // 和 setClipProps 一樣，但「已經有關鍵影格的參數」改成在時間軸第 frame 格（播放頭）新增／修改關鍵影格，
+  //   其他參數照常改靜態值。詳細內容和預覽畫面上的拖曳都走這支，有動畫的參數才不會改了沒反應。
+  function leafPaths(o, pre, out) {
+    for (const k of Object.keys(o)) {
+      const v = o[k], path = pre ? pre + '.' + k : k;
+      if (isObj(v)) leafPaths(v, path, out); else out.push([path, v]);
+    }
+    return out;
+  }
+  const setClipPropsAt = guard((p, ids, patch = {}, frame) => {
+    const clips = needClips(p, ids);
+    const leaves = leafPaths(patch, '', []);
+    const animated = c => leaves.filter(([x]) => KF_PATHS[x] && c.keyframes && Array.isArray(c.keyframes[x]) && c.keyframes[x].length);
+    if (!clips.some(c => animated(c).length)) return setClipProps(p, ids, patch);
+    const pre = setClipProps(copy(p), ids, patch);    // 只借它的檢查（在副本上跑）
+    if (!pre.ok) return pre;
+    for (const c of clips) {
+      if (!animated(c).length) continue;
+      const f = Math.round(Number(frame)) - c.start;
+      if (!(f >= 0 && f < c.duration)) return fail('這個參數有關鍵影格：先把播放頭移到片段上再調整');
+    }
+    return tx(p, q => {
+      for (const c of clips) {
+        const k = q.clips[c.id], an = animated(c);
+        // 靜態值：有動畫的參數不改（只寫關鍵影格），其他照常改
+        const rest = copy(patch);
+        for (const [x] of an) {
+          const ks = x.split('.'); let o = rest;
+          for (const kk of ks.slice(0, -1)) o = o && o[kk];
+          if (o) delete o[ks[ks.length - 1]];
+        }
+        deepMerge(k, rest); sanitize(k);
+        const f = Math.round(Number(frame)) - c.start;
+        for (const [x, v0] of an) {
+          const v = clamp(Number(v0), KF_PATHS[x][0], KF_PATHS[x][1]);
+          if (!isFinite(v)) bail(`數值不正確：${x}`);
+          const a = k.keyframes[x], cur = a.find(e => e.f === f);
+          if (cur) cur.v = v;
+          else {
+            const prev = a.filter(e => e.f < f).sort((m, n) => n.f - m.f)[0];
+            a.push({ f, v, interp: (prev && prev.interp) || 'linear' });
+            a.sort((m, n) => m.f - n.f);
+          }
+        }
+      }
+      return {};
+    });
+  });
+  // 刪掉第 f 格的關鍵影格；某個參數的最後一個被刪掉時，靜態值改成那一格的值（畫面不會突然跳回舊值）
+  const removeKeyframe = guard((p, id, f, paths) => {
+    const c = kfClip(p, id);
+    f = Math.round(Number(f));
+    const list = kfPaths(paths).filter(x => c.keyframes && Array.isArray(c.keyframes[x]) && c.keyframes[x].some(e => e.f === f));
+    if (!list.length) return fail('這一格沒有關鍵影格');
+    return tx(p, q => {
+      const k = q.clips[c.id];
+      for (const x of list) {
+        const a = k.keyframes[x], gone = a.find(e => e.f === f);
+        k.keyframes[x] = a.filter(e => e.f !== f);
+        if (!k.keyframes[x].length) { delete k.keyframes[x]; writePath(k, x, gone.v); }
+      }
+      sanitize(k);
+      return {};
+    });
+  });
+  // 清掉這些參數的所有關鍵影格；靜態值改成片段內第 f 格（通常是播放頭）看到的值
+  const clearKeyframes = guard((p, id, paths, f = 0) => {
+    const c = kfClip(p, id);
+    const all = paths ? kfPaths(paths) : Object.keys(c.keyframes || {}).filter(x => KF_PATHS[x]);
+    const list = all.filter(x => c.keyframes && Array.isArray(c.keyframes[x]) && c.keyframes[x].length);
+    if (!list.length) return fail('沒有關鍵影格可以清除');
+    return tx(p, q => {
+      const k = q.clips[c.id];
+      for (const x of list) { writePath(k, x, keyframeValue(k.keyframes[x], Number(f) || 0)); delete k.keyframes[x]; }
+      sanitize(k);
+      return {};
+    });
+  });
+  // 改第 f 格關鍵影格「到下一格」的走法
+  const setKeyframeInterp = guard((p, id, f, interp, paths) => {
+    const c = kfClip(p, id);
+    if (!KF_INTERPS.includes(interp)) return fail('內插方式只能是等速、緩入緩出或停格');
+    f = Math.round(Number(f));
+    const all = paths ? kfPaths(paths) : Object.keys(c.keyframes || {});
+    const list = all.filter(x => c.keyframes && Array.isArray(c.keyframes[x]) && c.keyframes[x].some(e => e.f === f));
+    if (!list.length) return fail('這一格沒有關鍵影格');
+    return tx(p, q => { for (const x of list) q.clips[c.id].keyframes[x].find(e => e.f === f).interp = interp; return {}; });
+  });
+  // 片段所有關鍵影格的位置（片段內影格，排序、去重，只含片段範圍內）；paths 省略＝全部參數
+  function keyframeFrames(c, paths) {
+    const s = new Set();
+    for (const x of paths ? arr(paths) : Object.keys((c && c.keyframes) || {})) {
+      const a = c && c.keyframes && c.keyframes[x];
+      if (Array.isArray(a)) for (const e of a) if (e.f >= 0 && e.f < c.duration) s.add(e.f);
+    }
+    return Array.from(s).sort((a, b) => a - b);
+  }
+  // 一鍵動畫：在片段頭尾各打一組關鍵影格（緩入緩出）。kind：zoomIn 慢慢放大、zoomOut 慢慢縮小、panLeft／panRight 左右平移
+  const KF_PRESETS = ['zoomIn', 'zoomOut', 'panLeft', 'panRight'];
+  const applyKeyframePreset = guard((p, id, kind, o = {}) => {
+    const c = kfClip(p, id);
+    if (!KF_PRESETS.includes(kind)) return fail('不認得的動畫種類');
+    const amt = clamp(Number(o.amount) || 0.15, 0.02, 1);
+    const last = c.duration - 1;
+    if (last < 1) return fail('片段太短，至少要 2 格才能做動畫');
+    const z = readPath(c, 'video.transform.zoomX') || 1;
+    const shift = Math.round((p.width || 1080) * amt / 2), px = Number(readPath(c, 'video.transform.posX')) || 0;
+    const plan = {
+      zoomIn: { 'video.transform.zoomX': [z, z * (1 + amt)], 'video.transform.zoomY': [z, z * (1 + amt)] },
+      zoomOut: { 'video.transform.zoomX': [z * (1 + amt), z], 'video.transform.zoomY': [z * (1 + amt), z] },
+      panLeft: { 'video.transform.zoomX': [z * (1 + amt), z * (1 + amt)], 'video.transform.zoomY': [z * (1 + amt), z * (1 + amt)], 'video.transform.posX': [px + shift, px - shift] },
+      panRight: { 'video.transform.zoomX': [z * (1 + amt), z * (1 + amt)], 'video.transform.zoomY': [z * (1 + amt), z * (1 + amt)], 'video.transform.posX': [px - shift, px + shift] },
+    }[kind];
+    return tx(p, q => {
+      const k = q.clips[c.id];
+      k.keyframes = k.keyframes || {};
+      for (const x of ['video.transform.zoomX', 'video.transform.zoomY', 'video.transform.posX']) delete k.keyframes[x];
+      for (const [x, [a, b]] of Object.entries(plan)) {
+        k.keyframes[x] = [{ f: 0, v: r9(a), interp: 'ease' }, { f: last, v: r9(b), interp: 'ease' }];
+      }
+      k.video.transform.zoomLinked = true;
+      return {};
+    });
+  });
+
   // ---- 比例轉換 ----------------------------------------------------------------------
   // 時間軸上影片軌的「影片／圖片」片段（不含字幕、色塊）
   function mediaVisualClips(p) {
@@ -1509,6 +1854,10 @@
     setInOut, clearInOut, editToTimeline, addClip, link, unlink,
     addMarker, updateMarker, removeMarker, addClipMarker, updateClipMarker, removeClipMarker, setFlags,
     setSpeed, freezeFrame, addTransition, updateTransition, removeTransition, setClipProps, setFitAll, aspectMismatch,
+    // 節拍
+    BEAT_NAME, beatFrames, addBeatMarkers, clearBeatMarkers, fitClipsToBeats,
+    // 關鍵影格
+    KF_PATHS, KF_INTERPS, KF_PRESETS, keyframeValue, keyframeFrames, setKeyframe, setClipPropsAt, removeKeyframe, clearKeyframes, setKeyframeInterp, applyKeyframePreset,
     // 復原
     createHistory, bus,
   };

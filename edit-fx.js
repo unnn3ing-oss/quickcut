@@ -45,7 +45,7 @@
   }
 
   // 讀參數：path 例如 'video.transform.zoomX'。clip.keyframes[path] 有資料就內插，否則讀靜態值。
-  // 第一階段內插：linear（數字）／hold（也套用在非數字，例如翻轉）；'bezier' 先當 linear（第二階段再做）。
+  // 內插：linear（等速）／ease（緩入緩出）／hold（停格，也套用在非數字，例如翻轉），實作在 core.keyframeValue。
   function getStatic(clip, path) {
     let o = clip;
     for (const k of path.split('.')) {
@@ -65,20 +65,9 @@
   function getParam(clip, path, fInClip) {
     const kfs = clip && clip.keyframes && clip.keyframes[path];
     if (Array.isArray(kfs) && kfs.length) {
-      const a = kfs.slice().sort((p, q) => p.f - q.f);
-      const f = fInClip || 0;
-      if (f <= a[0].f) return a[0].v;
-      const last = a[a.length - 1];
-      if (f >= last.f) return last.v;
-      for (let i = 0; i < a.length - 1; i++) {
-        const k0 = a[i], k1 = a[i + 1];
-        if (f >= k0.f && f < k1.f) {
-          if (k0.interp === 'hold' || typeof k0.v !== 'number' || typeof k1.v !== 'number') return k0.v;
-          const u = (f - k0.f) / (k1.f - k0.f);
-          return k0.v + (k1.v - k0.v) * u;
-        }
-      }
-      return last.v;
+      const C = root.QPTEdit && root.QPTEdit.core;
+      // 內插只寫在 core.keyframeValue 一個地方（linear／ease／hold）；core 沒載入時退回第一個值
+      return C && typeof C.keyframeValue === 'function' ? C.keyframeValue(kfs, fInClip || 0) : kfs[0].v;
     }
     const v = clip ? getStatic(clip, path) : undefined;
     return v === undefined ? defaultFor(path) : v;
@@ -1027,6 +1016,23 @@
 .ed-fx-ch.sp{min-width:10px;cursor:default;border:none}
 .ed-fx-br{flex-basis:100%;height:0}
 .ed-fx-chars-empty{font-size:11px;color:var(--ed-muted,var(--muted,#6b7890))}
+.ed-kf{flex:none;width:24px;height:24px;padding:0;border:none;background:none;cursor:pointer;position:relative;color:var(--ed-muted,var(--muted,#6b7890))}
+.ed-kf::before{content:'';position:absolute;left:7px;top:7px;width:9px;height:9px;transform:rotate(45deg);border:1.5px solid currentColor;border-radius:1px;box-sizing:border-box}
+.ed-kf:hover:not(:disabled){color:var(--ed-accent,var(--accent,#004aad))}
+.ed-kf.anim{color:#e8a200}
+.ed-kf.anim::before{background:linear-gradient(135deg,currentColor 50%,transparent 50%)}
+.ed-kf.on{color:#e8a200}
+.ed-kf.on::before{background:currentColor}
+.ed-kf:disabled{opacity:.35;cursor:not-allowed}
+.ed-fx-row.kf-anim>.ed-fx-lab{color:#c98a00}
+.ed-kfbar{display:flex;flex-direction:column;gap:6px;padding:6px;border-radius:8px;background:var(--ed-field,var(--field-bg,#fff));border:1px solid var(--ed-border,var(--border,rgba(0,74,173,.2)))}
+.ed-kfnav,.ed-kfpre{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.ed-kfnav .ed-fx-btn{padding:2px 7px;min-height:24px;min-width:24px}
+.ed-kf-info{flex:1 1 auto;font-size:11px;color:var(--ed-muted,var(--muted,#6b7890));text-align:center;min-width:80px}
+.ed-fx select.ed-kf-interp{width:auto;flex:0 1 auto;min-height:24px}
+.ed-kfpre .ed-fx-lab{width:100%}
+.ed-kfpre .ed-fx-btn{padding:3px 8px;font-size:11px;min-height:24px}
+.ed-fx-btn:disabled{opacity:.4;cursor:not-allowed}
 .ed-fx-hint{font-size:11px;color:var(--ed-muted,var(--muted,#6b7890));line-height:1.4}
 `;
     d.head.appendChild(st);
@@ -1040,12 +1046,18 @@
     return e;
   };
 
-  // 每個欄位：{ el, refresh() }；st 是這個區段的共用狀態 { subject, commit }
+  // 欄位的 kf：['zoomX'] 或 c => [...]；'crop.left' 這種寫法代表 video.crop.left，其他是 video.transform.*
+  const kfPaths = (def, c) => (typeof def.kf === 'function' ? def.kf(c) : def.kf).map(k => (k.startsWith('crop.') ? 'video.' + k : 'video.transform.' + k));
+  const KF_INTERP_OPTIONS = [['linear', '等速'], ['ease', '緩入緩出'], ['hold', '停格（跳到下一格）']];
+  const KF_PRESET_OPTIONS = [['zoomIn', '慢慢放大', '從頭到尾慢慢放大（推近）'], ['zoomOut', '慢慢縮小', '從頭到尾慢慢縮小（拉遠）'],
+    ['panLeft', '向左平移', '畫面慢慢往左移（稍微放大避免黑邊）'], ['panRight', '向右平移', '畫面慢慢往右移（稍微放大避免黑邊）']];
+
+  // 每個欄位：{ el, refresh() }；st 是這個區段的共用狀態 { subject, commit, ctx }
   function makeRow(st, def) {
     const row = el('div', 'ed-fx-row');
     const ctl = el('div', 'ed-fx-ctl');
     const emit = (patch, live) => st.commit && st.commit(patch, { live: !!live });
-    const get = () => def.get(st.subject);
+    const get = () => def.get(st.subject, st.ctx);
     let refresh = () => {};
     const lab = txt => { const l = el('span', 'ed-fx-lab', txt); l.title = txt; return l; };
 
@@ -1055,7 +1067,12 @@
       row.style.gridTemplateColumns = '1fr';
       const b = el('button', 'ed-fx-btn', def.label);
       b.type = 'button';
-      b.addEventListener('click', () => emit(def.patch(st.subject), false));
+      // kfReset：重設時順便清掉這一類參數的關鍵影格（例如 'video.transform.'），交給詳細內容一次做完（一筆復原）
+      b.addEventListener('click', () => {
+        const x = st.ctx;
+        if (def.kfReset && x && x.kf) x.kf.reset(def.kfReset, def.patch(st.subject), st.subject);
+        else emit(def.patch(st.subject), false);
+      });
       row.append(b);
     } else if (def.type === 'hint') {
       row.style.gridTemplateColumns = '1fr';
@@ -1075,12 +1092,29 @@
         ctl.append(rng);
       }
       ctl.append(inp, unit);
+      // 關鍵影格菱形：空心＝這個參數沒有動畫、半實心＝有動畫但這格沒有、實心＝這格有關鍵影格
+      let kfBtn = null;
+      if (def.kf) {
+        kfBtn = el('button', 'ed-kf');
+        kfBtn.type = 'button'; kfBtn.setAttribute('aria-label', def.label + '：關鍵影格');
+        kfBtn.addEventListener('click', () => { const x = st.ctx; if (x && x.kf) x.kf.toggle(kfPaths(def, st.subject), st.subject); });
+        ctl.append(kfBtn);
+      }
       const lo = def.min == null ? -Infinity : def.min, hi = def.max == null ? Infinity : def.max;
       const q = v => { const p = Math.pow(10, dec) * scale; return Math.round(clamp(v, lo, hi) * p) / p; };   // 夾範圍並對齊顯示精度
       const cur = () => num(get(), def.def == null ? 0 : def.def);
       refresh = () => {
         if (root.document.activeElement !== inp) inp.value = fmtNum(cur() * scale, dec);
         if (rng && root.document.activeElement !== rng) rng.value = String(cur() * scale);
+        if (kfBtn) {
+          const x = st.ctx || {}, ps = kfPaths(def, st.subject), c = st.subject;
+          const anim = ps.some(q => c.keyframes && Array.isArray(c.keyframes[q]) && c.keyframes[q].length);
+          const here = anim && ps.some(q => (c.keyframes[q] || []).some(e => e.f === x.f));
+          kfBtn.className = 'ed-kf' + (here ? ' on' : anim ? ' anim' : '');
+          kfBtn.disabled = !x.inRange;
+          kfBtn.title = !x.inRange ? '把播放頭移到這個片段上才能打關鍵影格' : here ? '刪除這一格的關鍵影格' : anim ? '在播放頭加關鍵影格' : '開始做動畫：在播放頭加第一個關鍵影格';
+          row.classList.toggle('kf-anim', anim);
+        }
       };
       if (rng) {
         const fromRng = () => q(parseFloat(rng.value) / scale);
@@ -1127,6 +1161,39 @@
         emit(def.patch(def.def, st.subject), false);
       });
       row.append(l, ctl);
+    } else if (def.type === 'kfbar') {
+      // 關鍵影格工具列：上一個／下一個、這格的走法、清除；沒有動畫時只顯示一鍵動畫
+      row.style.gridTemplateColumns = '1fr';
+      row.className = 'ed-kfbar';
+      const mk = (cls, txt, tip) => { const b = el('button', 'ed-fx-btn ' + cls, txt); b.type = 'button'; b.title = tip; return b; };
+      const nav = el('div', 'ed-kfnav');
+      const prev = mk('ed-kf-prev', '◀', '上一個關鍵影格'), next = mk('ed-kf-next', '▶', '下一個關鍵影格');
+      const info = el('span', 'ed-kf-info');
+      const interp = el('select', 'ed-kf-interp'); interp.title = '從這一格到下一格怎麼變化';
+      KF_INTERP_OPTIONS.forEach(([v, t]) => { const o = el('option', null, t); o.value = v; interp.append(o); });
+      const clear = mk('ed-kf-clear', '清除', '清除這個片段的所有關鍵影格（停在播放頭看到的樣子）');
+      nav.append(prev, info, next, interp, clear);
+      const pre = el('div', 'ed-kfpre');
+      pre.append(el('span', 'ed-fx-lab', '一鍵動畫'));
+      for (const [k, t, tip] of KF_PRESET_OPTIONS) { const b = mk('ed-kf-preset', t, tip); b.dataset.preset = k; b.addEventListener('click', () => st.ctx && st.ctx.kf && st.ctx.kf.preset(k, st.subject)); pre.append(b); }
+      row.append(nav, pre);
+      const frames = () => { const c = st.subject, s0 = new Set(); for (const q of Object.keys(c.keyframes || {})) for (const e of c.keyframes[q] || []) if (e.f >= 0 && e.f < c.duration) s0.add(e.f); return Array.from(s0).sort((a, b) => a - b); };
+      prev.addEventListener('click', () => { const x = st.ctx, fs = frames().filter(f => f < x.f); if (fs.length) x.kf.seek(fs[fs.length - 1], st.subject); });
+      next.addEventListener('click', () => { const x = st.ctx, fs = frames().filter(f => f > x.f); if (fs.length) x.kf.seek(fs[0], st.subject); });
+      interp.addEventListener('change', () => st.ctx.kf.interp(interp.value, st.subject));
+      clear.addEventListener('click', () => st.ctx.kf.clear(st.subject));
+      refresh = () => {
+        const x = st.ctx || {}, fs = frames(), c = st.subject;
+        nav.hidden = !fs.length;
+        const here = fs.includes(x.f);
+        prev.disabled = !fs.some(f => f < x.f); next.disabled = !fs.some(f => f > x.f);
+        info.textContent = `關鍵影格 ${fs.length} 個` + (here ? '（播放頭在關鍵影格上）' : '');
+        interp.disabled = !here;
+        if (here) {
+          const k = Object.values(c.keyframes || {}).map(a => (a || []).find(e => e.f === x.f)).find(Boolean);
+          interp.value = (k && k.interp) || 'linear';
+        }
+      };
     } else if (def.type === 'select') {
       const s = el('select');
       const opts = def.options;
@@ -1224,17 +1291,17 @@
     };
   }
 
-  function buildSection(host, key, subject, commit, defs) {
+  function buildSection(host, key, subject, commit, defs, ctx) {
     let st = host.__edFx;
     if (st && st.key === key) {                     // 同一個對象：只更新值
-      st.subject = subject; st.commit = commit;
+      st.subject = subject; st.commit = commit; st.ctx = ctx || null;
       st.rows.forEach(r => r.refresh());
       return;
     }
     ensureStyle();
     host.textContent = '';
     host.classList.add('ed-fx');
-    st = host.__edFx = { key, subject, commit, rows: [] };
+    st = host.__edFx = { key, subject, commit, ctx: ctx || null, rows: [] };
     for (const d of defs) {
       const r = makeRow(st, d);
       host.append(r.el);
@@ -1243,9 +1310,11 @@
     st.rows.forEach(r => r.refresh());
   }
 
-  const tf = (c, k) => { const v = getParam(c, 'video.transform.' + k, 0); return v === undefined ? DEFAULT_TRANSFORM[k] : v; };
+  // ctx：詳細內容傳進來的 { f（播放頭在片段內第幾格）, inRange, kf（關鍵影格操作）}；數值顯示播放頭那一格的樣子
+  const fOf = x => (x && Number.isFinite(x.f) ? Math.max(0, x.f) : 0);
+  const tf = (c, k, x) => { const v = getParam(c, 'video.transform.' + k, fOf(x)); return v === undefined ? DEFAULT_TRANSFORM[k] : v; };
   const tfPatch = o => ({ video: { transform: o } });
-  const cp = (c, k) => { const v = getParam(c, 'video.crop.' + k, 0); return v === undefined ? 0 : v; };
+  const cp = (c, k, x) => { const v = getParam(c, 'video.crop.' + k, fOf(x)); return v === undefined ? 0 : v; };
   const cropPatch = o => ({ video: { crop: o } });
   const tt = (c, k) => (c.title && c.title[k] != null) ? c.title[k] : BASE_TITLE[k];
   const ttSub = (c, o, k) => (c.title && c.title[o] && c.title[o][k] != null) ? c.title[o][k] : BASE_TITLE[o][k];
@@ -1266,40 +1335,41 @@
     {
       id: 'transform', title: '變形',
       appliesTo: c => !!c && !isTransition(c) && !!c.video,
-      render(host, clip, commit) {
+      render(host, clip, commit, ctx) {
         const linked = c => c.video && c.video.transform ? c.video.transform.zoomLinked !== false : true;
         buildSection(host, 'transform:' + clip.id, clip, commit, [
-          { type: 'num', label: '縮放 X', get: c => tf(c, 'zoomX'), def: 1, min: 0.01, max: 20, dpp: 0.005, dec: 3, slider: [0.1, 4], sliderStep: 0.01,
+          { type: 'kfbar' },
+          { type: 'num', label: '縮放 X', kf: c => (linked(c) ? ['zoomX', 'zoomY'] : ['zoomX']), get: (c, x) => tf(c, 'zoomX', x), def: 1, min: 0.01, max: 20, dpp: 0.005, dec: 3, slider: [0.1, 4], sliderStep: 0.01,
             patch: (v, c) => tfPatch(linked(c) ? { zoomX: v, zoomY: v } : { zoomX: v }) },
-          { type: 'num', label: '縮放 Y', get: c => linked(c) ? tf(c, 'zoomX') : tf(c, 'zoomY'), def: 1, min: 0.01, max: 20, dpp: 0.005, dec: 3, slider: [0.1, 4], sliderStep: 0.01,
+          { type: 'num', label: '縮放 Y', kf: c => (linked(c) ? ['zoomX', 'zoomY'] : ['zoomY']), get: (c, x) => linked(c) ? tf(c, 'zoomX', x) : tf(c, 'zoomY', x), def: 1, min: 0.01, max: 20, dpp: 0.005, dec: 3, slider: [0.1, 4], sliderStep: 0.01,
             patch: (v, c) => tfPatch(linked(c) ? { zoomX: v, zoomY: v } : { zoomY: v }) },
           { type: 'check', label: '連結縮放 X／Y', get: linked,
             patch: (v, c) => tfPatch(v ? { zoomLinked: true, zoomY: tf(c, 'zoomX') } : { zoomLinked: false }) },
-          { type: 'num', label: '位置 X', get: c => tf(c, 'posX'), def: 0, min: -20000, max: 20000, dpp: 1, dec: 1, unit: 'px', slider: [-2000, 2000], sliderStep: 1, patch: v => tfPatch({ posX: v }) },
-          { type: 'num', label: '位置 Y', get: c => tf(c, 'posY'), def: 0, min: -20000, max: 20000, dpp: 1, dec: 1, unit: 'px', slider: [-2000, 2000], sliderStep: 1, patch: v => tfPatch({ posY: v }) },
-          { type: 'num', label: '旋轉', get: c => tf(c, 'rotation'), def: 0, min: -3600, max: 3600, dpp: 0.5, dec: 1, unit: '°', patch: v => tfPatch({ rotation: v }) },
-          { type: 'num', label: '錨點 X', get: c => tf(c, 'anchorX'), def: 0, min: -20000, max: 20000, dpp: 1, dec: 1, unit: 'px', patch: v => tfPatch({ anchorX: v }) },
-          { type: 'num', label: '錨點 Y', get: c => tf(c, 'anchorY'), def: 0, min: -20000, max: 20000, dpp: 1, dec: 1, unit: 'px', patch: v => tfPatch({ anchorY: v }) },
-          { type: 'num', label: '不透明度', get: c => tf(c, 'opacity'), def: 1, min: 0, max: 1, scale: 100, dpp: 0.004, dec: 0, unit: '%', patch: v => tfPatch({ opacity: v }) },
-          { type: 'check', label: '水平翻轉', get: c => !!tf(c, 'flipH'), patch: v => tfPatch({ flipH: v }) },
-          { type: 'check', label: '垂直翻轉', get: c => !!tf(c, 'flipV'), patch: v => tfPatch({ flipV: v }) },
+          { type: 'num', label: '位置 X', kf: ['posX'], get: (c, x) => tf(c, 'posX', x), def: 0, min: -20000, max: 20000, dpp: 1, dec: 1, unit: 'px', slider: [-2000, 2000], sliderStep: 1, patch: v => tfPatch({ posX: v }) },
+          { type: 'num', label: '位置 Y', kf: ['posY'], get: (c, x) => tf(c, 'posY', x), def: 0, min: -20000, max: 20000, dpp: 1, dec: 1, unit: 'px', slider: [-2000, 2000], sliderStep: 1, patch: v => tfPatch({ posY: v }) },
+          { type: 'num', label: '旋轉', kf: ['rotation'], get: (c, x) => tf(c, 'rotation', x), def: 0, min: -3600, max: 3600, dpp: 0.5, dec: 1, unit: '°', patch: v => tfPatch({ rotation: v }) },
+          { type: 'num', label: '錨點 X', kf: ['anchorX'], get: (c, x) => tf(c, 'anchorX', x), def: 0, min: -20000, max: 20000, dpp: 1, dec: 1, unit: 'px', patch: v => tfPatch({ anchorX: v }) },
+          { type: 'num', label: '錨點 Y', kf: ['anchorY'], get: (c, x) => tf(c, 'anchorY', x), def: 0, min: -20000, max: 20000, dpp: 1, dec: 1, unit: 'px', patch: v => tfPatch({ anchorY: v }) },
+          { type: 'num', label: '不透明度', kf: ['opacity'], get: (c, x) => tf(c, 'opacity', x), def: 1, min: 0, max: 1, scale: 100, dpp: 0.004, dec: 0, unit: '%', patch: v => tfPatch({ opacity: v }) },
+          { type: 'check', label: '水平翻轉', get: (c, x) => !!tf(c, 'flipH', x), patch: v => tfPatch({ flipH: v }) },
+          { type: 'check', label: '垂直翻轉', get: (c, x) => !!tf(c, 'flipV', x), patch: v => tfPatch({ flipV: v }) },
           { type: 'select', label: '畫面符合', options: FIT_OPTIONS, get: c => (c.video && c.video.fit) || 'fit', patch: v => ({ video: { fit: v } }) },
           { type: 'num', label: '背景模糊', show: c => !!c.video && c.video.fit === 'blur', get: c => num(c.video && c.video.bgBlur, BG_BLUR_DEFAULT), def: BG_BLUR_DEFAULT, min: 0, max: 100, dpp: 0.5, dec: 0, unit: '%', slider: [0, 100], sliderStep: 1, patch: v => ({ video: { bgBlur: v } }) },
-          { type: 'btn', label: '重設變形', patch: () => ({ video: { transform: defaultTransform(), fit: 'fit' } }) },
-          { type: 'hint', label: '提示：縮放、位置可拖拉桿或直接輸入數值；也可以在預覽畫面上直接拖曳、拉角落縮放、拉上方圓點旋轉。在左側標籤上左右拖曳可微調（Shift 加速、Alt 微調），雙擊標籤或拉桿重設。' },
-        ]);
+          { type: 'btn', label: '重設變形', kfReset: 'video.transform.', patch: () => ({ video: { transform: defaultTransform(), fit: 'fit' } }) },
+          { type: 'hint', label: '提示：按數值右邊的 ◇ 就能做動畫：移動播放頭、改數值，會自動在播放頭加關鍵影格。縮放、位置可拖拉桿或直接輸入數值；也可以在預覽畫面上直接拖曳、拉角落縮放、拉上方圓點旋轉。在左側標籤上左右拖曳可微調（Shift 加速、Alt 微調），雙擊標籤或拉桿重設。' },
+        ], ctx);
       },
     },
     {
       id: 'crop', title: '裁切',
       appliesTo: c => !!c && !isTransition(c) && !!c.video,
-      render(host, clip, commit) {
-        const side = (label, k) => ({ type: 'num', label, get: c => cp(c, k), def: 0, min: 0, max: 0.95, scale: 100, dpp: 0.002, dec: 1, unit: '%', patch: v => cropPatch({ [k]: v }) });
+      render(host, clip, commit, ctx) {
+        const side = (label, k) => ({ type: 'num', label, kf: ['crop.' + k], get: (c, x) => cp(c, k, x), def: 0, min: 0, max: 0.95, scale: 100, dpp: 0.002, dec: 1, unit: '%', patch: v => cropPatch({ [k]: v }) });
         buildSection(host, 'crop:' + clip.id, clip, commit, [
           side('左', 'left'), side('右', 'right'), side('上', 'top'), side('下', 'bottom'),
           { type: 'num', label: '柔邊', get: c => cp(c, 'softness'), def: 0, min: 0, max: 1, scale: 100, dpp: 0.004, dec: 0, unit: '%', patch: v => cropPatch({ softness: v }) },
-          { type: 'btn', label: '重設裁切', patch: () => cropPatch(defaultCrop()) },
-        ]);
+          { type: 'btn', label: '重設裁切', kfReset: 'video.crop.', patch: () => cropPatch(defaultCrop()) },
+        ], ctx);
       },
     },
     {

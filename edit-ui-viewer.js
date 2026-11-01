@@ -373,7 +373,8 @@
     return null;
   }
   const HIT_CURSOR = { rotate: 'grab', scale: 'nwse-resize', move: 'move' };
-  const tfOf = (c, k, d) => { const v = c.video && c.video.transform ? c.video.transform[k] : undefined; return Number.isFinite(+v) && v !== undefined && v !== null ? +v : d; };
+  // 播放頭那一格看到的變形值（有關鍵影格時是內插後的值）
+  const tfOf = (c, k, d) => { const v = F.getParam(c, 'video.transform.' + k, Math.max(0, state.playhead - c.start)); return Number.isFinite(+v) && v !== undefined && v !== null ? +v : d; };
   function wireStage() {
     const st = $('edStage');
     if (!st || $('edOverlay')) return;
@@ -401,7 +402,7 @@
       const cx0 = h.t.q.pts.reduce((a, p) => a + p[0], 0) / 4, cy0 = h.t.q.pts.reduce((a, p) => a + p[1], 0) / 4;
       const LABEL = { move: '移動素材', scale: '縮放素材', rotate: '旋轉素材' };
       const apply = tf => {
-        const r = UI.live.run(LABEL[h.kind], q => C.setClipProps(q, id, { video: { transform: tf } }));
+        const r = UI.live.run(LABEL[h.kind], q => C.setClipPropsAt(q, id, { video: { transform: tf } }, state.playhead));
         if (r && !r.ok) say(r.reason, 'error');
         scheduleStage();
       };
@@ -602,6 +603,11 @@
     updateTransportTime();
     if (state.mode === 'timeline') UI.updatePlayheadPos(UI.player && UI.player.playing);
     scheduleStage();
+    // 詳細內容的數值、◇ 狀態跟著播放頭：停下來時一律更新；播放中只有選取的片段有關鍵影格才更新
+    if (state.mode === 'timeline' && UI.primaryClip) {
+      const c = UI.primaryClip();
+      if (c && c.video && (!(UI.player && UI.player.playing) || (c.keyframes && Object.keys(c.keyframes).length))) UI.scheduleRender('insp');
+    }
   }
 
   // ---- 播放與移動播放頭 ------------------------------------------------------------

@@ -2043,6 +2043,135 @@ async function runLayoutTests(browser, base, [W, H]) {
   return problems;
 }
 
+// 關鍵影格與節拍（3.40）：◇ 加／刪關鍵影格、移動播放頭改值自動加關鍵影格、一鍵動畫、預覽拖曳、
+// 節拍偵測（合成的 120 BPM 鼓聲）、打拍子、卡點、清除
+function drumWav(bpm, sec) {
+  const SR = 22050, n = SR * sec, x = new Float32Array(n);
+  let seed = 5; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5);
+  for (let t = 0.25; t < sec - 0.2; t += 60 / bpm) {
+    const s0 = Math.round(t * SR);
+    for (let j = 0; j < SR * 0.12 && s0 + j < n; j++) x[s0 + j] += 0.7 * Math.exp(-j / (SR * 0.03)) * Math.sin(2 * Math.PI * 60 * j / SR);
+    const h0 = Math.round((t + 30 / bpm) * SR);
+    for (let j = 0; j < SR * 0.03 && h0 + j < n; j++) x[h0 + j] += 0.25 * Math.exp(-j / (SR * 0.005)) * rnd();
+  }
+  const b = Buffer.alloc(44 + n * 2);
+  b.write('RIFF', 0); b.writeUInt32LE(36 + n * 2, 4); b.write('WAVE', 8); b.write('fmt ', 12); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22);
+  b.writeUInt32LE(SR, 24); b.writeUInt32LE(SR * 2, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) b.writeInt16LE(Math.round(Math.max(-1, Math.min(1, x[i])) * 32767), 44 + i * 2);
+  return b;
+}
+async function runAnimBeatTests(browser, base, fix, [W, H]) {
+  console.log(`\n==== 關鍵影格與節拍 ${W}x${H} ====`);
+  const problems = [];
+  const ctx = await browser.newContext({ viewport: { width: W, height: H } });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => problems.push('pageerror: ' + e.message));
+  page.on('console', m => { if (m.type() === 'error') problems.push('console.error: ' + m.text()); });
+  await page.goto(base);
+  await settle(page);
+  await page.setInputFiles('#edFile', [{ name: FILES.still, mimeType: 'image/png', buffer: fs.readFileSync(path.join(fix, FILES.still)) }, { name: 'drums.wav', mimeType: 'audio/wav', buffer: drumWav(120, 10) }]);
+  await page.waitForFunction(() => QPTEdit.render.media.list().length === 2, null, { timeout: 30000 });
+  await page.waitForFunction(() => QPTEdit.render.media.list().every(m => m.duration > 0 || m.kind === 'image'), null, { timeout: 30000 });
+  await settle(page);
+  // 圖片 4 段（各 2 秒）在 V1，鼓聲在 A1
+  await page.evaluate(() => {
+    const Q = QPTEdit, U = Q.uiParts, C = Q.core, p = Q.ui.state.project;
+    const L = Q.render.media.list(), img = L.find(m => m.kind === 'image'), wav = L.find(m => m.kind === 'audio');
+    const V = C.tracksOf(p, 'video')[0].id, A = C.tracksOf(p, 'audio')[0].id;
+    for (let i = 0; i < 4; i++) U.op('放', q => C.editToTimeline(q, { mode: 'overwrite', mediaId: img.id, frame: i * 60, srcIn: 0, srcOut: 2, trackIds: { video: V, audio: null } }));
+    U.op('放', q => C.editToTimeline(q, { mode: 'overwrite', mediaId: wav.id, frame: 0, srcIn: 0, srcOut: 10, trackIds: { video: null, audio: A } }));
+  });
+  const vclips = () => proj(page, (p, Q) => Object.values(p.clips).filter(c => c.video && c.type === 'media').sort((a, b) => a.start - b.start).map(c => c.id));
+  const ids = await vclips();
+  eq(ids.length, 4, '放了 4 段圖片');
+  // ---- 關鍵影格
+  await page.evaluate(id => { QPTEdit.ui.selectClips([id]); QPTEdit.ui.seekTimeline(10); }, ids[0]);
+  await settle(page);
+  await page.evaluate(() => { const b = document.querySelector('.ed-itab[data-itab="xform"]'); if (b) b.click(); });
+  await settle(page);
+  const kfRow = label => page.locator('.ed-fx-row', { has: page.locator('.ed-fx-lab', { hasText: new RegExp('^' + label + '$') }) });
+  const kfCls = label => kfRow(label).locator('.ed-kf').getAttribute('class');
+  eq(await kfCls('位置 X'), 'ed-kf', '位置 X 的 ◇ 一開始是空心（沒有動畫）');
+  ok(!(await page.isVisible('.ed-kfnav')), '沒有關鍵影格時不顯示上一個／下一個');
+  await kfRow('位置 X').locator('.ed-kf').click(); await settle(page);
+  eq(await proj(page, (p, Q, id) => p.clips[id].keyframes['video.transform.posX'].map(k => [k.f, k.v]), ids[0]), [[10, 0]], '按 ◇：在播放頭（片段內第 10 格）加關鍵影格');
+  eq(await kfCls('位置 X'), 'ed-kf on', '◇ 變實心（這格有關鍵影格）');
+  ok((await page.textContent('#edUndoLab')).includes('加關鍵影格'), '復原標籤：加關鍵影格');
+  // 移到第 40 格改數值 → 自動加關鍵影格
+  await page.evaluate(() => QPTEdit.ui.seekTimeline(40)); await settle(page);
+  eq(await kfCls('位置 X'), 'ed-kf anim', '播放頭不在關鍵影格上：◇ 半實心');
+  await kfRow('位置 X').locator('input[type=number]').fill('300');
+  await kfRow('位置 X').locator('input[type=number]').press('Enter');
+  await page.evaluate(() => document.activeElement && document.activeElement.blur());
+  await settle(page);
+  eq(await proj(page, (p, Q, id) => p.clips[id].keyframes['video.transform.posX'].map(k => [k.f, k.v]), ids[0]), [[10, 0], [40, 300]], '有動畫的參數改數值：自動在播放頭加關鍵影格');
+  eq(await proj(page, (p, Q, id) => p.clips[id].video.transform.posX, ids[0]), 0, '靜態值不變');
+  await page.evaluate(() => QPTEdit.ui.seekTimeline(25)); await settle(page);
+  eq(await kfRow('位置 X').locator('input[type=number]').inputValue(), '150', '數值跟著播放頭顯示內插後的值（第 25 格＝150）');
+  ok(await page.isVisible('.ed-kfnav'), '有關鍵影格時顯示上一個／下一個');
+  await page.click('.ed-kf-next'); await settle(page);
+  eq(await page.evaluate(() => QPTEdit.ui.state.playhead), 40, '▶：跳到下一個關鍵影格');
+  await page.click('.ed-kf-prev'); await settle(page);
+  eq(await page.evaluate(() => QPTEdit.ui.state.playhead), 10, '◀：跳到上一個關鍵影格');
+  await page.selectOption('.ed-kf-interp', 'ease'); await settle(page);
+  eq(await proj(page, (p, Q, id) => p.clips[id].keyframes['video.transform.posX'][0].interp, ids[0]), 'ease', '走法改成緩入緩出');
+  ok(await page.locator(`.ed-clip[data-clip="${ids[0]}"] .ed-ckf i`).count() === 2, '時間軸片段上畫出 2 個關鍵影格');
+  // 預覽上拖曳：有動畫的位置改成打關鍵影格
+  await page.evaluate(() => QPTEdit.ui.seekTimeline(50)); await settle(page);
+  const ovb = await page.evaluate(() => { const r = document.getElementById('edOverlay').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+  await drag(page, { x: ovb.x - 40, y: ovb.y }, { x: ovb.x - 10, y: ovb.y }, { steps: 6 });
+  eq(await proj(page, (p, Q, id) => p.clips[id].keyframes['video.transform.posX'].map(k => k.f), ids[0]), [10, 40, 50], '預覽上拖曳有動畫的片段：在播放頭加關鍵影格');
+  // 再按 ◇：刪掉這格
+  await kfRow('位置 X').locator('.ed-kf').click(); await settle(page);
+  eq(await proj(page, (p, Q, id) => p.clips[id].keyframes['video.transform.posX'].map(k => k.f), ids[0]), [10, 40], '在關鍵影格上按 ◇：刪除');
+  page.once('dialog', d => d.accept());
+  await page.click('.ed-kf-clear'); await settle(page);
+  eq(await proj(page, (p, Q, id) => Object.keys(p.clips[id].keyframes), ids[0]), [], '清除：所有關鍵影格拿掉');
+  // 一鍵動畫：多選一起套
+  await page.evaluate(ids => QPTEdit.ui.selectClips(ids), ids); await settle(page);
+  await page.click('.ed-kf-preset[data-preset="zoomIn"]'); await settle(page);
+  eq(await proj(page, (p, Q, ids) => ids.map(id => (p.clips[id].keyframes['video.transform.zoomX'] || []).map(k => k.v)), ids), ids.map(() => [1, 1.15]), '一鍵「慢慢放大」：多選的 4 段都加上');
+  await page.keyboard.press('Control+z'); await settle(page);
+  eq(await proj(page, (p, Q, ids) => ids.filter(id => p.clips[id].keyframes['video.transform.zoomX']).length, ids), 0, '復原一次：4 段的動畫一起拿掉');
+  await page.click('.ed-kf-preset[data-preset="zoomIn"]'); await settle(page);
+  await page.click('button:has-text("重設變形")'); await settle(page);
+  eq(await proj(page, (p, Q, id) => Object.keys(p.clips[id].keyframes), ids[0]), [], '重設變形：關鍵影格也清掉');
+  // ---- 節拍
+  await page.evaluate(() => QPTEdit.ui.selectClips([])); await settle(page);
+  await page.click('#edBeat'); await settle(page);
+  ok((await page.textContent('.ed-pop.beat')).includes('drums.wav'), '節拍視窗：自動找到音訊軌上的音樂');
+  await page.click('#edBeatDetect');
+  await page.waitForFunction(() => /BPM/.test((document.getElementById('edBeatOut') || {}).textContent || ''), null, { timeout: 20000 });
+  ok(/約 120 BPM/.test(await page.textContent('#edBeatOut')), `偵測出約 120 BPM（${await page.textContent('#edBeatOut')}）`);
+  const beats = await proj(page, (p, Q) => Q.core.beatFrames(p));
+  ok(beats.length >= 18 && beats.every((f, i) => !i || Math.abs(f - beats[i - 1] - 15) <= 1), `節拍標記每 15 格一個（30fps、120 BPM）：${beats.slice(0, 6)}…`);
+  ok(Math.abs(beats[0] - 8) <= 1, `第一拍在 0.25 秒（第 ${beats[0]} 格）`);
+  // 卡點：4 段圖片每 2 拍
+  await page.keyboard.press('Escape');
+  await page.evaluate(ids => QPTEdit.ui.selectClips(ids), ids); await settle(page);
+  await page.click('#edBeat'); await settle(page);
+  await page.selectOption('#edBeatEvery', '2');
+  await page.click('#edBeatFit'); await settle(page);
+  const spans = await proj(page, (p, Q, ids) => ids.map(id => [p.clips[id].start, p.clips[id].duration]), ids);
+  ok(spans.slice(1).every(([s, d], i) => d === 30 && beats.includes(s) && s === spans[i][0] + spans[i][1]), `卡點：第 2 段起每段 2 拍（30 格）、接在節拍上：${JSON.stringify(spans)}`);
+  eq(await invariants(page), [], '卡點後專案沒有問題');
+  // 打拍子
+  await page.click('#edBeat'); await settle(page);
+  await page.click('#edBeatClear'); await settle(page);
+  eq(await proj(page, (p, Q) => Q.core.beatFrames(p).length), 0, '清除節拍標記');
+  await page.click('#edBeat'); await settle(page);
+  await page.click('#edBeatTap'); await settle(page);
+  ok(await page.evaluate(() => QPTEdit.ui.state.beatTap && QPTEdit.uiParts.player.playing), '開始打拍子：開始播放');
+  for (let i = 0; i < 3; i++) { await sleep(350); await page.keyboard.press('m'); }
+  await page.keyboard.press(' ');
+  await settle(page);
+  eq(await proj(page, (p, Q) => Q.core.beatFrames(p).length), 3, '播放中按三次 M：加三個節拍標記（不開小視窗）');
+  ok(!(await page.isVisible('.ed-pop')), '打拍子時沒有跳出標記視窗');
+  ok(!(await page.evaluate(() => QPTEdit.ui.state.beatTap)), '停止播放就結束打拍子');
+  await ctx.close();
+  return problems;
+}
+
 (async () => {
   const fix = fixturesDir();
   const { server, base } = await serve();
@@ -2051,6 +2180,7 @@ async function runLayoutTests(browser, base, [W, H]) {
   try {
     for (const vp of VIEWPORTS) all = all.concat(await runLayoutTests(browser, base, vp));
     for (const vp of VIEWPORTS) all = all.concat(await runStageTests(browser, base, vp));
+    all = all.concat(await runAnimBeatTests(browser, base, fix, VIEWPORTS[0]));
     for (const vp of VIEWPORTS) all = all.concat(await runViewport(browser, base, fix, vp));
   } catch (e) { failed++; console.log('  FAIL 測試中斷：', e && e.stack || e); }
   ok(all.length === 0, '整段流程沒有 console error／頁面例外／CSP 違規' + (all.length ? '：' + all.join(' | ') : ''));

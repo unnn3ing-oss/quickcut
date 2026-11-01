@@ -91,7 +91,7 @@
     if (!ids.length) return;
     if (live) {
       if (!propsLive) { state.history.begin(label || '調整屬性'); propsLive = true; }
-      const r = C.setClipProps(state.project, ids, patch);
+      const r = C.setClipPropsAt(state.project, ids, patch, state.playhead);
       if (!r.ok) say(r.reason, 'error');
       if (UI.player) UI.player.refresh();
       scheduleRender('tl');
@@ -99,12 +99,12 @@
     }
     if (propsLive) {
       propsLive = false;
-      const r = C.setClipProps(state.project, ids, patch);
+      const r = C.setClipPropsAt(state.project, ids, patch, state.playhead);
       if (!r.ok) say(r.reason, 'error');
       state.history.end();
       return;
     }
-    op(label || '調整屬性', p => C.setClipProps(p, ids, patch));
+    op(label || '調整屬性', p => C.setClipPropsAt(p, ids, patch, state.playhead));
   }
   let transLive = false;
   function commitTransition(patch, o) {
@@ -129,6 +129,48 @@
     return (patch, o) => {
       const ids = selIds().filter(id => { const c = clipOf(id); return c && sec.appliesTo(c); });
       applyProps(ids, patch, !!(o && o.live), '調整' + sec.title);
+    };
+  }
+
+  // 詳細內容的關鍵影格操作（edit-fx 的 ◇ 按鈕、工具列、一鍵動畫會呼叫）。f 一律是「播放頭在片段內第幾格」。
+  function kfCtx(c) {
+    const f = state.playhead - c.start;
+    const inRange = state.mode === 'timeline' && f >= 0 && f < c.duration;
+    const valueAt = (clip, path) => { const v = F.getParam(clip, path, Math.max(0, f)); return v == null ? 0 : v; };
+    const need = () => { if (!inRange) { say('先把播放頭移到這個片段上', 'error'); return false; } return true; };
+    return {
+      f, inRange,
+      kf: {
+        // ◇：這格有關鍵影格就刪掉，沒有就用目前看到的值新增
+        toggle(paths, clip) {
+          if (!need()) return;
+          const here = paths.some(x => ((clip.keyframes || {})[x] || []).some(e => e.f === f));
+          if (here) op('刪除關鍵影格', p => C.removeKeyframe(p, clip.id, f, paths));
+          else op('加關鍵影格', p => C.setKeyframe(p, clip.id, f, Object.fromEntries(paths.map(x => [x, valueAt(clip, x)]))));
+        },
+        seek(fIn, clip) { seekTimeline(clip.start + fIn); scheduleRender('insp'); },
+        interp(v, clip) { if (need()) op('關鍵影格走法', p => C.setKeyframeInterp(p, clip.id, f, v)); },
+        clear(clip) { op('清除關鍵影格', p => C.clearKeyframes(p, clip.id, null, Math.max(0, Math.min(clip.duration - 1, f)))); },
+        // 多選時一次套到所有選取的畫面片段（做照片輪播很方便）
+        preset(kind, clip) {
+          const ids = selIds().filter(id => { const k = clipOf(id); return k && k.video; });
+          const list = ids.length ? ids : [clip.id];
+          op('一鍵動畫', p => {
+            for (const id of list) { const r = C.applyKeyframePreset(p, id, kind); if (!r.ok) return r; }
+            return { ok: true };
+          }, list.length > 1 ? `已替 ${list.length} 個片段加上動畫，按空白鍵播放看看` : '已加上動畫，按空白鍵播放看看');
+        },
+        reset(prefix, patch, clip) {
+          const ids = selIds().filter(id => { const k = clipOf(id); return k && k.video; });
+          op('重設', p => {
+            for (const id of ids) {
+              const k = p.clips[id], paths = Object.keys(k.keyframes || {}).filter(x => x.startsWith(prefix));
+              if (paths.length) { const r = C.clearKeyframes(p, id, paths, 0); if (!r.ok) return r; }
+            }
+            return C.setClipProps(p, ids.length ? ids : [clip.id], patch);
+          });
+        },
+      },
     };
   }
 
@@ -479,7 +521,7 @@
       const ui = s.ui || s;
       show(ui, true);
       if (secs.length === 1) ui.el.classList.add('solo');
-      if (s.def) s.def.render(s.ui.body, c, commitFor(s.def));
+      if (s.def) s.def.render(s.ui.body, c, commitFor(s.def), kfCtx(c));
       else if (s === insp.audio) updateAudioSection();
       else if (s === insp.speed) updateSpeedSection(speedClip());
       else if (s === insp.subs) updateSubsSection();
@@ -487,6 +529,6 @@
   }
 
   Object.assign(UI, {
-    buildInspector, insp, loadTabOf, primaryClip, renderInspector,
+    buildInspector, insp, kfCtx, loadTabOf, primaryClip, renderInspector,
   });
 })(typeof window !== 'undefined' ? window : globalThis);
