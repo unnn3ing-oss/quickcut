@@ -521,3 +521,118 @@ test('drawClipVisual：濾鏡先在離屏用混合模式調色、還原 alpha，
   const bg = calls(ctx3, 'drawImage')[0][1];
   assert.equal(calls(bg.cx, 'drawImage')[0][1], lk3);
 });
+
+// ---- 4.30 字幕效果引擎：進場＋持續＋出場 ----
+const planOf = (text, extra, f, dur = 90, lines) => {
+  const t = fx.normTitle({ ...fx.makeTitle('static', text), ...extra });
+  const L = { lines: lines || t.text.split('\n'), w: 400, widths: [] };
+  const o = { f, fps: 30, dur, k: 1, px: 80, outW: 1000, outH: 1000 };
+  return { t, P: fx.fxPlan(t, L, o, 100) };
+};
+const fxOf = (text, extra, f, scope, idx = 0, dur = 90) => { const { t, P } = planOf(text, extra, f, dur); return fx.fxAt(P, t, scope, idx); };
+test('效果引擎：舊的進場（彈出／跳起、整塊／逐行／逐字）fxAt 結果和舊算法一致', () => {
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const back = (u, s) => { u = clamp(u, 0, 1) - 1; return 1 + (s + 1) * u * u * u + s * u * u; };
+  const old = (kind, u) => {
+    const a = clamp(u * 3, 0, 1);
+    return kind.startsWith('pop') ? { a, s: Math.max(0, back(u, 2.2)), dy: 0 } : { a, s: 1, dy: (1 - back(u, 2.6)) * 100 * 1.1 };
+  };
+  const scopeOf = k => k.endsWith('Char') ? 'char' : k.endsWith('Line') ? 'line' : 'block';
+  for (const kind of ['pop', 'popLine', 'popChar', 'jump', 'jumpLine', 'jumpChar']) {
+    for (const f of [0, 1, 3, 5, 8, 12, 15, 30, 60, 89]) {
+      const sc = scopeOf(kind), idx = sc === 'block' ? 0 : 1;
+      const { t, P } = planOf('第一行\n第二行', { textFx: kind, textFxDur: 0.5 }, f);
+      const lag = sc === 'line' ? idx * P.lstag : sc === 'char' ? idx * P.stagger : 0;
+      assert.deepEqual(fx.fxAt(P, t, sc, idx), old(kind, (f - lag) / 15), `${kind} f=${f}`);
+      for (const other of ['block', 'line', 'char'].filter(x => x !== sc)) assert.equal(fx.fxAt(P, t, other, 1), null, `${kind} 只在自己的層級`);
+    }
+  }
+  assert.equal(fxOf('字', {}, 5, 'block'), null, '都沒選＝不動');
+});
+test('效果引擎：進場＋持續＋出場疊加（透明度、縮放相乘；位移、旋轉相加；color 以持續為準）', () => {
+  const ex = { textFx: 'pop', textFxDur: 0.5, textLoop: 'shake', textOut: 'shrinkFade', textOutDur: 0.4 };
+  const f = 80;   // 出場期間
+  const a = fxOf('嚇死我了', ex, f, 'block');
+  const pop = fxOf('嚇死我了', { textFx: 'pop', textFxDur: 0.5 }, f, 'block');
+  const shake = fxOf('嚇死我了', { textLoop: 'shake' }, f, 'block');
+  const out = fxOf('嚇死我了', { textOut: 'shrinkFade', textOutDur: 0.4 }, f, 'block');
+  near(a.a, pop.a * out.a); near(a.s, pop.s * out.s); near(a.dx, shake.dx); near(a.dy, pop.dy + shake.dy); near(a.rot, shake.rot);
+  // 逐字進場＋逐字持續：同一層疊加；顏色只來自持續
+  const c = fxOf('一二三四', { textFx: 'popChar', textLoop: 'karaoke', textLoopColor: '#ff0000' }, 89, 'char', 2);
+  assert.equal(c.color, '#ff0000'); assert.ok(c.s > 0 && c.a === 1);
+  // 進場是整塊、持續是逐字：各在各的層級
+  assert.ok(fxOf('一二三四', { textFx: 'pop', textLoop: 'wave' }, 10, 'block').s > 0);
+  assert.ok('dy' in fxOf('一二三四', { textFx: 'pop', textLoop: 'wave' }, 10, 'char', 1));
+  assert.equal(fxOf('一二三四', { textFx: 'pop', textLoop: 'wave' }, 10, 'char', 1).s, undefined, '整塊的進場不會跑到逐字層');
+});
+test('效果引擎：抖動由格數決定（同一格每次一樣、不同格不同）', () => {
+  const at = f => { const r = fxOf('嚇', { textLoop: 'shake' }, f, 'block'); return [r.dx, r.dy, r.rot].join(','); };
+  assert.equal(at(7), at(7));
+  const set = new Set(Array.from({ length: 12 }, (_, i) => at(i * 2)));
+  assert.ok(set.size >= 10, '不同的格抖得不一樣：' + set.size);
+  const r = fxOf('嚇', { textLoop: 'shake' }, 7, 'block');
+  assert.ok(Math.abs(r.dx) <= 100 * 0.05 && Math.abs(r.rot) <= 0.035);
+});
+test('效果引擎：卡拉OK 與逐字高亮平均分配時間', () => {
+  const lit = (extra, f, dur, text, field) => {
+    const { t, P } = planOf(text, extra, f, dur);
+    return Array.from(t.text).map((_, i) => fx.fxAt(P, t, 'char', i)).map((r, i) => (r && r[field]) ? i : -1).filter(i => i >= 0);
+  };
+  const kar = { textLoop: 'karaoke', textLoopColor: '#ffd400' };
+  assert.deepEqual(lit(kar, 0, 91, '一起唱這首歌', 'color'), [], '開頭 0 個字');
+  assert.equal(lit(kar, 45, 91, '一起唱這首歌', 'color').length, 3, '一半 3 個字');
+  assert.deepEqual(lit(kar, 90, 91, '一起唱這首歌', 'color'), [0, 1, 2, 3, 4, 5], '結束全亮');
+  // 逐字高亮：有空白＝以詞為單位（念到哪個詞，那個詞的每個字都亮）；沒空白＝以字為單位
+  const hl = { textLoop: 'highlight', textLoopColor: '#ffd400' };
+  const w = '真的 超級 好吃 啦';
+  assert.deepEqual(lit(hl, 0, 91, w, 'hl'), [0, 1], '第一個詞');
+  assert.deepEqual(lit(hl, 45, 91, w, 'hl'), [6, 7], '一半：4 個詞，p=0.5 → 第 3 個詞');
+  assert.deepEqual(lit(hl, 90, 91, w, 'hl'), [9], '最後一個詞');
+  assert.deepEqual(lit(hl, 0, 91, '一二三四', 'hl'), [0], '沒空白：一次一個字');
+  assert.deepEqual(lit(hl, 90, 91, '一二三四', 'hl'), [3]);
+  assert.equal(fxOf('一二', hl, 0, 'char', 0).color, '#111111', '亮的字是黑字');
+});
+test('效果引擎：出場最後一格完全看不到；片段太短進場＋出場不重疊', () => {
+  const run = (extra, f, dur, preset = 'static') => { const ctx = mockCtx(); fx.drawTitle(ctx, titleClip(preset, '一二三四', dur, extra), 1000, 1000, f, 30); return ctx; };
+  for (const out of ['shrinkFade', 'flyUp', 'flyLeft', 'flyRight']) {
+    const ex = { textOut: out, textOutDur: 0.4 };
+    assert.equal(texts(run(ex, 89, 90)).length, 0, out + ' 最後一格沒有字');
+    assert.equal(texts(run(ex, 40, 90)).length, 1, out + ' 中間正常');
+  }
+  // 加上逐字進場的短片段（12 格）：最後一格看不到，中間（進場已結束、出場還沒開始）看得到
+  const ex = { textFx: 'popChar', textFxDur: 0.5, textOut: 'flyUp', textOutDur: 0.5 };
+  assert.equal(texts(run(ex, 11, 12)).length, 0, '最後一格');
+  assert.equal(texts(run(ex, 5, 12)).length, 4, '中間四個字都在');
+  assert.equal(fxOf('一', { textOut: 'flyUp', textOutDur: 5 }, 0, 'block', 0, 12), null, '出場最多佔一半，第一格不受影響');
+  assert.equal(texts(run({ textOut: 'shrinkFade' }, 0, 1)).length, 1, '1 格的片段不做出場');
+});
+test('效果引擎：有出場特效時，淡入上移／下三分之一條不再自己淡出（不雙重淡出）', () => {
+  const alphas = (preset, extra, f) => { const ctx = mockCtx(); fx.drawTitle(ctx, titleClip(preset, '一二', 90, extra), 1000, 1000, f, 30); return ctx.__log.filter(e => e[0] === 'set:globalAlpha').map(e => e[1]); };
+  for (const preset of ['fadeUp', 'lowerThird']) {
+    const mid = 90 - 6;   // 在預設淡出（最後 9 格）裡、出場（3 格）外
+    assert.ok(Math.min(...alphas(preset, {}, mid)) < 0.999, preset + ' 本來會淡出');
+    assert.ok(Math.min(...alphas(preset, { textOut: 'flyUp', textOutDur: 0.1 }, mid)) >= 0.999, preset + ' 有出場特效就交給它');
+  }
+});
+test('效果引擎：打字機＋游標（逐字出現、游標用直線畫、打完後閃爍）', () => {
+  const run = f => { const ctx = mockCtx(); fx.drawTitle(ctx, titleClip('static', '今天要來', 90, { textFx: 'typeCursor' }), 1000, 1000, f, 30); return ctx; };
+  assert.equal(texts(run(0)).length, 1, '第一格：第一個字');
+  assert.equal(texts(run(3)).length, 2);
+  assert.equal(calls(run(3), 'lineTo').length, 1, '打字中游標一直亮');
+  assert.equal(texts(run(60)).length, 4, '全部出現');
+  assert.deepEqual([60, 75].map(f => calls(run(f), 'lineTo').length), [1, 0], '打完後閃爍：亮 → 暗');
+});
+test('效果引擎：衝擊放大、滑入、模糊浮現', () => {
+  const imp = f => fxOf('超扯', { textFx: 'impact', textFxDur: 0.5 }, f, 'block');
+  assert.ok(imp(1).s > 2.5 && imp(1).a < 1, '一開始很大、半透明');
+  assert.ok(imp(9).s < 1, '砸下去比 1 小');
+  near(imp(15).s, 1); near(imp(15).a, 1);
+  const sl = (k, f) => fxOf('第一站', { textFx: k, textFxDur: 0.5 }, f, 'block');
+  assert.ok(sl('slideLeft', 0).dx < 0 && sl('slideRight', 0).dx > 0 && sl('slideBottom', 0).dy > 0 && !sl('slideBottom', 0).dx);
+  near(sl('slideLeft', 15).dx, 0); near(sl('slideBottom', 15).dy, 0);
+  assert.ok(Math.abs(sl('slideLeft', 3).dx) < Math.abs(sl('slideLeft', 0).dx) * 0.6, '減速：前幾格就走了一大段');
+  // 模糊：有 ctx.filter 就設 blur，沒有就只淡入
+  const draw = withFilter => { const ctx = mockCtx(); if (withFilter) ctx.filter = 'none'; fx.drawTitle(ctx, titleClip('static', '那天的風', 90, { textFx: 'blurIn', textFxDur: 0.5 }), 1000, 1000, 3, 30); return ctx; };
+  assert.ok(draw(true).__log.some(e => e[0] === 'set:filter' && /^blur\(/.test(e[1])));
+  assert.ok(!draw(false).__log.some(e => e[0] === 'set:filter') && texts(draw(false)).length === 1);
+});

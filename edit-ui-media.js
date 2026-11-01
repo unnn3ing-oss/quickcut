@@ -189,7 +189,7 @@
   // 字體特效縮圖：f＝null 時畫動畫進行到一半的樣子（看得出效果），播放時逐格畫
   function paintTextFxThumb(cv, kind, f) {
     const t = Object.assign(F.makeTitle('static', '字體特效'), { size: 260, textFx: kind, textFxDur: 0.5, stroke: { color: '#1b2233', width: 6 } });
-    paintSampleTitle(cv, t, f == null ? (F.TEXT_FX[kind] && F.TEXT_FX[kind].char ? 9 : 7) : f);
+    paintSampleTitle(cv, t, f == null ? (F.TEXT_FX[kind] && (F.TEXT_FX[kind].thumbF || (F.TEXT_FX[kind].char ? 9 : 7))) : f);
   }
   function paintStyleThumb(cv, key) {
     const st = F.TITLE_STYLES[key];
