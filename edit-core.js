@@ -25,7 +25,7 @@
   // 片段放進輸出畫面的方式：fit＝完整（黑邊）、blur＝完整＋同一畫面的模糊放大當背景、fill＝填滿（裁切）、stretch＝拉伸
   const FIT_MODES = ['fit', 'blur', 'fill', 'stretch'];
   // 濾鏡（video.look）：none＝原色、warm＝暖陽、cool＝冷調、mono＝黑白；video.lookAmt 0~100（強度，預設 100）
-  const LOOKS = ['none', 'warm', 'cool', 'mono'];
+  const LOOKS = ['none', 'warm', 'cool', 'mono', 'mist', 'film'];
   // 可以打關鍵影格的參數 → [最小, 最大]（和 sanitize 的範圍一致）。f 是「片段內影格」（0 = 片段第一格），
   //   可以超出片段範圍（修剪、切開後留著，邊界附近的內插才不會變）。
   const KF_PATHS = {
@@ -43,9 +43,11 @@
   const MARKER_COLORS = ['blue', 'cyan', 'green', 'yellow', 'red', 'pink', 'purple', 'fuchsia', 'rose', 'lavender', 'sky', 'mint', 'lemon', 'sand', 'cocoa', 'cream'];
   const TRANSITION_TYPES = ['crossDissolve', 'dipToColor', 'fadeToBlack', 'wipe', 'push', 'slide', 'zoom', 'blur',
     // 3.20 的 WebGL 轉場（edit-fx-gl.js）
-    'whip', 'flash', 'glitch', 'zoomPunch', 'spin', 'lightLeak', 'blinds', 'pixelate', 'flip', 'cube', 'doors'];
+    'whip', 'flash', 'glitch', 'zoomPunch', 'spin', 'lightLeak', 'blinds', 'pixelate', 'flip', 'cube', 'doors',
+    // 4.20 拆解參考影片加的（edit-fx.js，2D）
+    'invertFlash', 'lineSweep'];
   // 有自己預設顏色的轉場（其他都是黑色）：閃光預設白光、光漏預設暖橘
-  const TRANSITION_COLORS = { flash: '#ffffff', lightLeak: '#ff7a2e' };
+  const TRANSITION_COLORS = { flash: '#ffffff', lightLeak: '#ff7a2e', lineSweep: '#ffffff' };
   const transitionColor = type => TRANSITION_COLORS[type] || '#000000';
   const EDIT_MODES = ['insert', 'overwrite', 'replace', 'append'];
   const IMAGE_DEFAULT_SEC = 5;            // 圖片放上時間軸的預設長度

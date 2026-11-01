@@ -1979,15 +1979,19 @@ t('曲線變速＋切開、修剪：每一格看到的畫面不變', () => {
   return synced(p);
 });
 
-t('濾鏡（video.look）：四種、強度夾在 0~100、不認得的拒絕不改', () => {
+t('濾鏡（video.look）：六種、強度夾在 0~100、不認得的拒絕不改', () => {
   const p = setup();
   const [v] = put(p, 'mv', 0, 0, 2);
-  assert.deepStrictEqual(core.LOOKS, ['none', 'warm', 'cool', 'mono']);
+  assert.deepStrictEqual(core.LOOKS, ['none', 'warm', 'cool', 'mono', 'mist', 'film']);
   assert.ok(core.setClipProps(p, v, { video: { look: 'warm', lookAmt: 250 } }).ok);
   assert.deepStrictEqual([C(p, v).video.look, C(p, v).video.lookAmt], ['warm', 100]);
   unchanged(p, () => core.setClipProps(p, v, { video: { look: 'sepia' } }), /濾鏡/);
   const q = core.deserialize(core.serialize(p));
   assert.strictEqual(q.clips[v].video.look, 'warm', '存檔來回保留');
+  for (const lk of ['mist', 'film']) {
+    assert.ok(core.setClipProps(p, v, { video: { look: lk } }).ok, lk);
+    assert.strictEqual(core.deserialize(core.serialize(p)).clips[v].video.look, lk, lk + ' 存檔來回保留');
+  }
   return p;
 });
 

@@ -162,7 +162,7 @@
   const FITS = [['blur', '模糊背景'], ['fill', '填滿畫面'], ['fit', '完整顯示']];
   const TRANS = [['none', '直接切'], ['crossDissolve', '淡化'], ['push', '推移'], ['flash', '閃白'], ['zoom', '縮放']];
   const SPEEDS = [['normal', '正常'], ['slow', '慢動作'], ['bullet', '子彈時間'], ['fast', '快轉 2×']];
-  const LOOKS = [['none', '原色'], ['warm', '暖陽'], ['cool', '冷調'], ['mono', '黑白']];
+  const LOOKS = [['none', '原色'], ['warm', '暖陽'], ['cool', '冷調'], ['mono', '黑白'], ['mist', '黑柔'], ['film', '電影感']];
   const MOTION_PATHS = ['video.transform.zoomX', 'video.transform.zoomY', 'video.transform.posX'];
 
   function motionOf(c) {

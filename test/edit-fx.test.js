@@ -227,7 +227,7 @@ test('drawSolid：用純色填滿裁切後的矩形', () => {
 test('轉場：t=0 只畫 A、t=1 只畫 B，中間兩者都畫', () => {
   fx._setCanvasFactory((w, h) => { const cx = mockCtx(); return { width: w, height: h, getContext: () => cx }; });
   const types = ['crossDissolve', 'dipToColor', 'fadeToBlack', 'wipe', 'push', 'slide', 'zoom', 'blur',
-    'whip', 'flash', 'glitch', 'zoomPunch', 'spin', 'lightLeak', 'blinds', 'pixelate', 'flip', 'cube', 'doors'];
+    'whip', 'flash', 'glitch', 'zoomPunch', 'spin', 'lightLeak', 'blinds', 'pixelate', 'flip', 'cube', 'doors', 'invertFlash', 'lineSweep'];
   assert.deepEqual(Object.keys(fx.TRANSITIONS).sort(), types.slice().sort());
   const run = (type, t, opts = {}) => {
     const hits = { A: 0, B: 0 };
@@ -245,7 +245,7 @@ test('轉場：t=0 只畫 A、t=1 只畫 B，中間兩者都畫', () => {
     }
     const mid = run(type, 0.3);
     assert.ok(mid.hits.A >= 1, type + ' 中段要畫 A');
-    if (type !== 'dipToColor' && type !== 'fadeToBlack') assert.ok(mid.hits.B >= 1, type + ' 中段要畫 B');
+    if (type !== 'dipToColor' && type !== 'fadeToBlack' && type !== 'invertFlash') assert.ok(mid.hits.B >= 1, type + ' 中段要畫 B');
   }
   // 浸入顏色：前半 A、後半 B，中點顏色最濃
   assert.deepEqual(run('dipToColor', 0.25).hits, { A: 1, B: 0 });
@@ -293,8 +293,8 @@ test('WebGL 轉場：清單、選項欄位、和 core 的種類一致', () => {
   }
   assert.deepEqual(['whip', 'blinds', 'flip', 'cube'].map(k => fx.TRANSITIONS[k].dirs), ['four', 'four', 'four', 'four']);
   assert.equal(fx.TRANSITIONS.spin.dirs, 'spin'); assert.equal(fx.TRANSITIONS.doors.dirs, 'doors');
-  assert.deepEqual(Object.keys(fx.TRANSITIONS).filter(k => fx.TRANSITIONS[k].color).sort(), ['dipToColor', 'flash', 'lightLeak']);
-  assert.deepEqual(['wipe', 'push', 'slide'].map(k => fx.TRANSITIONS[k].dirs), ['four', 'four', 'four']);
+  assert.deepEqual(Object.keys(fx.TRANSITIONS).filter(k => fx.TRANSITIONS[k].color).sort(), ['dipToColor', 'flash', 'lightLeak', 'lineSweep']);
+  assert.deepEqual(['wipe', 'push', 'slide', 'lineSweep'].map(k => fx.TRANSITIONS[k].dirs), ['four', 'four', 'four', 'four']);
   // 每支著色器都要宣告 tr()（共用的 main 會呼叫它）
   for (const k of glTypes) assert.match(fxgl.DEFS[k].frag, /vec4 tr\(\)\{/, k);
 });
@@ -313,7 +313,7 @@ test('makeTitle／TITLE_PRESETS', () => {
   assert.equal(t.preset, 'lowerThird'); assert.equal(t.text, '哈囉'); assert.equal(t.font, 'WHZ-Heavy');
   assert.equal(t.align, 'left');
   assert.equal(fx.makeTitle('不存在').preset, 'static');
-  assert.deepEqual(Object.keys(fx.TITLE_PRESETS), ['static', 'lowerThird', 'scroll', 'crawl', 'typewriter', 'fadeUp']);
+  assert.deepEqual(Object.keys(fx.TITLE_PRESETS), ['static', 'lowerThird', 'scroll', 'crawl', 'typewriter', 'fadeUp', 'caption']);
   for (const k in fx.TITLE_PRESETS) assert.ok(fx.TITLE_PRESETS[k].name);
 });
 const titleClip = (preset, text, dur = 90, extra = {}) => ({ id: 't', type: 'title', duration: dur, video: fx.defaultVideo(), title: { ...fx.makeTitle(preset, text), ...extra } });
@@ -495,7 +495,7 @@ test('drawClipVisual：濾鏡先在離屏用混合模式調色、還原 alpha，
   fx.drawClipVisual(ctx0, c0, src, 320, 180, 320, 180, 0);
   assert.equal(calls(ctx0, 'drawImage')[0][1], src);
   // 黑白：saturation 塗灰、destination-in 還原 alpha，畫到輸出的是離屏畫布
-  for (const [look, op] of [['mono', 'saturation'], ['warm', 'soft-light'], ['cool', 'soft-light']]) {
+  for (const [look, op] of [['mono', 'saturation'], ['warm', 'soft-light'], ['cool', 'soft-light'], ['mist', 'screen'], ['film', 'screen']]) {
     made.length = 0;
     const c = clipOf({}, { look, lookAmt: 50 });
     const ctx = mockCtx();
@@ -520,4 +520,34 @@ test('drawClipVisual：濾鏡先在離屏用混合模式調色、還原 alpha，
   const lk3 = calls(ctx3, 'drawImage')[1][1];
   const bg = calls(ctx3, 'drawImage')[0][1];
   assert.equal(calls(bg.cx, 'drawImage')[0][1], lk3);
+});
+
+// ---- 4.20 拆解參考影片加的效果 ----
+test('4.20 負片閃：前半只畫 A、後半只畫 B，中點用 difference 疊白並還原 alpha', () => {
+  fx._setCanvasFactory((w, h) => { const cx = mockCtx(); return { width: w, height: h, getContext: () => cx }; });
+  const run = t => { const hits = { A: 0, B: 0 }; const ctx = mockCtx();
+    fx.TRANSITIONS.invertFlash.draw(ctx, () => { hits.A++; }, () => { hits.B++; }, t, { type: 'invertFlash' }, 320, 180); return hits; };
+  assert.deepEqual(run(0.3), { A: 1, B: 0 });
+  assert.deepEqual(run(0.7), { A: 0, B: 1 });
+});
+test('4.20 光線劃開：兩邊都畫、邊界上畫一條線（用轉場顏色）', () => {
+  fx._setCanvasFactory((w, h) => { const cx = mockCtx(); return { width: w, height: h, getContext: () => cx }; });
+  const hits = { A: 0, B: 0 }, ctx = mockCtx();
+  fx.TRANSITIONS.lineSweep.draw(ctx, () => { hits.A++; }, () => { hits.B++; }, 0.5, { type: 'lineSweep', color: '#ff0000', direction: 'left' }, 320, 180);
+  assert.deepEqual(hits, { A: 1, B: 1 });
+  assert.ok(calls(ctx, 'fillRect').length >= 2, '光暈＋細線');
+});
+test('4.20 字幕樣式與字體特效：新增的都有名字，畫得出來（含沒有 getTransform 的退回）', () => {
+  for (const k of ['limeKey', 'neonBlue', 'warmGlow', 'dreamWhite']) assert.ok(fx.TITLE_STYLES[k] && fx.TITLE_STYLES[k].name, k);
+  for (const k of ['fade', 'fadeLine', 'fadeChar', 'blurIn', 'echo', 'smear']) {
+    assert.ok(fx.TEXT_FX[k] && fx.TEXT_FX[k].name, k);
+    for (const f of [0, 4, 8, 40]) {
+      const ctx = mockCtx();
+      fx.drawTitle(ctx, titleClip('static', '終於', 90, { textFx: k, textFxDur: 0.5 }), 1000, 1000, f, 30);
+      if (f >= 8) assert.ok(calls(ctx, 'fillText').length >= 1, `${k} f=${f} 有畫字`);
+    }
+  }
+  // 殘影：動畫中途除了主字還多畫一份；結束後只剩主字
+  const n = f => { const ctx = mockCtx(); fx.drawTitle(ctx, titleClip('static', '終於', 90, { textFx: 'echo', textFxDur: 0.5 }), 1000, 1000, f, 30); return calls(ctx, 'fillText').length; };
+  assert.ok(n(10) > n(80), '殘影消失後少畫一份');
 });

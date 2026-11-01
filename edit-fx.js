@@ -220,7 +220,47 @@
     warm: { op: 'soft-light', color: 'rgb(255,150,60)', a: 0.55 },
     cool: { op: 'soft-light', color: 'rgb(60,140,255)', a: 0.5 },
     mono: { op: 'saturation', color: 'rgb(128,128,128)', a: 1 },
+    // 4.20：拆解參考影片（黑柔濾鏡教學）得到的兩種。fn 型：自己畫（c 已經畫好原圖）
+    mist: { fn: mistLook },
+    film: { fn: filmLook },
   };
+  // 黑柔（Black Mist）：照參考影片在 DaVinci 的做法——複製一層、模糊、用「濾色（screen）」疊回去，再把曲線往下拉讓暗部不要變灰。
+  //   模糊：不用 ctx.filter（見上面），改用「縮小再放大」：先縮到 1/4、再縮到 1/16，放大回來時雙線性內插就是柔柔的光暈。
+  //   曲線往下拉：小圖用 multiply 和自己相乘（亮度平方），暗的地方幾乎變黑、只剩亮部會暈開——就是「高光發散、暗部保留」。
+  function mistLook(c, source, srcW, srcH, amt) {
+    const w1 = Math.max(1, Math.round(srcW / 4)), h1 = Math.max(1, Math.round(srcH / 4));
+    const w2 = Math.max(1, Math.round(srcW / 16)), h2 = Math.max(1, Math.round(srcH / 16));
+    const a = scratch('mistA', w1, h1), b = scratch('mistB', w2, h2);
+    a.ctx.imageSmoothingEnabled = b.ctx.imageSmoothingEnabled = true;
+    a.ctx.drawImage(source, 0, 0, w1, h1);
+    b.ctx.drawImage(a.canvas, 0, 0, w2, h2);
+    b.ctx.globalCompositeOperation = 'multiply';
+    b.ctx.drawImage(b.canvas, 0, 0);
+    b.ctx.globalCompositeOperation = 'source-over';
+    a.ctx.clearRect(0, 0, w1, h1);
+    a.ctx.drawImage(b.canvas, 0, 0, w1, h1);          // 分兩段放大，比一次放大 16 倍平滑
+    c.imageSmoothingEnabled = true;
+    c.globalCompositeOperation = 'screen';
+    c.globalAlpha = amt;
+    c.drawImage(a.canvas, 0, 0, srcW, srcH);
+    c.globalAlpha = 0.5 * amt;                          // 再疊半層：光暈更明顯（參考影片的效果相當強）
+    c.drawImage(a.canvas, 0, 0, srcW, srcH);
+    c.globalCompositeOperation = 'soft-light';         // 稍微降一點對比，像鏡頭前加了柔焦片
+    c.globalAlpha = 0.25 * amt;
+    c.fillStyle = 'rgb(110,110,110)';
+    c.fillRect(0, 0, srcW, srcH);
+  }
+  // 電影感（暖橘＋青色暗部）：參考影片的主色調。screen 疊深青色＝只把暗部抬成青色（亮部幾乎不變），再 soft-light 疊橘＝膚色、燈光變暖。
+  function filmLook(c, source, srcW, srcH, amt) {
+    c.globalCompositeOperation = 'screen';
+    c.globalAlpha = amt;
+    c.fillStyle = 'rgb(0,26,34)';
+    c.fillRect(0, 0, srcW, srcH);
+    c.globalCompositeOperation = 'soft-light';
+    c.globalAlpha = 0.5 * amt;
+    c.fillStyle = 'rgb(255,140,50)';
+    c.fillRect(0, 0, srcW, srcH);
+  }
   function lookSource(clip, source, srcW, srcH) {
     const v = clip && clip.video, lk = v && LOOKS[v.look];
     if (!lk) return source;
@@ -228,10 +268,13 @@
     if (!(amt > 0)) return source;
     const s = scratch('look', srcW, srcH), c = s.ctx;
     c.drawImage(source, 0, 0, srcW, srcH);
-    c.globalCompositeOperation = lk.op;
-    c.globalAlpha = lk.a * amt;
-    c.fillStyle = lk.color;
-    c.fillRect(0, 0, srcW, srcH);
+    if (lk.fn) lk.fn(c, source, srcW, srcH, amt);
+    else {
+      c.globalCompositeOperation = lk.op;
+      c.globalAlpha = lk.a * amt;
+      c.fillStyle = lk.color;
+      c.fillRect(0, 0, srcW, srcH);
+    }
     c.globalAlpha = 1;
     c.globalCompositeOperation = 'destination-in';
     c.drawImage(source, 0, 0, srcW, srcH);
@@ -537,12 +580,22 @@
     jump: { name: '下往上跳起' },
     jumpLine: { name: '逐行跳起', line: true },
     jumpChar: { name: '逐字跳起', char: true },
+    // 4.20 拆解參考影片加的
+    fade: { name: '淡入' },
+    fadeLine: { name: '逐行淡入', line: true },
+    fadeChar: { name: '逐字淡入', char: true },
+    blurIn: { name: '模糊浮現', blur: true },   // 從模糊、稍大慢慢變清楚（後期、可以多看幾次）
+    echo: { name: '殘影', echo: true },          // 主字淡入，旁邊一個放大的半透明殘影慢慢消失（終於）
+    smear: { name: '拖影上衝', smear: true },    // 從下面帶著拖影衝上來（追蹤我）
   };
   const easeOutBack = (u, s) => { u = clamp(u, 0, 1) - 1; return 1 + (s + 1) * u * u * u + s * u * u; };
   // 動畫進度 u（0~1）時的 { a 透明度, s 縮放, dy 垂直位移（px）}：彈出＝從 0 放大、稍微超過再回來；跳起＝從一行高的下方往上跳、超過一點再落定
   function textFxState(kind, u, lh) {
     const a = clamp(u * 3, 0, 1);
     if (kind === 'pop' || kind === 'popLine' || kind === 'popChar') return { a, s: Math.max(0, easeOutBack(u, 2.2)), dy: 0 };
+    if (kind === 'fade' || kind === 'fadeLine' || kind === 'fadeChar' || kind === 'echo') return { a: easeOutCubic(u), s: 1, dy: 0 };
+    if (kind === 'blurIn') { const e = easeOutCubic(u); return { a: clamp(u * 2, 0, 1), s: 1.12 - 0.12 * e, dy: 0, blur: 1 - e }; }
+    if (kind === 'smear') { const e = easeOutCubic(u); return { a: clamp(u * 4, 0, 1), s: 1, dy: (1 - e) * lh * 1.6, trail: 1 - e }; }
     return { a, s: 1, dy: (1 - easeOutBack(u, 2.6)) * lh * 1.1 };
   }
 
@@ -567,6 +620,19 @@
     redAccent: { name: '黑邊強調紅', sample: '進行*瘋狂*的',
       patch: { color: '#fff8ec', gradient: { on: false, color: '#8fd8ff' }, stroke: { color: '#141414', width: 7 }, outlines: outlinesOf(),
         shadow: NO_SHADOW, extrude: { color: '#141414', depth: 8, angle: 45 }, skew: 10, accent: '#e5141b' } },
+    // 4.20 拆解參考影片的字幕：發光都用「不偏移的同色陰影」做（陰影只加在最底層，所以不會吃掉字的邊緣）
+    limeKey: { name: '螢光綠重點', sample: '快速',
+      patch: { color: '#d4f58c', gradient: { on: false, color: '#8fd8ff' }, stroke: { color: '#000000', width: 0 }, outlines: outlinesOf(),
+        shadow: { color: 'rgba(0,0,0,.45)', blur: 10, x: 0, y: 3 }, extrude: NO_EXTRUDE, skew: 0, accent: '#ffffff' } },
+    neonBlue: { name: '霓虹藍光', sample: '日系電影',
+      patch: { color: '#9fdcff', gradient: { on: false, color: '#8fd8ff' }, stroke: { color: '#000000', width: 0 }, outlines: outlinesOf(),
+        shadow: { color: 'rgba(60,170,255,.95)', blur: 26, x: 0, y: 0 }, extrude: NO_EXTRUDE, skew: 0, accent: '#ffffff' } },
+    warmGlow: { name: '暖橘發光', sample: '黑柔效果',
+      patch: { color: '#ffe14a', gradient: { on: true, color: '#ff8a1c' }, stroke: { color: '#000000', width: 0 }, outlines: outlinesOf(),
+        shadow: { color: 'rgba(255,120,0,.9)', blur: 30, x: 0, y: 0 }, extrude: NO_EXTRUDE, skew: 0, accent: '#ffffff' } },
+    dreamWhite: { name: '柔光白', sample: '夢境電影感',
+      patch: { color: '#ffffff', gradient: { on: false, color: '#8fd8ff' }, stroke: { color: '#000000', width: 0 }, outlines: outlinesOf(),
+        shadow: { color: 'rgba(255,255,255,.9)', blur: 24, x: 0, y: 0 }, extrude: NO_EXTRUDE, skew: 0, accent: '#d4f58c' } },
   };
   // defaults：切換樣式時套用 align／x／y／bg（size 只用在新增字幕）
   const TITLE_PRESETS = {
@@ -576,6 +642,8 @@
     crawl: { name: '橫向跑馬燈', defaults: { size: 56, align: 'left', x: 0.5, y: 0.9, bg: { color: 'rgba(0,0,0,0.55)', padding: 14, radius: 0 } } },
     typewriter: { name: '打字機（逐字）', defaults: { size: 80, align: 'center', x: 0.5, y: 0.5, bg: { color: 'rgba(0,0,0,0)', padding: 24, radius: 8 } } },
     fadeUp: { name: '淡入上移', defaults: { size: 80, align: 'center', x: 0.5, y: 0.5, bg: { color: 'rgba(0,0,0,0)', padding: 24, radius: 8 } } },
+    // 4.20：參考影片教學段落的旁白字幕——畫面下方、小字、貼身的黑底
+    caption: { name: '黑底小字幕', defaults: { size: 36, align: 'center', x: 0.5, y: 0.8, bg: { color: 'rgba(0,0,0,0.85)', padding: 10, radius: 2 } } },
   };
   function makeTitle(preset, text) {
     const t = deepClone(BASE_TITLE);
@@ -658,6 +726,28 @@
     }));
   }
 
+  // 模糊浮現：不用 ctx.filter（見濾鏡的說明），把字以 r 倍（<1）的解析度畫到離屏，再放大貼回來——放大的雙線性內插就是模糊。
+  //   r 從 0.06（很糊）到 1（清楚）。離屏和目標畫布同大、只用左上角 r 倍的區域，所以不必每格重配畫布。
+  //   沒有 getTransform（舊瀏覽器、node 測試的假 ctx）就回傳 false，呼叫端照一般淡入畫。
+  function blurPaint(ctx, s, cx, cy, o, paint) {
+    const cv = ctx.canvas;
+    if (!cv || !ctx.getTransform || !(cv.width > 0)) return false;
+    const r = 0.06 + 0.94 * Math.pow(1 - s.blur, 2);
+    const W = cv.width, H = cv.height, sc = scratch('tblur', W, H), c = sc.ctx;
+    const m = ctx.getTransform();
+    c.setTransform(m.a * r, m.b * r, m.c * r, m.d * r, m.e * r, m.f * r);
+    c.translate(cx, cy); c.scale(s.s, s.s); c.translate(-cx, -cy);
+    c.font = ctx.font;
+    paint(c);
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha *= s.a;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(sc.canvas, 0, 0, Math.max(1, W * r), Math.max(1, H * r), 0, 0, W, H);
+    ctx.restore();
+    return true;
+  }
+
   // 畫一塊文字。box：{ left, top, w（區塊寬）}；reveal：只畫前 N 個字（打字機），null＝全部；o：drawTitle 的參數（字體特效要用 f／fps）
   function paintBlock(ctx, t, L, k, lh, box, reveal, drawBg, o) {
     const align = t.align === 'left' || t.align === 'right' ? t.align : 'center';
@@ -667,6 +757,24 @@
     ctx.save();
     if (fxDef && !fxDef.char && !fxDef.line) {
       const s = textFxState(t.textFx, o.f / D, lh), cx = box.left + box.w / 2, cy = box.top + bh / 2;
+      const plain = { ...t, textFx: 'none' };
+      const again = (c, a) => paintBlock(c, plain, L, k, lh, box, reveal, a, o);
+      if (fxDef.echo) {               // 殘影：放大 1.3 倍、往右下偏，透明度從 0.45 慢慢退到 0（比主字慢 2.5 倍消失）
+        const g = clamp(o.f / (D * 2.5), 0, 1), ga = 0.45 * (1 - g) * clamp(o.f / Math.max(1, D * 0.3), 0, 1);
+        if (ga > 0.001) {
+          ctx.save(); ctx.globalAlpha *= ga;
+          ctx.translate(cx + box.w * 0.28, cy + lh * 0.25); ctx.scale(1.3, 1.3); ctx.translate(-cx, -cy);
+          again(ctx, false); ctx.restore();
+        }
+      }
+      if (fxDef.smear && s.trail > 0.01 && s.a > 0) {   // 拖影：主字下方 6 份越來越淡的副本
+        for (let i = 6; i >= 1; i--) {
+          ctx.save(); ctx.globalAlpha *= s.a * 0.22 * (1 - i / 7);
+          ctx.translate(0, s.dy + i * s.trail * lh * 0.22);
+          again(ctx, false); ctx.restore();
+        }
+      }
+      if (fxDef.blur && s.blur > 0.02 && blurPaint(ctx, s, cx, cy, o, c2 => again(c2, drawBg))) { ctx.restore(); return; }
       ctx.globalAlpha *= s.a;
       ctx.translate(cx, cy + s.dy); ctx.scale(s.s, s.s); ctx.translate(-cx, -cy);
     }
@@ -988,11 +1096,51 @@
       const filter = px > 0.2 ? `blur(${px.toFixed(2)}px)` : null;
       blend(ctx, layer('tA', dA, W, H), layer('tB', dB, W, H), u, W, H, { filter }, { filter });
     }),
+    // 4.20 負片閃：參考影片 6.4 秒「先收藏起來」→「黑柔效果」字卡，中間只有 1 格負片。
+    //   前半畫 A、後半畫 B（中點硬切），負片強度在中點最高、往兩邊遞減；轉場很短（幾格）時就是「一閃」。
+    //   負片＝和白色做 difference；畫在離屏再用原圖 destination-in 還原 alpha，透明的地方（單邊轉場）不會變成白色。
+    invertFlash: defineTransition('負片閃', (ctx, dA, dB, u, o, W, H) => {
+      const cv = layer('tA', u < 0.5 ? dA : dB, W, H);
+      const inv = clamp(1 - Math.abs(u - 0.5) * 2.5, 0, 1);
+      const s = scratch('tC', W, H), c = s.ctx;
+      c.drawImage(cv, 0, 0);
+      if (inv > 0) {
+        c.globalCompositeOperation = 'difference'; c.globalAlpha = inv;
+        c.fillStyle = '#ffffff'; c.fillRect(0, 0, W, H);
+        c.globalAlpha = 1; c.globalCompositeOperation = 'destination-in';
+        c.drawImage(cv, 0, 0);
+        c.globalCompositeOperation = 'source-over';
+      }
+      ctx.drawImage(s.canvas, 0, 0);
+    }),
+    // 4.20 光線劃開：參考影片 1 秒處一條細細的亮線橫掃過畫面。做成「擦拭＋邊界上一條發光的線」，線的顏色可改（預設白）。
+    lineSweep: defineTransition('光線劃開', (ctx, dA, dB, u, o, W, H) => {
+      TRANSITIONS.wipe.draw(ctx, dA, dB, u, { direction: o.direction }, W, H);
+      const [dx] = dirOf(o), k = Math.min(W, H) / 1080;
+      const horiz = !!dx, len = horiz ? W : H;
+      const pos = (horiz ? (dx < 0 ? 1 - u : u) : (dirOf(o)[1] < 0 ? 1 - u : u)) * len;
+      const fade = clamp(Math.min(u, 1 - u) * 8, 0, 1);       // 開頭結尾線淡出，不會在畫面邊緣突然出現／消失
+      const glowW = 46 * k, col = o.color || '#ffffff';
+      ctx.save();
+      ctx.globalAlpha *= fade;
+      const g = horiz ? ctx.createLinearGradient(pos - glowW, 0, pos + glowW, 0) : ctx.createLinearGradient(0, pos - glowW, 0, pos + glowW);
+      const hx = parseColor(col).hex, soft = `rgba(${parseInt(hx.slice(1, 3), 16)},${parseInt(hx.slice(3, 5), 16)},${parseInt(hx.slice(5, 7), 16)},`;
+      g.addColorStop(0, soft + '0)'); g.addColorStop(0.5, soft + '0.45)'); g.addColorStop(1, soft + '0)');
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = g;
+      if (horiz) ctx.fillRect(pos - glowW, 0, glowW * 2, H); else ctx.fillRect(0, pos - glowW, W, glowW * 2);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = col;
+      const lw = Math.max(1, 3 * k);
+      if (horiz) ctx.fillRect(pos - lw / 2, 0, lw, H); else ctx.fillRect(0, pos - lw / 2, W, lw);
+      ctx.restore();
+    }),
   };
   // 詳細內容要顯示的選項（WebGL 轉場在 edit-fx-gl.js 裡也帶同樣的欄位）：
   //   dirs：'four'＝上下左右、'spin'＝逆／順時針、'doors'＝左右／上下打開；color：顯示「顏色」
-  for (const k of ['wipe', 'push', 'slide']) TRANSITIONS[k].dirs = 'four';
+  for (const k of ['wipe', 'push', 'slide', 'lineSweep']) TRANSITIONS[k].dirs = 'four';
   TRANSITIONS.dipToColor.color = true;
+  TRANSITIONS.lineSweep.color = true;
   // ---------------------------------------------------------------------------------
   // 詳細內容
   //   sections：[{ id, title, appliesTo(subject), render(el, subject, commit) }]
@@ -1005,7 +1153,7 @@
   const isTransition = s => !!s && s.leftClipId !== undefined;
   const trInfo = s => (s && TRANSITIONS[s.type]) || {};
   const FIT_OPTIONS = [['fit', '符合（完整顯示）'], ['blur', '符合＋模糊背景'], ['fill', '填滿（裁掉多的）'], ['stretch', '拉伸（變形）']];
-  const LOOK_OPTIONS = [['none', '原色'], ['warm', '暖陽'], ['cool', '冷調'], ['mono', '黑白']];
+  const LOOK_OPTIONS = [['none', '原色'], ['warm', '暖陽'], ['cool', '冷調'], ['mono', '黑白'], ['mist', '黑柔'], ['film', '電影感']];
   const DIR_OPTIONS = [['left', '向左'], ['right', '向右'], ['up', '向上'], ['down', '向下']];
   const ALIGN_OPTIONS = [['left', '靠左'], ['center', '置中'], ['right', '靠右']];
 
