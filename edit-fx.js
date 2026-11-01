@@ -1097,11 +1097,11 @@
       blend(ctx, layer('tA', dA, W, H), layer('tB', dB, W, H), u, W, H, { filter }, { filter });
     }),
     // 4.20 負片閃：參考影片 6.4 秒「先收藏起來」→「黑柔效果」字卡，中間只有 1 格負片。
-    //   前半畫 A、後半畫 B（中點硬切），負片強度在中點最高、往兩邊遞減；轉場很短（幾格）時就是「一閃」。
+    //   前半畫 A、後半畫 B（中點硬切），只有中點前後 10% 是負片（中點最強）——不管轉場拉多長，看起來都是「一閃」。
     //   負片＝和白色做 difference；畫在離屏再用原圖 destination-in 還原 alpha，透明的地方（單邊轉場）不會變成白色。
     invertFlash: defineTransition('負片閃', (ctx, dA, dB, u, o, W, H) => {
       const cv = layer('tA', u < 0.5 ? dA : dB, W, H);
-      const inv = clamp(1 - Math.abs(u - 0.5) * 2.5, 0, 1);
+      const inv = clamp(1 - Math.abs(u - 0.5) * 10, 0, 1);
       const s = scratch('tC', W, H), c = s.ctx;
       c.drawImage(cv, 0, 0);
       if (inv > 0) {
