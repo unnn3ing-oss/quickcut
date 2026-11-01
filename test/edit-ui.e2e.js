@@ -1891,6 +1891,9 @@ async function runLayoutTests(browser, base, [W, H]) {
     });
     const before = problems.length;
     await goEdit(page);
+    // 讀不到 localStorage → 開始畫面會出現（記不住「不要再顯示」），先關掉
+    if (await page.$('#edStart')) { await page.keyboard.press('Escape'); await settle(page); }
+    await page.evaluate(() => { const t = document.getElementById('edTip'); if (t) t.remove(); });
     eq(await attr(page), 'dark', 'localStorage 讀取丟錯：仍是深色');
     await page.click('#edThemeBtn');
     await settle(page);
@@ -2258,7 +2261,7 @@ async function runRetimeTests(browser, base, fix, [W, H]) {
 (async () => {
   const fix = fixturesDir();
   const { server, base } = await serve();
-  const browser = await chromium.launch(EXE ? { executablePath: EXE } : {});
+  const browser = require('./e2e-pro.js')(await chromium.launch(EXE ? { executablePath: EXE } : {}));
   let all = [];
   try {
     for (const vp of VIEWPORTS) all = all.concat(await runLayoutTests(browser, base, vp));

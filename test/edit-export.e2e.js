@@ -40,7 +40,7 @@ test.before(async () => {
   OUT = KEEP ? path.resolve(KEEP) : fs.mkdtempSync(path.join(os.tmpdir(), 'ed-export-'));
   fs.mkdirSync(OUT, { recursive: true });
   await serve();
-  browser = await chromium.launch();
+  browser = require('./e2e-pro.js')(await chromium.launch());
 });
 test.after(async () => {
   if (browser) await browser.close();

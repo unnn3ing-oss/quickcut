@@ -484,3 +484,40 @@ test('getParam：關鍵影格內插走 core.keyframeValue（ease 緩入緩出、
   const m = fx.clipMatrix(c, 1920, 1080, 1920, 1080, 25);
   near(m[4], fx.getParam(c, 'video.transform.posX', 25));
 });
+
+test('drawClipVisual：濾鏡先在離屏用混合模式調色、還原 alpha，再當來源畫（模糊背景也用調過的）', () => {
+  const made = [];
+  fx._setCanvasFactory((w, h) => { const cx = mockCtx(); const cv = { width: w, height: h, getContext: () => cx, cx }; made.push(cv); return cv; });
+  const src = { tag: 'src' };
+  // 原色：直接畫來源、不做離屏
+  const c0 = clipOf({}, { look: 'none' });
+  const ctx0 = mockCtx();
+  fx.drawClipVisual(ctx0, c0, src, 320, 180, 320, 180, 0);
+  assert.equal(calls(ctx0, 'drawImage')[0][1], src);
+  // 黑白：saturation 塗灰、destination-in 還原 alpha，畫到輸出的是離屏畫布
+  for (const [look, op] of [['mono', 'saturation'], ['warm', 'soft-light'], ['cool', 'soft-light']]) {
+    made.length = 0;
+    const c = clipOf({}, { look, lookAmt: 50 });
+    const ctx = mockCtx();
+    fx.drawClipVisual(ctx, c, src, 320, 180, 320, 180, 0);
+    const lk = calls(ctx, 'drawImage')[0][1];
+    assert.ok(lk !== src && lk.cx && lk.width === 320 && lk.height === 180, look + '：輸出畫的是 320×180 的離屏');
+    const log = lk.cx.__log;
+    const ops = log.filter(e => e[0] === 'set:globalCompositeOperation').map(e => e[1]);
+    assert.ok(ops.includes(op) && ops.includes('destination-in'), `${look}：用 ${op} 調色、destination-in 還原 alpha：${ops}`);
+    const alpha = log.find(e => e[0] === 'set:globalAlpha' && e[1] < 1);
+    assert.ok(alpha && alpha[1] > 0 && alpha[1] <= 0.5, `${look}：強度 50% → 混合透明度減半（${alpha && alpha[1]}）`);
+    lk.cx.__log.length = 0;
+  }
+  // 強度 0：等於原色
+  const ctx2 = mockCtx();
+  fx.drawClipVisual(ctx2, clipOf({}, { look: 'mono', lookAmt: 0 }), src, 320, 180, 320, 180, 0);
+  assert.equal(calls(ctx2, 'drawImage')[0][1], src);
+  // 模糊背景也用調過色的畫面
+  made.length = 0;
+  const ctx3 = mockCtx();
+  fx.drawClipVisual(ctx3, clipOf({}, { look: 'mono', fit: 'blur' }), src, 320, 180, 180, 320, 0);
+  const lk3 = calls(ctx3, 'drawImage')[1][1];
+  const bg = calls(ctx3, 'drawImage')[0][1];
+  assert.equal(calls(bg.cx, 'drawImage')[0][1], lk3);
+});

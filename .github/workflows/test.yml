@@ -54,3 +54,6 @@ jobs:
 
       - name: 介面可用性（ux.e2e）
         run: node test/ux.e2e.js
+
+      - name: 簡易模式（edit-simple.e2e）
+        run: node test/edit-simple.e2e.js
