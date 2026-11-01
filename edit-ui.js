@@ -208,6 +208,13 @@
     node.style.left = clamp(x, 8, Math.max(8, vw - w - 8)) + 'px';
     node.style.top = clamp(y, 8, Math.max(8, vh - h - 8)) + 'px';
   }
+  // 小視窗內容變高之後（例如多出一列），往上挪到下緣還在畫面裡；太高時由 CSS 的 max-height 捲動
+  function fitPop() {
+    const n = UI.popEl;
+    if (!n) return;
+    const r = n.getBoundingClientRect(), vh = doc.documentElement.clientHeight;
+    if (r.bottom > vh - 8) n.style.top = Math.max(8, vh - 8 - r.height) + 'px';
+  }
   // 在 anchor（元素或座標）旁邊開一個小視窗；回傳視窗元素
   function openPop(anchor, node, cls) {
     closePop(); closeMenu();
@@ -249,7 +256,7 @@
     $, AUDIO_H, COLS_KEY, DRAG_PX, EDGE_PX, EQ_TYPES, HEAD_W, ICONS, KIND_NAME, MARKER_HEX, MARKER_NAME, MVIEW_KEY,
     RULER_H, SAFE_KEY, SNAP_PX, SPEEDS, THEME_KEY, VERT_H_KEY, VERT_KEY, VIDEO_H, ZOOM_MIN, app, clamp, clipOf,
     clipTitle, closeMenu, closePop, colors, doc, el, fmtNum, fmtSec, fps, icon, isSubClip, isTextTarget, lastSel,
-    lsSet, mediaOf, newProject, openMenu, openPop, readColors, report, say, selIds, state, targetTrack, tc, trackOf,
+    lsSet, mediaOf, newProject, fitPop, openMenu, openPop, readColors, report, say, selIds, state, targetTrack, tc, trackOf,
     videoTracksTopFirst,
   });
 })(typeof window !== 'undefined' ? window : globalThis);

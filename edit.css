@@ -522,7 +522,7 @@ html[data-ed-theme="dark"] button.primary:hover:not(:disabled) { background: var
   position: fixed; z-index: 10001; background: var(--ed-pop-bg); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 18px 40px -16px var(--ed-pop-shadow);
   color: var(--text); font-size: 12.5px;
 }
-.ed-pop { padding: 12px; width: 288px; max-width: calc(100vw - 16px); }
+.ed-pop { padding: 12px; width: 288px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; }
 
 .ed-pop.fit { width: 320px; }
 .ed-pop.beat { width: 320px; }

@@ -9,7 +9,7 @@
   const UI = Q && Q.uiParts;
   if (!UI) return;                     // 頁面上沒有剪輯介面
   const { $, MARKER_HEX, MARKER_NAME, app, clearSourceIO, clipOf, clipTitle, closeMenu, closePop, doc, el,
-    ensureMediaInfo, fmtNum, fps, isSubClip, isTextTarget, jumpEdit, lastSel, lib, mediaOf, openPop, report, say,
+    ensureMediaInfo, fitPop, fmtNum, fps, isSubClip, isTextTarget, jumpEdit, lastSel, lib, mediaOf, openPop, report, say,
     seekTimeline, seekView, selIds, setSourceIO, shuttle, state, step, targetTrack, tc, togglePlay,
     videoTracksTopFirst, viewDuration } = UI;
   let C = null, R = null, F = null;
@@ -322,6 +322,7 @@
       desc.textContent = cur ? RETIME_UI.find(x => x[0] === cur)[2] + '。曲線裡的百分比都是相對「基準速度」；建議勾選波紋，慢動作才不會吃掉後面的畫面。'
         : wasRamped ? '套用後會取消曲線變速，整段回到同一個速度。' : '';
       desc.hidden = !desc.textContent;
+      fitPop();                                     // 多了強度、說明，視窗變高：下緣不要跑出畫面
     }
     str.addEventListener('input', sync);
     const act = el('div', 'ed-form-act');
