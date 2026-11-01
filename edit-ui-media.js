@@ -308,7 +308,7 @@
     else if (errors.length) say(errors[0].message, 'error'); else say('');
     renderMedia();
     UI.syncAspect();
-    if (UI.placeImported) UI.placeImported(added);     // 簡易模式：自動排到時間軸
+    if (UI.placeImported) UI.placeImported(added);     // 只有「加貼圖」會直接放上時間軸；其他匯入只進媒體庫（4.50）
     if (UI.player) UI.player.refresh();
     UI.scheduleRender();
     return added;
@@ -359,7 +359,7 @@
       const used = Object.values(p.clips).some(c => c.mediaId === m.id);
       const it = el('div', 'ed-mitem' + (state.selMedia === m.id ? ' sel' : '') + (state.sourceMedia === m.id && state.mode === 'source' ? ' src' : ''));
       it.dataset.media = m.id;
-      it.title = `${m.name}\n單擊選取，雙擊在檢視器預覽，拖到時間軸放入`;
+      it.title = `${m.name}\n單擊選取，雙擊在檢視器預覽；拖到時間軸放入，或按「＋」加到最後面`;
       const cv = el('canvas', 'ed-mthumb'); cv.width = 160; cv.height = 90;
       paintMediaThumb(cv, m);
       const info = el('div', 'ed-minfo');
@@ -378,7 +378,12 @@
       del.appendChild(icon('close'));
       del.addEventListener('click', e => { e.stopPropagation(); removeMedia(m.id); });
       del.addEventListener('pointerdown', e => e.stopPropagation());
-      it.append(cv, info, del);
+      const add = el('button', 'ed-madd'); add.type = 'button'; add.title = '加到時間軸最後面'; add.setAttribute('aria-label', `把 ${m.name} 加到時間軸`);
+      add.appendChild(icon('plus'));
+      add.addEventListener('click', e => { e.stopPropagation(); state.selMedia = m.id; markMediaSel(); if (UI.placeMedia) UI.placeMedia([m]); });
+      add.addEventListener('pointerdown', e => e.stopPropagation());
+      add.addEventListener('dblclick', e => e.stopPropagation());
+      it.append(cv, info, add, del);
       it.addEventListener('pointerdown', e => libPointerDown(e, { kind: 'media', id: m.id }, m.name, () => { state.selMedia = m.id; markMediaSel(); }));
       it.addEventListener('dblclick', () => UI.openSource(m.id));
       host.appendChild(it);

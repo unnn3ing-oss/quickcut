@@ -26,6 +26,8 @@
   const FADE_STEPS = 48;               // 淡入淡出曲線切幾段
   const STD_FPS = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 120];
   const PRELOAD_SEC = 1.5;             // 播放時提前準備幾秒內要出現的片段
+  const PREROLL_SEC = 0.25;            // 快輪到的片段提早幾秒開始播（4.50，修片段交界的卡頓）
+  const START_GRACE_MS = 400;          // 剛開始播的這段時間不校正漂移（play() 起步慢，校正反而會卡）
   const AUDIO_AHEAD = 2;               // 預覽聲音提前排程幾秒
   const POOL_MAX = 8, EVICT_MS = 8000; // <video> 元素池
 
@@ -480,7 +482,7 @@
         if (!src) return;
         const [sw, sh] = sourceSize(src);
         if (!sw || !sh) return;
-        if (typeof F.drawClipVisual === 'function') F.drawClipVisual(ctx, clip, src, sw, sh, W, H, fIn, p.fps);
+        if (typeof F.drawClipVisual === 'function') F.drawClipVisual(ctx, clip, src, sw, sh, W, H, fIn, p.fps, p);
         else {     // fx 還沒載入：照比例放進畫面
           const k = Math.min(W / sw, H / sh);
           ctx.drawImage(src, (W - sw * k) / 2, (H - sh * k) / 2, sw * k, sh * k);
@@ -857,14 +859,23 @@
         if (e.native) {
           const adv = ramp ? C.srcOffset(p, clip, pos - clip.start) - C.srcOffset(p, clip, frame - clip.start) : (pos - frame) / p.fps * clip.speed;
           const want = clamp(target + adv, 0, m.duration);
-          if (Math.abs(el.playbackRate - sp) > sp * 0.01) el.playbackRate = sp;
+          // 4.50 修卡頓：剛開始播（play() 到真的出畫面要 50～200ms）或小幅漂移時，不再 seek（seek 會停住、再落後、再 seek，
+          //   在片段交界特別明顯），改用微調播放速度慢慢追上；只有差很多（> 0.6 秒或 12 格）才 seek。
+          const drift = el.currentTime - want;
+          let rateWant = sp;
           if (el.paused) {
-            if (Math.abs(el.currentTime - want) > 0.04) el.currentTime = want;
+            if (Math.abs(drift) > 0.04) el.currentTime = want;
+            e.startedAt = t;
             const pr = el.play();
             if (pr && pr.catch) pr.catch(() => {});
-          } else if (Math.abs(el.currentTime - want) > Math.max(0.15, 4 / p.fps) * sp) el.currentTime = want;   // 漂移太多才校正
+          } else if (Math.abs(drift) > Math.max(0.6, 12 / p.fps) * sp) { el.currentTime = want; e.startedAt = t; }
+          else if (t - (e.startedAt || 0) > START_GRACE_MS && Math.abs(drift) > 0.03) rateWant = sp * clamp(1 - drift * 1.5, 0.8, 1.25);
+          if (Math.abs(el.playbackRate - rateWant) > sp * 0.01) el.playbackRate = rateWant;
+          e.prerolled = false;
           e.target = want;
         } else {
+          if (!active && e.prerolled && rate > 0 && !el.paused) return;   // 已經提早開始播（preroll），別停下它
+          e.prerolled = false;
           if (!el.paused) el.pause();
           e.target = target;
           // 倒播／逐格：上一次 seek 還沒完成就先跳過這格（不要堆積）
@@ -874,22 +885,51 @@
       for (const r of sourcesAt(p, frame)) place(r, true);
       if (rate > 0) {                               // 預先準備快要出現的片段：先停在第一格，輪到它時直接播放，不閃黑
         const ahead = frame + Math.ceil(PRELOAD_SEC * p.fps * rate), fs = new Set();
+        const FX = Q.fxgl;
         for (const tk of tracksOf(p, 'video')) {
           if (tk.hidden) continue;
           for (const c of Object.values(p.clips)) if (c.trackId === tk.id && c.start > frame && c.start <= ahead) fs.add(c.start);
           for (const tr of Object.values(p.transitions || {})) {
             if (tr.trackId !== tk.id) continue;
             const r = transitionRange(p, tr);
-            if (r && r.from > frame && r.from <= ahead) fs.add(r.from);
+            if (r && r.from > frame && r.from <= ahead) {
+              fs.add(r.from);
+              if (FX && FX.warm) FX.warm(tr.type);    // 4.50：WebGL 轉場的著色器先編譯好，不要在轉場第一格才編（會頓一下）
+            }
           }
         }
-        for (const f of fs) for (const r of sourcesAt(p, f)) if (!live.has(r.clip.id)) place(r, false);
+        for (const f of fs) for (const r of sourcesAt(p, f)) if (!live.has(r.clip.id)) {
+          place(r, false);
+          preroll(p, r, f);
+        }
       }
       for (const [id, e] of pool) {
         if (live.has(id)) continue;
-        if (!e.el.paused) e.el.pause();
+        if (!e.el.paused && !(e.prerolled && rate > 0)) e.el.pause();
         if (t - e.used > EVICT_MS || pool.size > POOL_MAX) release(id);
       }
+    }
+
+    // 4.50：快輪到的片段提早一點點開始播（播放頭還差 PREROLL_SEC 以內），輪到它時已經在跑，不會先定住幾格。
+    //   只有來源前面還有足夠的畫面（倒退 lead 秒不會超過開頭）、順向、速度在原生範圍內才這樣做。
+    function preroll(p, r, f) {
+      const e = pool.get(r.clip.id), m = reg.get(r.mediaId), clip = r.clip;
+      if (!e || !m || e.el.readyState < 2 || clip.reverse || clip.freeze || clip.retime) return;
+      const sp = (clip.speed > 0 ? clip.speed : 1) * rate;
+      const lead = (f - pos) / p.fps / rate;                // 還有幾秒（真實時間）輪到它
+      if (!(lead > 0) || lead > PREROLL_SEC || sp < 0.0625 || sp > 16) return;
+      const start = seekTarget(m, r.time) - lead * sp;
+      if (start < 0) return;
+      const el = e.el;
+      if (el.paused) {
+        el.currentTime = start;
+        el.playbackRate = sp;
+        const pr = el.play();
+        if (pr && pr.catch) pr.catch(() => {});
+        e.startedAt = now();
+      }
+      e.prerolled = true;
+      e.target = start;
     }
 
     // 某個來源現在能不能畫：undefined = 還沒準備好（先保留上一格畫面），null = 沒有（畫不出來就略過）

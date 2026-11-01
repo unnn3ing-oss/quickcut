@@ -165,6 +165,47 @@ body{margin:0;padding:16px;font-family:system-ui,"Noto Sans TC",sans-serif;backg
   ok(Math.abs(bb.halfTop[3] - 128) <= 3, '背景跟著不透明度 ' + bb.halfTop);
   ok(bb.zoomCorner[3] === 255, '背景不跟著縮放，縮小本體時四周仍蓋滿 ' + bb.zoomCorner);
 
+  // ---------- 色彩還原＋LUT（4.50）：WebGL 和 CPU 結果一致、LUT 方向正確 ----------
+  console.log('色彩還原與 LUT');
+  await page.addScriptTag({ path: path.join(ROOT, 'edit-core.js') });
+  const cg = await page.evaluate(() => {
+    const Q = window.QPTEdit, fx = Q.fx, C = Q.core;
+    const src = document.createElement('canvas'); src.width = 160; src.height = 90;
+    const s = src.getContext('2d');
+    const g = s.createLinearGradient(0, 0, 160, 0); g.addColorStop(0, 'rgb(70,80,120)'); g.addColorStop(1, 'rgb(170,175,230)');   // 偏藍、霧霧的
+    s.fillStyle = g; s.fillRect(0, 0, 160, 90); s.fillStyle = 'rgb(200,60,40)'; s.fillRect(20, 20, 40, 40);
+    const n = 9, lines = ['LUT_3D_SIZE ' + n];
+    for (let b = 0; b < n; b++) for (let gg = 0; gg < n; gg++) for (let r = 0; r < n; r++) lines.push([gg, b, r].map(v => (v / (n - 1)).toFixed(4)).join(' '));   // R←G、G←B、B←R
+    const lut = C.parseCube(lines.join('\n'), 'swap.cube');
+    const p = C.createProject(); const a = C.addLut(p, lut);
+    const clip = v => ({ id: 'c', type: 'media', duration: 60, video: Object.assign({ transform: { ...fx.DEFAULT_TRANSFORM }, crop: { ...fx.DEFAULT_CROP }, fit: 'fit' }, v) });
+    const run = v => {
+      const c = document.createElement('canvas'); c.width = 160; c.height = 90; const x = c.getContext('2d');
+      fx.drawClipVisual(x, clip(v), src, 160, 90, 160, 90, 0, 30, p);
+      return x.getImageData(0, 0, 160, 90).data;
+    };
+    const glOk = !!Q.fxgl.grade(src, 160, 90, { rp: null, lut: null, lutAmt: 0 });
+    const cases = [{ lut: a.id, lutAmt: 100 }, { restore: 100 }, { restore: 60, lut: a.id, lutAmt: 50 }];
+    let glCalls = 0; const real = Q.fxgl.grade; Q.fxgl.grade = (...x) => { const r = real(...x); if (r) glCalls++; return r; };
+    const gl = cases.map(run);
+    Q.fxgl.grade = real;
+    Q.fxgl._disable(true);
+    const keep = Q.fxgl.grade; Q.fxgl.grade = () => null;
+    const cpu = cases.map(run);
+    Q.fxgl.grade = keep; Q.fxgl._disable(false);
+    const diff = (A, B) => { let m = 0; for (let i = 0; i < A.length; i++) m = Math.max(m, Math.abs(A[i] - B[i])); return m; };
+    const px = (d, X, Y) => Array.from(d.slice((Y * 160 + X) * 4, (Y * 160 + X) * 4 + 4));
+    const orig = run({});
+    const spread = d => { let lo = 255, hi = 0; for (let i = 0; i < d.length; i += 4) { lo = Math.min(lo, d[i]); hi = Math.max(hi, d[i]); } return hi - lo; };
+    return { glOk, glCalls, diffs: gl.map((d, i) => diff(d, cpu[i])), red: px(gl[0], 40, 40), origRed: px(orig, 40, 40), spreadIn: spread(orig), spreadOut: spread(gl[1]),
+      blueBias: [px(orig, 150, 80), px(gl[1], 150, 80)] };
+  });
+  ok(cg.glOk && cg.glCalls === 3, 'WebGL 調色可用，三種情況都走 WebGL ' + cg.glCalls);
+  ok(cg.diffs.every(d => d <= 3), 'WebGL 和 CPU 的結果一致（每個像素差 ≤ 3） ' + cg.diffs);
+  ok(cg.red[0] < 90 && cg.red[2] > 170, 'LUT（R←G、B←R）：紅色方塊變藍 ' + cg.red + ' 原本 ' + cg.origRed);
+  ok(cg.spreadOut > cg.spreadIn + 40, `色彩還原：R 色版的範圍拉開（${cg.spreadIn} → ${cg.spreadOut}）`);
+  ok(cg.blueBias[1][2] - cg.blueBias[1][0] < cg.blueBias[0][2] - cg.blueBias[0][0], '色彩還原：偏藍減少 ' + JSON.stringify(cg.blueBias));
+
   // ---------- 變形／裁切 ----------
   console.log('變形與裁切');
   const vis = await page.evaluate(() => {

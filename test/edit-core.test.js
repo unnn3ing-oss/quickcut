@@ -2239,3 +2239,47 @@ t('電影黑邊：一鍵成片的電影感順便加 2.39，同一筆復原；其
   assert.strictEqual(g.letterbox, '1.85');
   return [p, g];
 });
+
+// ---- 4.50：LUT（.cube）----
+const cubeText = (n, f, extra = '') => {
+  const lines = ['# test', 'TITLE "My Look"', `LUT_3D_SIZE ${n}`, extra];
+  for (let b = 0; b < n; b++) for (let g = 0; g < n; g++) for (let r = 0; r < n; r++) lines.push(f(r / (n - 1), g / (n - 1), b / (n - 1)).map(v => v.toFixed(6)).join(' '));
+  return lines.join('\n');
+};
+t('parseCube：讀 TITLE／大小、R 變最快、DOMAIN、錯誤訊息', () => {
+  const id = core.parseCube(cubeText(2, (r, g, b) => [r, g, b]), 'x.cube');
+  assert.ok(id.ok); assert.equal(id.name, 'My Look'); assert.equal(id.size, 2);
+  assert.deepEqual([...id.data.slice(0, 6)], [0, 0, 0, 255, 0, 0], '第 2 組是 R＝1');
+  const inv = core.parseCube(cubeText(3, (r, g, b) => [1 - r, 1 - g, 1 - b]));
+  assert.deepEqual(core.lutLookup(inv.data, 3, 0.25, 0.5, 1).map(v => +v.toFixed(2)), [0.75, 0.5, 0], '三線性內插');
+  const dom = core.parseCube(cubeText(2, (r, g, b) => [r * 2, g * 2, b * 2], 'DOMAIN_MIN 0 0 0\nDOMAIN_MAX 2 2 2'));
+  assert.equal(dom.data[3], 255, 'DOMAIN_MAX＝2 時 2 對到 255');
+  assert.match(core.parseCube('LUT_1D_SIZE 4\n0 0 0').reason, /1D/);
+  assert.match(core.parseCube('LUT_3D_SIZE 2\n0 0 0').reason, /個數/);
+  assert.match(core.parseCube('').reason, /空/);
+  const big = core.parseCube(cubeText(40, (r, g, b) => [r, g, b]));
+  assert.equal(big.size, core.LUT_MAX_SIZE, '超過 33 點重新取樣');
+  assert.deepEqual(core.lutLookup(big.data, big.size, 0.5, 0.2, 0.8).map(v => Math.round(v * 100)), [50, 20, 80], '取樣後還是恆等');
+});
+t('addLut／removeLut：存進專案（序列化、復原）、同內容沿用、片段指向、移除時片段改回無', () => {
+  const p = core.createProject();
+  assert.deepEqual(p.luts, {});
+  const lut = core.parseCube(cubeText(2, (r, g, b) => [g, b, r]), 'swap.cube');
+  const a = core.addLut(p, lut);
+  assert.ok(a.ok && p.luts[a.id] && typeof p.luts[a.id].data === 'string');
+  assert.equal(core.addLut(p, lut).id, a.id, '同內容沿用同一個 id');
+  const d = core.lutData(p, a.id);
+  assert.deepEqual([...d.data], [...lut.data], 'base64 來回一致');
+  const q = core.deserialize(core.serialize(p));
+  assert.deepEqual([...core.lutData(q, a.id).data], [...lut.data], '存檔讀回一致');
+  assert.deepEqual(core.deserialize('{"tracks":[]}').luts, {}, '舊存檔補上空的 luts');
+  const c = core.addClip(p, { trackId: core.tracksOf(p, 'video')[0].id, start: 0, duration: 30, type: 'solid', solidColor: '#ff0000' });
+  const cid = c.id || c.ids && c.ids[0];
+  assert.ok(core.setClipProps(p, cid, { video: { lut: a.id, lutAmt: 150, restore: -5 } }).ok);
+  assert.equal(p.clips[cid].video.lutAmt, 100, 'lutAmt 夾在 0～100');
+  assert.equal(p.clips[cid].video.restore, 0, 'restore 夾在 0～100');
+  assert.ok(core.removeLut(p, a.id).ok);
+  assert.equal(p.clips[cid].video.lut, null, '移除後片段改回無');
+  assert.equal(core.lutData(p, a.id), null);
+  assert.equal(core.removeLut(p, 'nope').ok, false);
+});

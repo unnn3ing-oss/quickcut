@@ -111,6 +111,7 @@
       bgColor: opts.bgColor || '#000000', letterbox: 'none',
       tracks: [], clips: {}, transitions: {}, markers: [],
       inPoint: null, outPoint: null, nextId: 1, mediaInfo: {},
+      luts: {},           // 4.50：載入的 LUT（.cube），id → { name, size, data（base64，size³×3 個 0~255，R 變最快）}
     };
     const nv = opts.videoTracks == null ? 1 : opts.videoTracks, na = opts.audioTracks == null ? 1 : opts.audioTracks;
     for (let i = 0; i < Math.max(1, nv); i++) pushTrack(p, 'video');
@@ -1337,6 +1338,112 @@
     out.name = String(out.name || '').slice(0, 200); out.note = String(out.note || '').slice(0, 2000);
     return out;
   }
+  // =====================================================================================
+  // LUT（4.50）：解析 .cube、存進專案（存檔、復原都跟著專案走），片段用 video.lut 指向 id、video.lutAmt 0~100
+  // =====================================================================================
+  const LUT_MAX_SIZE = 33;             // 超過 33 點的 LUT 重新取樣成 33 點（貼圖寬＝size²，65 點會超過部分顯示卡上限；檔案也小很多）
+  // 解析 .cube 文字：回傳 { ok, name, size, data: Uint8Array(size³×3) } 或 { ok:false, reason }
+  function parseCube(text, name) {
+    if (typeof text !== 'string' || !text.trim()) return fail('LUT 檔案是空的');
+    let size = 0, title = '', min = [0, 0, 0], max = [1, 1, 1];
+    const vals = [];
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.replace(/#.*/, '').trim();
+      if (!line) continue;
+      const kw = /^([A-Z_0-9]+)\s*(.*)$/.exec(line);
+      if (kw && !/^[-+.\d]/.test(line)) {
+        const [, k, rest] = kw;
+        if (k === 'TITLE') title = rest.replace(/^"|"$/g, '');
+        else if (k === 'LUT_3D_SIZE') size = parseInt(rest, 10);
+        else if (k === 'LUT_1D_SIZE') return fail('只支援 3D LUT（這個檔案是 1D LUT）');
+        else if (k === 'DOMAIN_MIN') min = rest.split(/\s+/).map(Number);
+        else if (k === 'DOMAIN_MAX') max = rest.split(/\s+/).map(Number);
+        continue;
+      }
+      const n = line.split(/\s+/).map(Number);
+      if (n.length < 3 || n.slice(0, 3).some(v => !isFinite(v))) return fail('LUT 檔案格式不正確（看不懂的數值）');
+      vals.push(n[0], n[1], n[2]);
+    }
+    if (!(size >= 2 && size <= 256)) return fail('LUT 檔案缺少 LUT_3D_SIZE，或大小不正確');
+    if (vals.length !== size * size * size * 3) return fail(`LUT 的數值個數不對（應該有 ${size ** 3} 組，實際 ${vals.length / 3} 組）`);
+    if (min.length < 3 || max.length < 3 || [0, 1, 2].some(i => !(max[i] > min[i]))) return fail('LUT 的 DOMAIN_MIN／DOMAIN_MAX 不正確');
+    let data = new Uint8Array(vals.length);
+    for (let i = 0; i < vals.length; i++) {
+      const c = i % 3;
+      data[i] = Math.round(clamp((vals[i] - min[c]) / (max[c] - min[c]), 0, 1) * 255);
+    }
+    if (size > LUT_MAX_SIZE) { data = resampleLut(data, size, LUT_MAX_SIZE); size = LUT_MAX_SIZE; }
+    const nm = String(title || name || 'LUT').replace(/\.cube$/i, '').slice(0, 80) || 'LUT';
+    return { ok: true, name: nm, size, data };
+  }
+  // 查 LUT（三線性內插）：r,g,b 0~1 → [r,g,b] 0~1。data 是 size³×3 的 0~255，R 變最快
+  function lutLookup(data, size, r, g, b) {
+    const n = size - 1, at = (x, y, z, c) => data[((z * size + y) * size + x) * 3 + c];
+    const fx = clamp(r, 0, 1) * n, fy = clamp(g, 0, 1) * n, fz = clamp(b, 0, 1) * n;
+    const x0 = Math.floor(fx), y0 = Math.floor(fy), z0 = Math.floor(fz);
+    const x1 = Math.min(n, x0 + 1), y1 = Math.min(n, y0 + 1), z1 = Math.min(n, z0 + 1);
+    const dx = fx - x0, dy = fy - y0, dz = fz - z0, out = [0, 0, 0];
+    for (let c = 0; c < 3; c++) {
+      const c00 = at(x0, y0, z0, c) * (1 - dx) + at(x1, y0, z0, c) * dx, c10 = at(x0, y1, z0, c) * (1 - dx) + at(x1, y1, z0, c) * dx;
+      const c01 = at(x0, y0, z1, c) * (1 - dx) + at(x1, y0, z1, c) * dx, c11 = at(x0, y1, z1, c) * (1 - dx) + at(x1, y1, z1, c) * dx;
+      out[c] = ((c00 * (1 - dy) + c10 * dy) * (1 - dz) + (c01 * (1 - dy) + c11 * dy) * dz) / 255;
+    }
+    return out;
+  }
+  function resampleLut(data, size, to) {
+    const out = new Uint8Array(to * to * to * 3);
+    for (let z = 0; z < to; z++) for (let y = 0; y < to; y++) for (let x = 0; x < to; x++) {
+      const v = lutLookup(data, size, x / (to - 1), y / (to - 1), z / (to - 1)), i = ((z * to + y) * to + x) * 3;
+      out[i] = Math.round(v[0] * 255); out[i + 1] = Math.round(v[1] * 255); out[i + 2] = Math.round(v[2] * 255);
+    }
+    return out;
+  }
+  // base64 ↔ Uint8Array（瀏覽器用 btoa／atob，node 用 Buffer）
+  function bytesToB64(u8) {
+    if (typeof Buffer !== 'undefined' && typeof root.btoa !== 'function') return Buffer.from(u8).toString('base64');
+    let s = '';
+    for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    return root.btoa(s);
+  }
+  function b64ToBytes(b64) {
+    if (typeof Buffer !== 'undefined' && typeof root.atob !== 'function') return new Uint8Array(Buffer.from(b64, 'base64'));
+    const s = root.atob(b64), u8 = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i);
+    return u8;
+  }
+  // 專案裡的 LUT 解成 { name, size, data: Uint8Array }；壞掉的回 null（快取在 LUT 物件上，core 換物件時自然失效）
+  const lutCache = new WeakMap();
+  function lutData(p, id) {
+    const rec = p && p.luts && id ? p.luts[id] : null;
+    if (!rec) return null;
+    let d = lutCache.get(rec);
+    if (d === undefined) {
+      try {
+        const u8 = b64ToBytes(rec.data || '');
+        d = u8.length === rec.size ** 3 * 3 ? { name: rec.name, size: rec.size, data: u8 } : null;
+      } catch (_) { d = null; }
+      lutCache.set(rec, d);
+    }
+    return d;
+  }
+  // 加一個 LUT（parseCube 的結果）；同名同內容就沿用舊的 id。回傳 { ok, id }
+  const addLut = guard((p, lut) => {
+    if (!lut || !(lut.size >= 2 && lut.size <= LUT_MAX_SIZE) || !lut.data || lut.data.length !== lut.size ** 3 * 3) return fail('LUT 資料不正確');
+    const data = bytesToB64(lut.data), name = String(lut.name || 'LUT').slice(0, 80);
+    const same = Object.entries(p.luts || {}).find(([, r]) => r.data === data);
+    if (same) return { ok: true, id: same[0], existed: true };
+    return tx(p, q => { if (!q.luts) q.luts = {}; const id = newId(q, 'lut'); q.luts[id] = { name, size: lut.size, data }; return { id }; }, { lockCheck: false });
+  });
+  // 移除 LUT：用到它的片段一起改回「無」
+  const removeLut = guard((p, id) => {
+    if (!p.luts || !p.luts[id]) return fail('找不到這個 LUT');
+    return tx(p, q => {
+      delete q.luts[id];
+      for (const c of Object.values(q.clips)) if (c.video && c.video.lut === id) c.video.lut = null;
+      return {};
+    }, { lockCheck: false });
+  });
+
   const addMarker = guard((p, m = {}) => {
     const frame = Math.round(Number(m.frame));
     if (!isFinite(frame) || frame < 0) return fail('標記的位置不正確');
@@ -1877,6 +1984,9 @@
       num(c.video, 'bgBlur', 0, 100);
       if (c.video.look != null && !LOOKS.includes(c.video.look)) bail('濾鏡只能是原色、暖陽、冷調或黑白');
       num(c.video, 'lookAmt', 0, 100);
+      if (c.video.lut != null && typeof c.video.lut !== 'string') bail('LUT 設定不正確');
+      num(c.video, 'lutAmt', 0, 100);
+      num(c.video, 'restore', 0, 100);
       if (c.video.sticker != null && !STICKERS.includes(c.video.sticker)) bail('貼圖動態只能是無、抖動、彈跳、呼吸、左右擺或進場彈出');
       num(c.video, 'stickerAmt', 0, 100);
     }
@@ -2214,6 +2324,7 @@
     moveClips, trimEdge, blade, rippleTrim, rippleDelete, deleteGap, closeAllGaps, lift, roll, slip, slide,
     setInOut, clearInOut, editToTimeline, addClip, link, unlink,
     addMarker, updateMarker, removeMarker, addClipMarker, updateClipMarker, removeClipMarker, setFlags,
+    parseCube, lutLookup, lutData, addLut, removeLut, LUT_MAX_SIZE,
     autoEdit, AUTO_STYLES, setSpeed, setRetime, clearRetime, RETIME_PRESETS, retimeCurve, retimeFactor, srcOffset, freezeFrame, addTransition, updateTransition, removeTransition, setClipProps, setFitAll, aspectMismatch,
     // 節拍
     BEAT_NAME, beatFrames, addBeatMarkers, clearBeatMarkers, fitClipsToBeats,

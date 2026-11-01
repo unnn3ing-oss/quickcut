@@ -6,7 +6,7 @@
 //   - 頁首的「簡易｜專業」切換（記在 localStorage qc-ui；沒選過＝簡易）
 //   - 簡易：大按鈕工具列（#edSimpleBar）取代專業工具列；選到影片／圖片／音訊片段或字幕片段（4.30）時，
 //     詳細內容換成「快速調整」（點選項就套用，每次一筆復原）；軌道名稱顯示成白話（影片／畫中畫／原聲／音樂，只改顯示、不改資料）；
-//     加進來的素材自動依序排到時間軸結尾（音樂放到音樂軌）。
+//     加進來的素材先進媒體庫，按「排到時間軸」或素材的「＋」接到時間軸結尾（音樂放到音樂軌）。
 //   - 開始畫面（空專案打開時；qc-start-off＝不要再顯示）：選直式短影音／橫式影片／自己來（＝專業模式）
 //   - 第一次用簡易模式的三步教學泡泡（qc-tips＝done 之後不再出現）
 // 所有修改都走 op()（history.run）＋ core，這支不直接改專案。
@@ -28,6 +28,7 @@
 
   const SVG = {
     add: '<path d="M12 5v14M5 12h14"/>',
+    place: '<path d="M3 17h18M3 21h18"/><rect x="4" y="3" width="7" height="9" rx="1"/><path d="M15 7.5h6M18 4.5v6"/>',
     cut: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/>',
     del: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>',
     undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>',
@@ -106,9 +107,10 @@
       return b;
     };
     const sep = () => bar.appendChild(el('span', 'ed-ssep'));
-    btn('edSAdd', 'add', '加素材', '選影片、照片或音樂；會自動依序接在時間軸最後面（也可以直接拖進來）', () => pickFiles('video/*,audio/*,image/*'));
+    btn('edSAdd', 'add', '加素材', '選影片、照片或音樂，先放進媒體庫（也可以直接拖進來）；再按「排到時間軸」或素材上的「＋」放上時間軸', () => pickFiles('video/*,audio/*,image/*'));
+    btn('edSPlace', 'place', '排到時間軸', '把媒體庫裡還沒用到的素材，依序接在時間軸最後面（音樂放到「音樂」軌）', () => placeUnused());
     btn('edSCut', 'cut', '分割', '在播放頭（紅線）把片段切成兩段（快捷鍵 Ctrl／⌘＋B）', () => UI.bladeAtPlayhead());
-    btn('edSDel', 'del', '刪除', '刪除選取的片段，後面的自動往前補（快捷鍵 Delete）', () => UI.deleteSelection(true));
+    btn('edSDel', 'del', '刪除', '刪除選取的片段，原位置留空（快捷鍵 Delete；Shift+Delete＝刪除並把後面的往前補）', () => UI.deleteSelection(false));
     btn('edSGaps', 'gap', '清除空隙', '把片段之間的空白一次收掉，後面的自動往前補（字幕、音樂跟著移）', () => UI.closeGaps());
     btn('edSUndo', 'undo', '復原', '復原上一步（Ctrl／⌘＋Z）', () => UI.undo());
     btn('edSRedo', 'redo', '重做', '重做（Ctrl／⌘＋Shift＋Z）', () => UI.redo());
@@ -123,20 +125,35 @@
   }
 
   // =====================================================================================
-  // 加進來的素材自動排到時間軸（簡易模式）
+  // 把素材排到時間軸（4.50 起匯入不再自動排，由使用者按「排到時間軸」或媒體庫的「＋」）
   // =====================================================================================
-  // 影片／圖片依序接在第一條影片軌的最後（有聲音的影片，聲音放第一條音訊軌）；純音訊放第二條音訊軌（音樂）
+  // 匯入完成：只有「加貼圖」會直接放上時間軸；一般匯入（含開舊檔、重新連結、開新專案）只進媒體庫
   function placeImported(added) {
     if (state.stickerPicking && simple() && added && added.length) return placeSticker(added);
-    if (!simple() || state.autoPicking || !added || !added.length) return;   // 一鍵成片對話框裡加的素材：等產生時才排
-    const fresh = added.filter(m => !m.relinked);
-    if (!fresh.length) return;
+  }
+  // 時間軸上還沒用到的素材（依媒體庫順序）
+  function unusedMedia() {
+    const used = new Set(Object.values(state.project.clips).map(c => c.mediaId).filter(Boolean));
+    return R.media.list().filter(m => !used.has(m.id));
+  }
+  // 「排到時間軸」：沒給清單就排「還沒用到的素材」
+  function placeUnused() {
+    const list = unusedMedia();
+    if (!list.length) { say(R.media.list().length ? '媒體庫的素材都已經在時間軸上了' : '媒體庫還是空的，先按「加素材」', 'error'); return null; }
+    return placeMedia(list);
+  }
+  // 影片／圖片依序接在第一條影片軌的最後（有聲音的影片，聲音放第一條音訊軌）；純音訊放第二條音訊軌（音樂）
+  function placeMedia(list) {
+    const fresh = (list || []).filter(Boolean);
+    if (!fresh.length) return null;
+    UI.ensureMediaInfo();
     let firstIds = null;
-    const r = UI.op('加入素材', p => {
+    const r = UI.op('排到時間軸', p => {
       const vt = C.tracksOf(p, 'video')[0], at = C.tracksOf(p, 'audio');
       if (!vt) return { ok: false, reason: '沒有影片軌' };
       let musicT = at[1];
-      if (!musicT) { const x = C.addTrack(p, 'audio'); if (!x.ok) return x; musicT = C.tracksOf(p, 'audio')[1]; }
+      const needMusic = fresh.some(m => (p.mediaInfo[m.id] || {}).kind === 'audio');
+      if (!musicT && needMusic) { const x = C.addTrack(p, 'audio'); if (!x.ok) return x; musicT = C.tracksOf(p, 'audio')[1]; }
       const endOf = tid => Object.values(p.clips).filter(c => c.trackId === tid).reduce((m, c) => Math.max(m, c.start + c.duration), 0);
       const ids = [];
       for (const m of fresh) {
@@ -153,18 +170,22 @@
         ids.push(...x.ids);
         if (!firstIds) firstIds = x.ids;
       }
-      // 比例和輸出不同的影片／圖片：用模糊背景（直式短影音最常見的做法）
-      const mis = new Set(C.aspectMismatch(p).ids);
-      const blur = ids.filter(id => mis.has(id));
-      if (blur.length) { const x = C.setClipProps(p, blur, { video: { fit: 'blur' } }); if (!x.ok) return x; }
+      // 簡易模式：比例和輸出不同的影片／圖片用模糊背景（直式短影音最常見的做法）
+      let blur = [];
+      if (simple()) {
+        const mis = new Set(C.aspectMismatch(p).ids);
+        blur = ids.filter(id => mis.has(id));
+        if (blur.length) { const x = C.setClipProps(p, blur, { video: { fit: 'blur' } }); if (!x.ok) return x; }
+      }
       return { ok: true, ids, blur: blur.length };
     }, null);
     if (r && r.ok && firstIds) {
       UI.selectClips(firstIds);
       const c = clipOf(firstIds[0]);
-      if (c) UI.seekTimeline(c.start);
+      if (c) { UI.seekTimeline(c.start); UI.afterRender(() => UI.revealFrame(c.start, C.clipEnd(c))); }
       say(`已把 ${fresh.length} 個素材排到時間軸${r.blur ? `（${r.blur} 段比例不同，自動加上模糊背景）` : ''}`, 'ok');
     }
+    return r;
   }
 
   // 圖片貼圖：放在播放頭、最上層「放得下」的影片軌（都被佔用就新增一條影片軌），縮放 0.35、fit 模式（不加模糊背景）、
@@ -362,6 +383,14 @@
     }
     if (vis.length) quick.el.append(chips('濾鏡', null, LOOKS, vis[0].video.look || 'none', k =>
       applyAll('濾鏡', vis, (q, x) => C.setClipProps(q, x.id, { video: { look: k } }), '濾鏡：' + LOOKS.find(x => x[0] === k)[1]), 'edQLook'));
+    // 色彩還原（4.50）：關／自然（50%）／強（100%）
+    const media = vis.filter(c => c.type === 'media');
+    if (media.length) {
+      const RESTORE = [['0', '關'], ['50', '自然'], ['100', '強']];
+      const cur = String(Number(media[0].video.restore) || 0);
+      quick.el.append(chips('色彩還原', '自動校正偏色、灰灰的畫面', RESTORE, RESTORE.some(x => x[0] === cur) ? cur : '', k =>
+        applyAll('色彩還原', media, (q, x) => C.setClipProps(q, x.id, { video: { restore: +k } }), '色彩還原：' + RESTORE.find(x => x[0] === k)[1]), 'edQRestore'));
+    }
     const pro = el('div', 'ed-qpro');
     const pb = el('button', 'ed-linkbtn', '切到專業模式'); pb.type = 'button'; pb.addEventListener('click', () => setUiMode('pro'));
     pro.append(doc.createTextNode('要調更細的數值（位置、裁切、關鍵影格、EQ…）？'), pb, doc.createTextNode('，專案內容完全一樣。'));
@@ -599,7 +628,7 @@
   // 三步教學泡泡
   // =====================================================================================
   const TIPS = [
-    ['edSAdd', '按「加素材」或直接把檔案拖進來', '影片、照片會依序排到時間軸，音樂放到「音樂」軌。'],
+    ['edSAdd', '按「加素材」或直接把檔案拖進來', '素材會先放進左邊的媒體庫；按「排到時間軸」依序排好（音樂放到「音樂」軌），或按素材上的「＋」一個一個加。'],
     ['edTimeline', '點時間軸上的片段', '右邊就會出現它可以調的東西：畫面、動態、轉場、速度、濾鏡。'],
     ['edInspector', '點選項馬上看到效果', '不喜歡就按「復原」。剪好之後按右上角「匯出影片」。'],
   ];
@@ -649,6 +678,6 @@
     if (F.onFontLoad) F.onFontLoad((id, what) => { if (what === 'loaded') refreshThumbs(); });
   }
 
-  Object.assign(UI, { initSimple, placeImported, renderQuick, setUiMode, showTips, trackLabel, openStart });
+  Object.assign(UI, { initSimple, placeImported, placeMedia, placeUnused, renderQuick, setUiMode, showTips, trackLabel, openStart });
   void fmtNum; void R;
 })(typeof window !== 'undefined' ? window : globalThis);

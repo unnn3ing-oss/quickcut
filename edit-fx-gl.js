@@ -356,10 +356,111 @@ vec4 tr(){
   }
   install(Q.fx);
 
+  // ---------------------------------------------------------------------------------
+  // 調色（4.50）：色彩還原（每色版 out = in × mul + add）＋ 3D LUT（三線性內插）。
+  //   用自己的 WebGL 畫布（和轉場分開：轉場畫 A／B 兩層時會呼叫到調色，共用畫布會互相蓋掉）。
+  //   LUT 存成 2D 貼圖：寬 size²、高 size，第 b 片放在 x = b·size 起；r、g 用貼圖的線性內插，b 自己在兩片之間 mix。
+  // ---------------------------------------------------------------------------------
+  const GRADE_FRAG = `precision mediump float;
+varying vec2 vUv;
+uniform sampler2D uSrc; uniform sampler2D uLut;
+uniform vec3 uMul; uniform vec3 uAdd; uniform float uAmt; uniform float uSize;
+vec3 lut(vec3 c) {
+  float n = uSize;
+  vec3 s = clamp(c, 0.0, 1.0) * (n - 1.0);
+  float b0 = floor(s.b), b1 = min(b0 + 1.0, n - 1.0), fb = s.b - b0;
+  vec2 uv0 = vec2((b0 * n + s.r + 0.5) / (n * n), (s.g + 0.5) / n);
+  vec2 uv1 = vec2((b1 * n + s.r + 0.5) / (n * n), (s.g + 0.5) / n);
+  return mix(texture2D(uLut, uv0).rgb, texture2D(uLut, uv1).rgb, fb);
+}
+void main() {
+  vec4 t = texture2D(uSrc, vUv);
+  vec3 c = clamp(t.rgb * uMul + uAdd, 0.0, 1.0);
+  if (uAmt > 0.0) c = mix(c, lut(c), uAmt);
+  gl_FragColor = vec4(c * t.a, t.a);
+}`;
+  let GR = null, grDisabled = false;
+  function gradeInit() {
+    if (GR) return GR.gl.isContextLost() ? (GR = null) : GR;
+    if (grDisabled || disabled) return null;
+    try {
+      const canvas = canvasFactory(2, 2);
+      const gl = canvas && canvas.getContext && canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: true, antialias: false, depth: false, stencil: false });
+      if (!gl) { grDisabled = true; return null; }
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      const tex = () => {
+        const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        return t;
+      };
+      const p = gl.createProgram();
+      gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, VERT));
+      gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, GRADE_FRAG));
+      gl.bindAttribLocation(p, 0, 'aPos');
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+      const u = n => gl.getUniformLocation(p, n);
+      GR = { canvas, gl, p, texSrc: tex(), texLut: tex(), lutKey: null, maxSize: gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096,
+        u: { src: u('uSrc'), lut: u('uLut'), mul: u('uMul'), add: u('uAdd'), amt: u('uAmt'), size: u('uSize') } };
+      return GR;
+    } catch (e) {
+      if (root.console) root.console.warn('調色著色器無法使用，改用 CPU：', e && e.message);
+      grDisabled = true; return null;
+    }
+  }
+  // o = { rp: { mul, add } | null, lut: { size, data } | null, lutAmt 0~1 }；回傳畫好的畫布（和來源同大），失敗回 null
+  function grade(source, w, h, o) {
+    const g = gradeInit();
+    if (!g) return null;
+    w = Math.max(1, Math.round(w)); h = Math.max(1, Math.round(h));
+    if (w > g.maxSize || h > g.maxSize) return null;
+    const gl = g.gl;
+    try {
+      if (g.canvas.width !== w || g.canvas.height !== h) { g.canvas.width = w; g.canvas.height = h; }
+      gl.viewport(0, 0, w, h);
+      gl.useProgram(g.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, g.texSrc);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+      const lut = o && o.lut, amt = lut && o.lutAmt > 0 ? o.lutAmt : 0;
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, g.texLut);
+      if (amt > 0 && g.lutKey !== lut) {
+        const n = lut.size, atlas = new Uint8Array(n * n * n * 3);
+        for (let b = 0; b < n; b++) for (let gg = 0; gg < n; gg++) for (let r = 0; r < n; r++) {
+          const si = ((b * n + gg) * n + r) * 3, di = (gg * n * n + b * n + r) * 3;
+          atlas[di] = lut.data[si]; atlas[di + 1] = lut.data[si + 1]; atlas[di + 2] = lut.data[si + 2];
+        }
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, n * n, n, 0, gl.RGB, gl.UNSIGNED_BYTE, atlas);
+        g.lutKey = lut;
+      }
+      gl.uniform1i(g.u.src, 0); gl.uniform1i(g.u.lut, 1);
+      const rp = o && o.rp;
+      gl.uniform3f(g.u.mul, rp ? rp.mul[0] : 1, rp ? rp.mul[1] : 1, rp ? rp.mul[2] : 1);
+      gl.uniform3f(g.u.add, rp ? rp.add[0] : 0, rp ? rp.add[1] : 0, rp ? rp.add[2] : 0);
+      gl.uniform1f(g.u.amt, amt);
+      gl.uniform1f(g.u.size, amt > 0 ? lut.size : 2);
+      gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      return g.canvas;
+    } catch (_) { return null; }
+  }
+
   const api = {
-    DEFS, install,
+    DEFS, install, grade,
     available() { return !!init(); },
-    _setCanvasFactory(fn) { canvasFactory = fn; G = null; disabled = false; },
+    // 預先編譯某個轉場的著色器（播放時快到轉場前呼叫；第一次編譯要幾十毫秒，在轉場第一格才編會頓一下）
+    warm(id) { if (!DEFS[id]) return false; const g = init(); return !!(g && program(g, id)); },
+    _setCanvasFactory(fn) { canvasFactory = fn; G = null; GR = null; disabled = false; grDisabled = false; },
     _disable(on) { disabled = !!on; if (on) G = null; },
   };
   Q.fxgl = api;

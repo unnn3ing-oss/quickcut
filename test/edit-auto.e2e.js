@@ -383,12 +383,14 @@ async function main() {
   eq(await snapshot(page), snap8, '點背景：專案沒變');
   // Esc 監聽已移除：之後的 Esc 不會出錯
   await page.keyboard.press('Escape'); await settle(page);
-  // 關閉後一般匯入恢復自動排到時間軸
-  const nBefore = await nClips(page);
+  // 4.50：一般匯入也不自動排；按「排到時間軸」才排
+  const nBefore = await nClips(page), nMedia = await page.evaluate(() => window.QPTEdit.render.media.list().length);
   await page.setInputFiles('#edFile', [F('still')]);
-  await page.waitForFunction(n => Object.keys(window.QPTEdit.ui.state.project.clips).length > n, nBefore, { timeout: 60000 });
+  await page.waitForFunction(n => window.QPTEdit.render.media.list().length > n, nMedia, { timeout: 60000 });
   await settle(page);
-  ok(await nClips(page) > nBefore, '對話框外的一般匯入：照常自動排到時間軸');
+  eq(await nClips(page), nBefore, '對話框外的一般匯入：只進媒體庫，不自動排到時間軸');
+  await page.click('#edSPlace'); await settle(page);
+  ok(await nClips(page) > nBefore, '按「排到時間軸」：沒用到的素材排上去');
 
   // ---------------------------------------------------------------- 9. 專業模式
   console.log('專業模式');

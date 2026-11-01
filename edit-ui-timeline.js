@@ -171,18 +171,26 @@
       if (p.inPoint != null) { const f = el('div', 'ed-io-flag in'); f.style.left = (p.inPoint * k) + 'px'; f.title = `In ${tc(p.inPoint, fpsv)}`; ruler.appendChild(f); }
       if (p.outPoint != null) { const f = el('div', 'ed-io-flag out'); f.style.left = (p.outPoint * k) + 'px'; f.title = `Out ${tc(p.outPoint - 1, fpsv)}`; ruler.appendChild(f); }
     }
-    // 時間軸標記
+    tl.phHead = el('div', 'ed-ph-head');
+    ruler.appendChild(tl.phHead);
+    rrow.append(corner, ruler);
+    // 時間軸標記：時間尺下方獨立一列（4.50），不和時間碼、In／Out 疊在一起
+    const mrow = el('div', 'ed-mk-row');
+    const mcorner = el('div', 'ed-mk-corner', '標記');
+    mcorner.title = '時間軸標記（M 在播放頭加標記；拖曳標記移動、點一下編輯）';
+    const mlane = el('div', 'ed-mklane'); mlane.style.width = contentW + 'px';
     for (const m of p.markers) {
       const e = el('div', 'ed-mk'); e.dataset.marker = m.id;
       e.style.left = (m.frame * k) + 'px'; e.style.setProperty('--c', MARKER_HEX[m.color] || MARKER_HEX.blue);
       if (m.duration > 0) e.style.setProperty('--w', Math.max(8, m.duration * k) + 'px');
+      if (m.name && k * fpsv >= 20) e.appendChild(el('span', 'ed-mk-name', m.name));
       e.title = `${m.name || '標記'}（${MARKER_NAME[m.color] || ''}，${tc(m.frame, fpsv)}）${m.note ? '\n' + m.note : ''}`;
-      ruler.appendChild(e);
+      mlane.appendChild(e);
     }
-    tl.phHead = el('div', 'ed-ph-head');
-    ruler.appendChild(tl.phHead);
-    rrow.append(corner, ruler);
-    inner.appendChild(rrow);
+    mrow.append(mcorner, mlane);
+    const head = el('div', 'ed-tl-head');
+    head.append(rrow, mrow);
+    inner.appendChild(head);
 
     // 軌道：影片軌（高層在上）→ 音訊軌
     const rows = el('div', 'ed-rows');
@@ -224,7 +232,7 @@
     if (!Object.keys(p.clips).length) {
       const hint = el('div', 'ed-tl-empty');
       hint.append(el('span', 'ed-pro-only', '時間軸是空的：把媒體庫的素材拖到這裡，或選好素材後按「加到結尾」（F12）。'),
-        el('span', 'ed-simple-only', '時間軸是空的：按上面的「加素材」或把檔案拖進來，會自動依序排好。'));
+        el('span', 'ed-simple-only', '時間軸是空的：按上面的「加素材」或把檔案拖進來，再按「排到時間軸」（或素材上的「＋」）。'));
       ov.appendChild(hint);
     }
     inner.appendChild(ov);
@@ -676,7 +684,7 @@
     if ((x = t.closest('.ed-mk'))) return { kind: 'marker', id: x.dataset.marker };
     if (t.closest('.ed-ph-head')) return { kind: 'ruler' };
     if ((x = t.closest('.ed-clip'))) return { kind: 'clip', clipId: x.dataset.clip, el: x };
-    if (t.closest('.ed-ruler')) return { kind: 'ruler' };
+    if (t.closest('.ed-ruler') || t.closest('.ed-mklane')) return { kind: 'ruler' };
     if ((x = t.closest('.ed-lane'))) return { kind: 'lane', trackId: x.dataset.track };
     return { kind: 'none' };
   }
@@ -760,10 +768,22 @@
     }
   }
 
+  // 拖時間尺：吸附打開時，靠近剪接點（片段頭尾）、標記、In／Out 會吸過去（4.50）。
+  //   吸附距離＝和片段吸附一樣的螢幕距離（SNAP_PX），但最多 3 秒；Alt＝這次不吸附。
   function startScrub(e) {
-    const to = ev => seekTimeline(Math.max(0, Math.round(xToFrame(ev.clientX))));
+    const targets = C.snapTargets(state.project, {});
+    const to = ev => {
+      let f = Math.max(0, Math.round(xToFrame(ev.clientX)));
+      if (state.snapping && !ev.altKey) {
+        const tol = Math.min(SNAP_PX / tl.k, 3 * fps());
+        const s = C.snap(f, targets, tol);
+        showSnap(s !== f || targets.includes(f) ? s : null);
+        f = s;
+      } else showSnap(null);
+      seekTimeline(f);
+    };
     to(e);
-    beginDrag(e, { autoscroll: true, move: ev => to(ev) });
+    beginDrag(e, { autoscroll: true, move: ev => to(ev), up: () => showSnap(null), cancel: () => showSnap(null) });
   }
 
   function onClipDown(e, h) {

@@ -32,7 +32,7 @@
 
   // ---- 常數 ------------------------------------------------------------------------
   const HEAD_W = 150;                 // 軌道標頭寬度
-  const RULER_H = 26;                 // 時間尺高度
+  const RULER_H = 44;                 // 時間軸頂端高度：時間尺 26＋標記列 18（4.50 標記獨立一列）
   const VIDEO_H = 52, AUDIO_H = 40;   // 軌道高度
   const EDGE_PX = 8;                  // 片段邊緣的判定寬度
   const SNAP_PX = 9;                  // 吸附距離（螢幕像素）
@@ -63,6 +63,7 @@
     eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
     link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
     note: '<svg viewBox="0 0 24 24"><path d="M9 3v12.3A3.5 3.5 0 1 0 11 18.5V7h6V3z"/></svg>',
   };
 
