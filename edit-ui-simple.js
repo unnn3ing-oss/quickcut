@@ -390,18 +390,42 @@
     if (quick.sig && JSON.parse(quick.sig)[1] === 'title') { quick.sig = null; UI.scheduleInspector(); }
   }
 
+  // 樣式分頁（基本／綜藝／社群，來自 F.TITLE_STYLE_GROUPS）：預設打開目前樣式所在的那一頁；切分頁只換顯示、不重畫面板
   function styleChips(cur, onPick) {
     const sec = el('div', 'ed-qsec'); sec.id = 'edQStyle';
     const h = el('div', 'ed-qlab'); h.append(el('span', null, '樣式'), el('small', null, '只換外觀，文字和位置不變'));
+    const styles = Object.entries(F.TITLE_STYLES || {}), groups = F.TITLE_STYLE_GROUPS || {};
+    const gkeys = Object.keys(groups).filter(gk => styles.some(([, st]) => st.group === gk));
+    const curG = cur && F.TITLE_STYLES[cur] && F.TITLE_STYLES[cur].group;
+    if (!gkeys.includes(quick.styleGroup)) quick.styleGroup = null;
+    let active = (curG && gkeys.includes(curG) && !quick.styleTouched ? curG : quick.styleGroup) || curG || gkeys[0] || null;
     const g = el('div', 'ed-qchips ed-qstyles'); g.setAttribute('role', 'radiogroup'); g.setAttribute('aria-label', '樣式');
-    for (const [k, st] of Object.entries(F.TITLE_STYLES || {})) {
+    const show = gk => {
+      active = gk; quick.styleGroup = gk;
+      for (const b of g.children) b.hidden = !!gk && b.dataset.group !== gk;
+      if (tabs) for (const t of tabs.children) { const on = t.dataset.group === gk; t.classList.toggle('on', on); t.setAttribute('aria-selected', String(on)); }
+    };
+    let tabs = null;
+    if (gkeys.length > 1) {
+      tabs = el('div', 'ed-qtabs'); tabs.id = 'edQStyleTabs'; tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', '樣式分類');
+      for (const gk of gkeys) {
+        const t = el('button', 'ed-qtab', groups[gk]); t.type = 'button'; t.dataset.group = gk; t.setAttribute('role', 'tab');
+        t.addEventListener('click', () => { quick.styleTouched = true; show(gk); });
+        tabs.appendChild(t);
+      }
+    }
+    for (const [k, st] of styles) {
       const b = el('button', 'ed-qchip ed-qthumb' + (k === cur ? ' on' : '')); b.type = 'button'; b.dataset.k = k; b.title = st.name;
+      if (st.group) b.dataset.group = st.group;
       b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', String(k === cur));
       b.append(styleThumb(k), el('span', null, st.name));
       b.addEventListener('click', () => onPick(k));
       g.appendChild(b);
     }
-    sec.append(h, g);
+    sec.append(h);
+    if (tabs) sec.append(tabs);
+    sec.append(g);
+    if (tabs) show(active);
     return sec;
   }
   const regOpts = reg => Object.entries(reg || {}).map(([k, d]) => [k, (d && d.name) || k]);
@@ -419,6 +443,7 @@
       return true;
     }
     const keep = quick.sig && JSON.parse(quick.sig)[0].join() === ids.join() ? quick.el.scrollTop : 0;
+    if (quick.styleIds !== ids.join()) { quick.styleIds = ids.join(); quick.styleTouched = false; }   // 換了別的字幕：樣式分頁回到它目前樣式那一頁
     quick.sig = sig;
     quick.el.textContent = '';
     if (ts.length > 1) quick.el.append(el('div', 'ed-hint', `改了會一起套用到選取的 ${ts.length} 個字幕（文字要一個一個改）`));

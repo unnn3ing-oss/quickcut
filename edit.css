@@ -689,6 +689,10 @@ html[data-ed-theme="dark"] .ed-uimode { background: rgba(255, 255, 255, 0.08); }
 }
 .ed-qtext:focus { outline: none; border-color: var(--ed-accent); box-shadow: 0 0 0 1px var(--ed-accent); }
 .ed-qstyles { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); }
+.ed-qtabs { display: flex; gap: 4px; margin: 0 0 8px; padding: 3px; border-radius: 10px; background: var(--ed-tint); }
+.ed-qtab { flex: 1; min-width: 0; padding: 5px 6px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 12.5px; cursor: pointer; }
+.ed-qtab.on { background: var(--ed-accent); color: #fff; font-weight: 700; }
+.ed-qtab:focus-visible { outline: 2px solid var(--ed-accent); outline-offset: 1px; }
 .ed-qthumb { display: flex; flex-direction: column; align-items: stretch; gap: 4px; min-width: 0; padding: 4px 4px 5px; }
 .ed-qthumb canvas { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 6px; }
 .ed-qthumb span { font-size: 11.5px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -683,7 +683,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   const heads = () => page.evaluate(() => [...document.querySelectorAll('.ed-panel:not([hidden]) .ed-ghead')].map(h => h.textContent));
   eq(await page.textContent('.ed-tab[data-tab="trans"]'), '特效', '分頁「轉場」改名為「特效」');
   eq(await heads(), ['字幕清單', '字幕過場', '字幕樣式'], '字幕分頁分成「字幕清單」「字幕過場」「字幕樣式」');
-  eq(await page.evaluate(() => document.querySelectorAll('#edTStyleList .ed-gitem').length), 5, '列出 5 種字幕樣式（基本＋4 種附圖樣式）');
+  eq(await page.evaluate(() => document.querySelectorAll('#edTStyleList .ed-gitem').length), 17, '列出 17 種字幕樣式（基本 5＋綜藝 6＋社群 6）');
   const [tA, tB] = on(await clips(page), 'V2');
   const tOf = id => proj(page, (p, Q, id) => p.clips[id].title, id);
   const selClip = async id => { const b = await clipBox(page, id); await page.mouse.click(b.x + b.w / 2, b.y + b.h / 2); await settle(page); };
@@ -714,7 +714,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   // 字體特效（在「特效」分頁）
   await page.click('.ed-tab[data-tab="trans"]');
   eq(await heads(), ['轉場特效', '字體特效'], '特效分頁分成「轉場特效」「字體特效」');
-  eq(await page.evaluate(() => [...document.querySelectorAll('#edTextFxList .ed-gitem')].map(i => i.dataset.textfx)), ['none', 'pop', 'popLine', 'popChar', 'jump', 'jumpLine', 'jumpChar'], '字體特效：無／彈出／逐行彈出／逐字彈出／下往上跳起／逐行跳起／逐字跳起');
+  eq(await page.evaluate(() => [...document.querySelectorAll('#edTextFxList .ed-gitem')].map(i => i.dataset.textfx)), ['none', 'pop', 'popLine', 'popChar', 'jump', 'jumpLine', 'jumpChar', 'impact', 'typeCursor', 'slideLeft', 'slideRight', 'slideBottom', 'blurIn'], '字體特效（進場）：原本 7 種＋衝擊放大／打字機＋游標／左右下滑入／模糊浮現');
   await selClip(tA.id);
   await page.click('#edTextFxList .ed-gitem[data-textfx="jumpChar"]');
   await page.click('#edTextFxApply');

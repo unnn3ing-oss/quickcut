@@ -500,6 +500,16 @@ async function main() {
   eq([q.secs.edQStyle, q.secs.edQIn, q.secs.edQPos, q.secs.edQSize], [REG.lib, 'none', 'mid', 'm'], `目前值：樣式「${REG.lib}」、進場無、中間、中`);
   ok(q.aria, '.on 與 aria-checked 一致');
   eq(await page.inputValue('#edQTextIn'), '輸入字幕', '文字框顯示字幕文字');
+  // 樣式分頁：基本／綜藝／社群，預設在目前樣式那一頁；切分頁只換顯示
+  const tabState = () => page.evaluate(() => ({ tabs: [...document.querySelectorAll('#edQStyleTabs .ed-qtab')].map(t => [t.dataset.group, t.textContent, t.getAttribute('aria-selected')]),
+    vis: [...document.querySelectorAll('#edQStyle .ed-qthumb')].filter(b => !b.hidden).map(b => b.dataset.group) }));
+  let ts0 = await tabState();
+  eq(ts0.tabs.map(x => x[1]), ['基本', '綜藝', '社群'], '樣式分頁：基本／綜藝／社群');
+  ok(ts0.tabs.find(x => x[2] === 'true')[0] === 'basic' && ts0.vis.length && ts0.vis.every(g => g === 'basic'), '預設在目前樣式（基本）那一頁，只顯示這一類');
+  await page.click('#edQStyleTabs [data-group="variety"]'); await settle(page);
+  ts0 = await tabState();
+  ok(ts0.tabs.find(x => x[2] === 'true')[0] === 'variety' && ts0.vis.length === 6 && ts0.vis.every(g => g === 'variety'), '點「綜藝」：只顯示 6 個綜藝樣式');
+  await page.click('#edQStyleTabs [data-group="basic"]'); await settle(page);
 
   // 樣式
   const sk = REG.st.find(k => k !== REG.lib);

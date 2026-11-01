@@ -548,7 +548,7 @@
     if (r && r.ok) {
       selectClips([r.id]);
       UI.afterRender(() => UI.revealFrame(r.start, r.end));
-      say('已新增字幕：在右側詳細內容改文字與樣式', 'ok');
+      say('已新增字幕：在右側改文字與樣式', 'ok');
     }
     return r;
   }
