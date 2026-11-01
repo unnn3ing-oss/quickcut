@@ -137,7 +137,7 @@ async function main() {
   ok(await page.isVisible('#edUiMode'), '頁首有「簡易｜專業」切換');
   eq(await pressed(page), [['simple', 'true'], ['pro', 'false']], '切換鈕：簡易 aria-pressed＝true');
   eq(await page.evaluate(() => [...document.querySelectorAll('#edSimpleBar .ed-sbtn')].map(b => b.id)),
-    ['edSAdd', 'edSCut', 'edSDel', 'edSUndo', 'edSRedo', 'edSText', 'edSMusic', 'edSBeat'], '大按鈕工具列的按鈕');
+    ['edSAdd', 'edSCut', 'edSDel', 'edSUndo', 'edSRedo', 'edSText', 'edSMusic', 'edSBeat', 'edSAuto'], '大按鈕工具列的按鈕');
   eq(await ls(page, 'qc-ui'), null, '還沒切換過：不寫 qc-ui');
   eq(await proj(page, p => p.aspect), 'source', '專案一開始是「依素材」比例');
   await shot(page, 'S1-start');

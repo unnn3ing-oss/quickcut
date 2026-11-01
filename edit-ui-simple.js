@@ -113,7 +113,7 @@
   // =====================================================================================
   // 影片／圖片依序接在第一條影片軌的最後（有聲音的影片，聲音放第一條音訊軌）；純音訊放第二條音訊軌（音樂）
   function placeImported(added) {
-    if (!simple() || !added || !added.length) return;
+    if (!simple() || state.autoPicking || !added || !added.length) return;   // 一鍵成片對話框裡加的素材：等產生時才排
     const fresh = added.filter(m => !m.relinked);
     if (!fresh.length) return;
     let firstIds = null;

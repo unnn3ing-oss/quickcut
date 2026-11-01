@@ -489,6 +489,6 @@
   }
 
   Object.assign(UI, {
-    buildMediaPanel, ensureMediaInfo, importFiles, lib, markMediaSel, mediaInfoOf, renderMedia, showMsgs, wireFileDrop,
+    buildMediaPanel, ensureMediaInfo, importFiles, lib, paintMediaThumb, markMediaSel, mediaInfoOf, renderMedia, showMsgs, wireFileDrop,
   });
 })(typeof window !== 'undefined' ? window : globalThis);

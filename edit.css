@@ -727,3 +727,31 @@ html[data-ed-theme="dark"] .ed-uimode { background: rgba(255, 255, 255, 0.08); }
 /* 只在某個模式顯示的說明文字 */
 .ed-app[data-ui="simple"] .ed-pro-only, .ed-app:not([data-ui="simple"]) .ed-simple-only { display: none; }
 .ed-empty-box em { font-style: normal; }
+
+/* 一鍵成片（4.10） */
+.ed-sbtn.ed-sbtn-hi { border-color: var(--ed-accent); background: var(--ed-tint); color: var(--ed-accent); }
+.ed-auto-card { width: min(980px, 100%); }
+.ed-auto-steps { display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 14px; }
+.ed-auto-step { min-width: 0; padding: 14px; border: 1px solid var(--ed-border); border-radius: 16px; background: var(--ed-field); }
+.ed-auto-step h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 14.5px; }
+.ed-auto-n { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: var(--ed-primary); color: var(--ed-on-primary); font-size: 12px; font-weight: 800; }
+.ed-auto-thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 8px; max-height: 300px; overflow-y: auto; padding: 2px; }
+.ed-auto-th { position: relative; display: flex; flex-direction: column; gap: 3px; padding: 0 0 4px; border-radius: 10px; border: 1.5px solid var(--ed-border); background: var(--ed-panel); color: var(--ed-text); cursor: pointer; overflow: hidden; font: inherit; opacity: .55; }
+.ed-auto-th canvas { display: block; width: 100%; aspect-ratio: 16 / 9; height: auto; }
+.ed-auto-th.on { opacity: 1; border-color: var(--ed-accent); box-shadow: 0 0 0 1px var(--ed-accent); }
+.ed-auto-th:hover, .ed-auto-th:focus-visible { opacity: 1; border-color: var(--ed-accent); outline: none; }
+.ed-auto-ord:not(:empty) { position: absolute; top: 4px; left: 4px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 99px; background: var(--ed-primary); color: var(--ed-on-primary); font-size: 11.5px; font-weight: 800; line-height: 20px; }
+.ed-auto-name { padding: 0 6px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.ed-auto-add { opacity: 1; align-items: center; justify-content: center; min-height: 72px; border-style: dashed; color: var(--ed-muted); }
+.ed-auto-add b { font-size: 22px; line-height: 1; }
+.ed-auto-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.ed-auto-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 11px; text-align: left; border-radius: 12px; border: 1.5px solid var(--ed-border); background: var(--ed-panel); color: var(--ed-text); font: inherit; cursor: pointer; min-width: 0; }
+.ed-auto-opt b { font-size: 13.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-auto-opt span { font-size: 11.5px; color: var(--ed-muted); }
+.ed-auto-opt.on { border-color: var(--ed-accent); box-shadow: 0 0 0 1px var(--ed-accent); background: var(--ed-tint); }
+.ed-auto-opt:hover, .ed-auto-opt:focus-visible { border-color: var(--ed-accent); outline: none; }
+.ed-auto-hint { margin-top: 6px; font-size: 11.5px; color: var(--ed-muted); }
+.ed-auto-sum { margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: var(--ed-tint); font-size: 13px; line-height: 1.6; }
+.ed-auto-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.ed-auto-status { margin-right: auto; font-size: 13px; color: var(--ed-muted); }
+@media (max-width: 760px) { .ed-auto-steps { grid-template-columns: 1fr; } }

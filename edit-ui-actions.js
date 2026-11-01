@@ -794,7 +794,7 @@
   // =====================================================================================
   function onKeyDown(e) {
     if (app.hidden || e.defaultPrevented) return;
-    if (doc.querySelector('dialog[open]')) return;                 // 匯出對話框開著
+    if (doc.querySelector('dialog[open], #edAuto, #edStart')) return;   // 匯出對話框／一鍵成片／開始畫面開著：不要改到底下的時間軸
     if (isTextTarget(e.target)) { if (e.key === 'Escape') e.target.blur(); return; }
     const key = e.key, lk = key.length === 1 ? key.toLowerCase() : key;
     const mod = e.ctrlKey || e.metaKey, shift = e.shiftKey, alt = e.altKey;
