@@ -2024,6 +2024,23 @@ t('濾鏡（video.look）：六種、強度夾在 0~100、不認得的拒絕不�
   return p;
 });
 
+t('貼圖動態（video.sticker）：六種、強度夾在 0~100、不認得的拒絕不改、存檔來回保留', () => {
+  const p = setup();
+  const [v] = put(p, 'mv', 0, 0, 2);
+  assert.deepStrictEqual(core.STICKERS, ['none', 'shake', 'bounce', 'pulse', 'swing', 'pop']);
+  assert.ok(core.setClipProps(p, v, { video: { sticker: 'shake', stickerAmt: 250 } }).ok);
+  assert.deepStrictEqual([C(p, v).video.sticker, C(p, v).video.stickerAmt], ['shake', 100]);
+  assert.ok(core.setClipProps(p, v, { video: { stickerAmt: -5 } }).ok);
+  assert.strictEqual(C(p, v).video.stickerAmt, 0);
+  unchanged(p, () => core.setClipProps(p, v, { video: { sticker: 'spin' } }), /貼圖動態/);
+  for (const k of core.STICKERS) {
+    assert.ok(core.setClipProps(p, v, { video: { sticker: k, stickerAmt: 60 } }).ok, k);
+    const q = core.deserialize(core.serialize(p)).clips[v].video;
+    assert.deepStrictEqual([q.sticker, q.stickerAmt], [k, 60], k + ' 存檔來回保留');
+  }
+  return p;
+});
+
 // =====================================================================================
 // 一鍵成片（4.10）
 // =====================================================================================

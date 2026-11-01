@@ -26,6 +26,8 @@
   const FIT_MODES = ['fit', 'blur', 'fill', 'stretch'];
   // 濾鏡（video.look）：none＝原色、warm＝暖陽、cool＝冷調、mono＝黑白、mist＝黑柔、film＝電影感；video.lookAmt 0~100（強度，預設 100）
   const LOOKS = ['none', 'warm', 'cool', 'mono', 'mist', 'film'];
+  // 貼圖動態（video.sticker）：none＝不動、shake＝抖動、bounce＝彈跳、pulse＝呼吸、swing＝左右擺、pop＝進場彈出；video.stickerAmt 0~100（強度，預設 100）
+  const STICKERS = ['none', 'shake', 'bounce', 'pulse', 'swing', 'pop'];
   // 電影黑邊（專案層級 p.letterbox）：none＝不加；其他是「黑邊之間畫面」的寬高比，顏色固定黑色。
   //   畫面比目標比例「高」→ 上下加黑邊（以寬度為準）；比目標比例「寬」→ 左右加黑邊（以高度為準）。
   //   1.50＝Open Gate（相機用整片感光元件錄的 3:2 畫面；放進 16:9 會是左右黑邊）
@@ -1873,6 +1875,8 @@
       num(c.video, 'bgBlur', 0, 100);
       if (c.video.look != null && !LOOKS.includes(c.video.look)) bail('濾鏡只能是原色、暖陽、冷調或黑白');
       num(c.video, 'lookAmt', 0, 100);
+      if (c.video.sticker != null && !STICKERS.includes(c.video.sticker)) bail('貼圖動態只能是無、抖動、彈跳、呼吸、左右擺或進場彈出');
+      num(c.video, 'stickerAmt', 0, 100);
     }
     if (c.audio) {
       const a = c.audio;
@@ -2193,7 +2197,7 @@
 
   const api = {
     // 常數、預設值
-    FPS_CHOICES, ASPECTS, FIT_MODES, LOOKS, LETTERBOXES, MARKER_COLORS, TRANSITION_TYPES, TRANSITION_COLORS, transitionColor, EDIT_MODES, IMAGE_DEFAULT_SEC, DEFAULT_FREEZE_SEC, SPEED_MIN, SPEED_MAX,
+    FPS_CHOICES, ASPECTS, FIT_MODES, LOOKS, STICKERS, LETTERBOXES, MARKER_COLORS, TRANSITION_TYPES, TRANSITION_COLORS, transitionColor, EDIT_MODES, IMAGE_DEFAULT_SEC, DEFAULT_FREEZE_SEC, SPEED_MIN, SPEED_MAX,
     defaultVideo, defaultAudio, defaultTitle, defaultTransform, defaultEq, snapFps,
     // 專案、軌道、媒體
     createProject, clone, serialize, deserialize,

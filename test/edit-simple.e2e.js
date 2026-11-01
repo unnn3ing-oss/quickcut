@@ -137,7 +137,7 @@ async function main() {
   ok(await page.isVisible('#edUiMode'), '頁首有「簡易｜專業」切換');
   eq(await pressed(page), [['simple', 'true'], ['pro', 'false']], '切換鈕：簡易 aria-pressed＝true');
   eq(await page.evaluate(() => [...document.querySelectorAll('#edSimpleBar .ed-sbtn')].map(b => b.id)),
-    ['edSAdd', 'edSCut', 'edSDel', 'edSGaps', 'edSUndo', 'edSRedo', 'edSText', 'edSMusic', 'edSBeat', 'edSAuto'], '大按鈕工具列的按鈕');
+    ['edSAdd', 'edSCut', 'edSDel', 'edSGaps', 'edSUndo', 'edSRedo', 'edSText', 'edSSticker', 'edSMusic', 'edSBeat', 'edSAuto'], '大按鈕工具列的按鈕');
   eq(await ls(page, 'qc-ui'), null, '還沒切換過：不寫 qc-ui');
   eq(await proj(page, p => p.aspect), 'source', '專案一開始是「依素材」比例');
   await shot(page, 'S1-start');
@@ -371,6 +371,16 @@ async function main() {
   ok((await thNames()).some(([n, l]) => n === 'V2' && l === '畫中畫'), '簡易模式 V2 顯示「畫中畫」');
   await page.click('#edSUndo'); await settle(page);
   eq(await proj(page, p => Object.values(p.clips).filter(c => c.type === 'title').length), 0, '復原：字幕移除');
+  // 加貼圖：選圖片 → 播放頭位置、最上層影片軌（V1 被佔用 → 新增 V2）、縮放 0.35、fit、pop；一步復原
+  const nUndo0 = await proj(page, p => Object.keys(p.clips).length);
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#edSSticker')]);
+  await chooser.setFiles(path.join(fix, FILES.still));
+  await page.waitForFunction(n => Object.keys(window.QPTEdit.ui.state.project.clips).length > n, nUndo0);
+  await settle(page);
+  const stk = await proj(page, p => { const c = Object.values(p.clips).filter(x => x.video && x.video.sticker === 'pop'); return c.map(x => ({ s: x.start, d: x.duration, t: p.tracks.find(t => t.id === x.trackId).name, z: x.video.transform.zoomX, fit: x.video.fit, a: x.video.stickerAmt })); });
+  eq(stk, [{ s: 15, d: 150, t: 'V2', z: 0.35, fit: 'fit', a: 100 }], '加貼圖：播放頭、V2、縮放 0.35、fit、pop、圖片預設長度');
+  await page.click('#edSUndo'); await settle(page);
+  eq(await proj(page, p => Object.keys(p.clips).length), nUndo0, '加貼圖一步復原（片段和新增的軌道一起回去）');
   await shot(page, 'S4-simple-bar');
 
   // ---------------------------------------------------------------- 7. 簡易／專業切換

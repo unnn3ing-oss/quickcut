@@ -656,7 +656,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   // ---------------------------------------------------------------- 字幕
   console.log('字幕');
   await page.click('.ed-tab[data-tab="title"]');
-  eq(await page.evaluate(() => document.querySelectorAll('#edTitleList .ed-gitem').length), 7, '字幕分頁：列出 7 種樣式（含 4.30 黑底小字幕）');
+  eq(await page.evaluate(() => document.querySelectorAll('#edTitleList .ed-gitem').length), 9, '字幕分頁：列出 9 種樣式（含 4.30 黑底小字幕、對話氣泡、留言卡）');
   await page.evaluate(() => QPTEdit.ui.seekTimeline(30));
   await page.click('#edTitleAdd');
   await settle(page);
@@ -714,7 +714,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   // 字體特效（在「特效」分頁）
   await page.click('.ed-tab[data-tab="trans"]');
   eq(await heads(), ['轉場特效', '字體特效'], '特效分頁分成「轉場特效」「字體特效」');
-  eq(await page.evaluate(() => [...document.querySelectorAll('#edTextFxList .ed-gitem')].map(i => i.dataset.textfx)), ['none', 'pop', 'popLine', 'popChar', 'jump', 'jumpLine', 'jumpChar', 'fade', 'fadeLine', 'fadeChar', 'blurIn', 'echo', 'smear'], '字體特效：無／彈出／逐行彈出／逐字彈出／下往上跳起／逐行跳起／逐字跳起＋4.30 的淡入／逐行淡入／逐字淡入／模糊浮現／殘影／拖影上衝');
+  eq(await page.evaluate(() => [...document.querySelectorAll('#edTextFxList .ed-gitem')].map(i => i.dataset.textfx)), ['none', 'pop', 'popLine', 'popChar', 'jump', 'jumpLine', 'jumpChar', 'fade', 'fadeLine', 'fadeChar', 'blurIn', 'echo', 'smear', 'wave'], '字體特效：無／彈出／逐行彈出／逐字彈出／下往上跳起／逐行跳起／逐字跳起＋4.30 的淡入／逐行淡入／逐字淡入／模糊浮現／殘影／拖影上衝／波浪');
   await selClip(tA.id);
   await page.click('#edTextFxList .ed-gitem[data-textfx="jumpChar"]');
   await page.click('#edTextFxApply');
