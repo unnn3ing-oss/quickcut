@@ -222,7 +222,7 @@ body{margin:0;padding:16px;font-family:system-ui,"Noto Sans TC",sans-serif;backg
     const loaded = fx.fontLoaded && document.fonts.check('40px "WHZ-Heavy"');
     const W = 640, H = 360;
     const names = Object.keys(fx.TITLE_PRESETS);
-    const cv = document.createElement('canvas'); cv.width = W * 3; cv.height = H * 2; cv.style.cssText = 'width:900px;background:#223';
+    const cv = document.createElement('canvas'); cv.width = W * 3; cv.height = H * Math.ceil(names.length / 3); cv.style.cssText = 'width:900px;background:#223';
     const x = cv.getContext('2d');
     const text = '今天的天氣非常好，我們一起去公園散步吧！（含標點換行測試）';
     const nonEmpty = {};
@@ -241,7 +241,7 @@ body{margin:0;padding:16px;font-family:system-ui,"Noto Sans TC",sans-serif;backg
     return { loaded, nonEmpty };
   });
   ok(tit.loaded, 'WHZ-Heavy 字型已載入（fx.ready）');
-  ok(Object.values(tit.nonEmpty).every(Boolean), '六種字幕樣式都有畫出白色文字 ' + JSON.stringify(tit.nonEmpty));
+  ok(Object.values(tit.nonEmpty).every(Boolean), '每種字幕過場都有畫出白色文字 ' + JSON.stringify(tit.nonEmpty));
   await page.locator('canvas').first().screenshot({ path: path.join(SHOTS, 'fx-titles.png') });
   await page.evaluate(() => document.querySelector('canvas').remove());
 

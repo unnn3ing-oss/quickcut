@@ -24,8 +24,10 @@
   const ASPECTS = { '9:16': [1080, 1920], '16:9': [1920, 1080], '4:5': [1080, 1350], '1:1': [1080, 1080], '3:2': [1620, 1080] };   // 3:2＝Open Gate（整片感光元件）
   // 片段放進輸出畫面的方式：fit＝完整（黑邊）、blur＝完整＋同一畫面的模糊放大當背景、fill＝填滿（裁切）、stretch＝拉伸
   const FIT_MODES = ['fit', 'blur', 'fill', 'stretch'];
-  // 濾鏡（video.look）：none＝原色、warm＝暖陽、cool＝冷調、mono＝黑白；video.lookAmt 0~100（強度，預設 100）
-  const LOOKS = ['none', 'warm', 'cool', 'mono'];
+  // 濾鏡（video.look）：none＝原色、warm＝暖陽、cool＝冷調、mono＝黑白、mist＝黑柔、film＝電影感；video.lookAmt 0~100（強度，預設 100）
+  const LOOKS = ['none', 'warm', 'cool', 'mono', 'mist', 'film'];
+  // 貼圖動態（video.sticker）：none＝不動、shake＝抖動、bounce＝彈跳、pulse＝呼吸、swing＝左右擺、pop＝進場彈出；video.stickerAmt 0~100（強度，預設 100）
+  const STICKERS = ['none', 'shake', 'bounce', 'pulse', 'swing', 'pop'];
   // 電影黑邊（專案層級 p.letterbox）：none＝不加；其他是「黑邊之間畫面」的寬高比，顏色固定黑色。
   //   畫面比目標比例「高」→ 上下加黑邊（以寬度為準）；比目標比例「寬」→ 左右加黑邊（以高度為準）。
   //   1.50＝Open Gate（相機用整片感光元件錄的 3:2 畫面；放進 16:9 會是左右黑邊）
@@ -47,9 +49,11 @@
   const MARKER_COLORS = ['blue', 'cyan', 'green', 'yellow', 'red', 'pink', 'purple', 'fuchsia', 'rose', 'lavender', 'sky', 'mint', 'lemon', 'sand', 'cocoa', 'cream'];
   const TRANSITION_TYPES = ['crossDissolve', 'dipToColor', 'fadeToBlack', 'wipe', 'push', 'slide', 'zoom', 'blur',
     // 3.20 的 WebGL 轉場（edit-fx-gl.js）
-    'whip', 'flash', 'glitch', 'zoomPunch', 'spin', 'lightLeak', 'blinds', 'pixelate', 'flip', 'cube', 'doors'];
+    'whip', 'flash', 'glitch', 'zoomPunch', 'spin', 'lightLeak', 'blinds', 'pixelate', 'flip', 'cube', 'doors',
+    // 4.30 拆解參考影片加的（edit-fx.js，2D）
+    'invertFlash', 'lineSweep'];
   // 有自己預設顏色的轉場（其他都是黑色）：閃光預設白光、光漏預設暖橘
-  const TRANSITION_COLORS = { flash: '#ffffff', lightLeak: '#ff7a2e' };
+  const TRANSITION_COLORS = { flash: '#ffffff', lightLeak: '#ff7a2e', lineSweep: '#ffffff' };
   const transitionColor = type => TRANSITION_COLORS[type] || '#000000';
   const EDIT_MODES = ['insert', 'overwrite', 'replace', 'append'];
   const IMAGE_DEFAULT_SEC = 5;            // 圖片放上時間軸的預設長度
@@ -1871,6 +1875,8 @@
       num(c.video, 'bgBlur', 0, 100);
       if (c.video.look != null && !LOOKS.includes(c.video.look)) bail('濾鏡只能是原色、暖陽、冷調或黑白');
       num(c.video, 'lookAmt', 0, 100);
+      if (c.video.sticker != null && !STICKERS.includes(c.video.sticker)) bail('貼圖動態只能是無、抖動、彈跳、呼吸、左右擺或進場彈出');
+      num(c.video, 'stickerAmt', 0, 100);
     }
     if (c.audio) {
       const a = c.audio;
@@ -2191,7 +2197,7 @@
 
   const api = {
     // 常數、預設值
-    FPS_CHOICES, ASPECTS, FIT_MODES, LOOKS, LETTERBOXES, MARKER_COLORS, TRANSITION_TYPES, TRANSITION_COLORS, transitionColor, EDIT_MODES, IMAGE_DEFAULT_SEC, DEFAULT_FREEZE_SEC, SPEED_MIN, SPEED_MAX,
+    FPS_CHOICES, ASPECTS, FIT_MODES, LOOKS, STICKERS, LETTERBOXES, MARKER_COLORS, TRANSITION_TYPES, TRANSITION_COLORS, transitionColor, EDIT_MODES, IMAGE_DEFAULT_SEC, DEFAULT_FREEZE_SEC, SPEED_MIN, SPEED_MAX,
     defaultVideo, defaultAudio, defaultTitle, defaultTransform, defaultEq, snapFps,
     // 專案、軌道、媒體
     createProject, clone, serialize, deserialize,

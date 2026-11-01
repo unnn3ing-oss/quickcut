@@ -36,6 +36,7 @@
     mus: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
     gap: '<path d="M4 5v14M20 5v14M8 12h8M11 9l-3 3 3 3M13 9l3 3-3 3"/>',
     beat: '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
+    sticker: '<path d="M4 4h16v10l-6 6H4z"/><path d="M14 20v-6h6"/><circle cx="9" cy="10" r="1"/>',
   };
   const svg = k => `<svg viewBox="0 0 24 24" aria-hidden="true">${SVG[k]}</svg>`;
 
@@ -85,6 +86,16 @@
     doc.body.appendChild(inp);
     inp.click();
   }
+  // 加貼圖：選圖片 → 匯入後由 placeImported 交給 placeSticker（旗標在匯入完成後放掉）
+  function pickSticker() {
+    const inp = el('input'); inp.type = 'file'; inp.multiple = true; inp.accept = 'image/*'; inp.hidden = true;
+    inp.addEventListener('change', async () => {
+      state.stickerPicking = true;
+      try { await UI.importFiles(inp.files); } finally { state.stickerPicking = false; inp.remove(); }
+    });
+    doc.body.appendChild(inp);
+    inp.click();
+  }
   function buildSimpleBar() {
     const bar = el('div', 'ed-sbar'); bar.id = 'edSimpleBar'; bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', '簡易工具列');
     const btn = (id, ic, label, tip, run, cls) => {
@@ -103,6 +114,7 @@
     btn('edSRedo', 'redo', '重做', '重做（Ctrl／⌘＋Shift＋Z）', () => UI.redo());
     sep();
     btn('edSText', 'txt', '加字幕', '在播放頭加一段字幕，右邊可以改文字和樣式', () => UI.addTitle('static'));
+    btn('edSSticker', 'sticker', '加貼圖', '選一張圖片當貼圖：放在播放頭、最上層的影片軌，縮小到 35% 並自帶「進場彈出」動態；位置和動態在右邊的詳細內容改', () => pickSticker());
     btn('edSMusic', 'mus', '加音樂', '選一首音樂，會放到「音樂」軌', () => pickFiles('audio/*,video/*'));
     btn('edSBeat', 'beat', '對拍子', '偵測音樂節拍，讓照片和影片跟著拍子換', a => UI.openBeatPop(a));
     bar.appendChild(el('span', 'ed-shint', '點時間軸上的片段，右邊就能調整'));
@@ -115,6 +127,7 @@
   // =====================================================================================
   // 影片／圖片依序接在第一條影片軌的最後（有聲音的影片，聲音放第一條音訊軌）；純音訊放第二條音訊軌（音樂）
   function placeImported(added) {
+    if (state.stickerPicking && simple() && added && added.length) return placeSticker(added);
     if (!simple() || state.autoPicking || !added || !added.length) return;   // 一鍵成片對話框裡加的素材：等產生時才排
     const fresh = added.filter(m => !m.relinked);
     if (!fresh.length) return;
@@ -154,6 +167,36 @@
     }
   }
 
+  // 圖片貼圖：放在播放頭、最上層「放得下」的影片軌（都被佔用就新增一條影片軌），縮放 0.35、fit 模式（不加模糊背景）、
+  //   進場彈出；長度用圖片預設長度。整批包在一個 op() 裡，一步復原。
+  function placeSticker(added) {
+    const imgs = added.filter(m => !m.relinked && (C && state.project.mediaInfo[m.id] || {}).kind === 'image');
+    if (!imgs.length) { say('加貼圖要選圖片檔', 'error'); return; }
+    const at = Math.max(0, Math.round(state.playhead || 0));
+    let firstIds = null;
+    const r = UI.op('加貼圖', p => {
+      const ids = [];
+      for (const m of imgs) {
+        const dur = Math.round(C.IMAGE_DEFAULT_SEC * p.fps);
+        const free = C.tracksOf(p, 'video').slice().reverse().find(t => !t.locked &&
+          !C.clipsOnTrack(p, t.id).some(c => c.start < at + dur && C.clipEnd(c) > at));
+        let tid = free && free.id;
+        if (!tid) { const a = C.addTrack(p, 'video'); if (!a.ok) return a; tid = a.id; }
+        const x = C.editToTimeline(p, { mode: 'overwrite', mediaId: m.id, frame: at, trackIds: { video: tid, audio: null }, name: m.name });
+        if (!x.ok) return x;
+        const y = C.setClipProps(p, x.ids, { video: { fit: 'fit', transform: { zoomLinked: true, zoomX: 0.35, zoomY: 0.35 }, sticker: 'pop', stickerAmt: 100 } });
+        if (!y.ok) return y;
+        ids.push(...x.ids);
+        if (!firstIds) firstIds = x.ids;
+      }
+      return { ok: true, ids };
+    }, null);
+    if (r && r.ok && firstIds) {
+      UI.selectClips(firstIds);
+      say(`已加上 ${imgs.length} 張貼圖：拖曳預覽畫面調位置，右邊可以換動態`, 'ok');
+    }
+  }
+
   // =====================================================================================
   // 快速調整（取代詳細內容）
   // =====================================================================================
@@ -164,7 +207,7 @@
   const FITS = [['blur', '模糊背景'], ['fill', '填滿畫面'], ['fit', '完整顯示']];
   const TRANS = [['none', '直接切'], ['crossDissolve', '淡化'], ['push', '推移'], ['flash', '閃白'], ['zoom', '縮放']];
   const SPEEDS = [['normal', '正常'], ['slow', '慢動作'], ['bullet', '子彈時間'], ['fast', '快轉 2×']];
-  const LOOKS = [['none', '原色'], ['warm', '暖陽'], ['cool', '冷調'], ['mono', '黑白']];
+  const LOOKS = [['none', '原色'], ['warm', '暖陽'], ['cool', '冷調'], ['mono', '黑白'], ['mist', '黑柔'], ['film', '電影感']];
   const MOTION_PATHS = ['video.transform.zoomX', 'video.transform.zoomY', 'video.transform.posX'];
 
   function motionOf(c) {
