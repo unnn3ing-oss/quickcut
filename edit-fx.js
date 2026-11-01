@@ -302,9 +302,18 @@
   function onFontLoad(cb) { fontListeners.add(cb); return () => fontListeners.delete(cb); }
   function fontString(t, px) {
     const id = t.font || 'WHZ-Heavy', def = FONTS[id];
+    // 細字（4.30 極簡細字）：明體本身就細，照用；粗體字型只有一種字重，改用系統黑體的細字重
+    if (t.weight === 'light' && !(def && def.fallback === SERIF_FALLBACK)) return `300 ${px}px system-ui, -apple-system, "Segoe UI", ${SANS_FALLBACK}`;
     if (id === 'system' || id === 'sans') return `bold ${px}px system-ui, -apple-system, "Segoe UI", ${SANS_FALLBACK}`;
     if (def) { if (!fontIsLoaded(id)) loadFont(id); return `${px}px "${def.family}", ${def.fallback}`; }
     return `${px}px "${id}", ${FONT_FALLBACK}`;
+  }
+  // 字距（t.spacing＝字級的倍數）：用 Canvas 的 letterSpacing，會算進 measureText，排版、外框都跟著對。
+  // 共用的 ctx（量字用的 scratch）每次都要設回去，免得上一個字幕的字距留下來；不支援的瀏覽器就沒有字距
+  function setSpacing(ctx, t, px) {
+    if (!('letterSpacing' in ctx)) return;
+    const s = num(t && t.spacing, 0);
+    ctx.letterSpacing = (s ? s * px : 0) + 'px';
   }
   // 舊的介面相容：fontLoaded＝預設字型載入了沒
   const defaultFontLoaded = () => fontIsLoaded('WHZ-Heavy');
@@ -380,7 +389,9 @@
 
   const layoutCache = new Map();
   function layoutTitle(ctx, t, font, maxW) {
-    const key = font + '|' + Math.round(maxW) + '|' + fontGen + '|' + t.text;
+    const sp = num(t.spacing, 0);
+    const key = font + '|' + Math.round(maxW) + '|' + fontGen + '|' + (sp ? sp + '|' : '') + t.text;
+    setSpacing(ctx, t, +((/([\d.]+)px/.exec(font) || [0, 0])[1]));
     let v = layoutCache.get(key);
     if (v) return v;
     ctx.font = font;
@@ -432,9 +443,12 @@
     accent: '#ff2d2d',                                // 強調色：文字裡用 *…* 包住的字
     textFx: 'none', textFxDur: 0.5,                   // 字體特效（進場動畫）與每個字（或整塊）的動畫長度（秒）
     // ---- 4.30 字幕樣式 ----
-    shape: { kind: 'none', color: '#ffffff', color2: '#e5141b', border: '#111111', tail: 'left' }, // 字幕底形狀（SHAPES），none＝用 bg 的圓角底
+    // 字幕底形狀（SHAPES），none＝用 bg 的圓角底；選了形狀就取代 bg。color＝底色、color2＝第二色（爆炸內層／標籤小標）、
+    // border／borderW＝外框顏色與粗細（短邊 1080 時的像素，只有 SHAPES 標 border 的形狀用）、tail＝對話框尾巴 left／center／right／none
+    shape: { kind: 'none', color: '#ffffff', color2: '#e5141b', border: '#111111', borderW: 6, tail: 'left' },
     glow: { color: '#ff4fd8', blur: 0 },              // 發光（霓虹）：blur 0＝關
     speedLines: { on: false, color: 'rgba(255,255,255,0.55)' }, // 集中線：整個畫面、以字幕為中心
+    weight: 'auto', spacing: 0,                       // 字重（auto＝字型本身；light＝細字，粗體字型會改用系統細黑體）、字距（字級的倍數，0.1＝一成）
     textLoop: 'none', textLoopColor: '#ffd400',       // 持續特效（TEXT_LOOP）與它用的顏色（卡拉OK／逐字高亮）
     textOut: 'none', textOutDur: 0.4,                 // 出場特效（TEXT_OUT）與長度（秒）
   };
@@ -555,27 +569,81 @@
     return { a, s: 1, dy: (1 - easeOutBack(u, 2.6)) * lh * 1.1 };
   }
 
-  // 字幕樣式：一鍵套用的外觀（只改顏色、描邊、外框、陰影、立體、斜體、強調色；不動文字、字型、位置、過場）
+  // 字幕樣式：一鍵套用的外觀（只改顏色、描邊、外框、陰影、立體、斜體、強調色、底形狀、發光、集中線、漸層、字重字距；不動文字、字型、位置、過場、動畫）
+  // 每個樣式都要把「形狀、發光、集中線、漸層種類、字重、字距」全部設定一次（look()），不然從爆炸字卡切回基本會殘留
   const outlinesOf = (...a) => Array.from({ length: OUTLINE_SLOTS }, (_, i) => (a[i] ? { on: true, ...a[i] } : outlineOff()));
   const NO_SHADOW = { color: 'rgba(0,0,0,0)', blur: 0, x: 0, y: 0 };
   const NO_EXTRUDE = { color: '#3a2386', depth: 0, angle: 45 };
+  const NO_SHAPE = { kind: 'none', color: '#ffffff', color2: '#e5141b', border: '#111111', borderW: 6, tail: 'left' };
+  const NO_GLOW = { color: '#ff4fd8', blur: 0 };
+  const NO_LINES = { on: false, color: 'rgba(255,255,255,0.55)' };
+  const look = (o = {}) => ({ shape: { ...NO_SHAPE, ...o.shape }, glow: { ...NO_GLOW, ...o.glow }, speedLines: { ...NO_LINES, ...o.speedLines },
+    weight: o.weight || 'auto', spacing: o.spacing || 0 });
+  const grad = (kind, color = '#8fd8ff') => ({ on: !!kind, color, kind: kind || 'two' });
+  // group：分類（簡易面板的分頁用），不是 patch 的一部分
+  const TITLE_STYLE_GROUPS = { basic: '基本', variety: '綜藝', social: '社群' };
   const TITLE_STYLES = {
-    plain: { name: '基本', sample: '字幕樣式',
-      patch: { color: '#ffffff', gradient: { on: false, color: '#8fd8ff' }, stroke: { color: '#000000', width: 0 }, outlines: outlinesOf(),
-        shadow: { color: 'rgba(0,0,0,.6)', blur: 8, x: 0, y: 4 }, extrude: NO_EXTRUDE, skew: 0, accent: '#ff2d2d' } },
-    blueGlow: { name: '藍白漸層', sample: '全場笑翻了',
-      patch: { color: '#ffffff', gradient: { on: true, color: '#8fd8ff' }, stroke: { color: '#0b3f7a', width: 5 },
+    plain: { name: '基本', sample: '字幕樣式', group: 'basic',
+      patch: { color: '#ffffff', gradient: grad(), stroke: { color: '#000000', width: 0 }, outlines: outlinesOf(),
+        shadow: { color: 'rgba(0,0,0,.6)', blur: 8, x: 0, y: 4 }, extrude: NO_EXTRUDE, skew: 0, accent: '#ff2d2d', ...look() } },
+    blueGlow: { name: '藍白漸層', sample: '全場笑翻了', group: 'basic',
+      patch: { color: '#ffffff', gradient: grad('two', '#8fd8ff'), stroke: { color: '#0b3f7a', width: 5 },
         outlines: outlinesOf({ color: '#ffffff', width: 7 }, { color: '#1593d6', width: 7 }),
-        shadow: { color: 'rgba(0,30,70,.55)', blur: 6, x: 0, y: 6 }, extrude: NO_EXTRUDE, skew: 8, accent: '#ffc531' } },
-    purple3d: { name: '紫色立體', sample: '來幫你做',
-      patch: { color: '#ffffff', gradient: { on: true, color: '#cfc0ff' }, stroke: { color: '#5a3ea6', width: 9 }, outlines: outlinesOf(),
-        shadow: NO_SHADOW, extrude: { color: '#36207f', depth: 16, angle: 45 }, skew: 0, accent: '#ffd23f' } },
-    blackCyan: { name: '黑邊青框', sample: '要不要訂閱',
-      patch: { color: '#ffffff', gradient: { on: false, color: '#8fd8ff' }, stroke: { color: '#111111', width: 9 },
-        outlines: outlinesOf({ color: '#3fd8d8', width: 5 }), shadow: NO_SHADOW, extrude: NO_EXTRUDE, skew: 0, accent: '#3fd8d8' } },
-    redAccent: { name: '黑邊強調紅', sample: '進行*瘋狂*的',
-      patch: { color: '#fff8ec', gradient: { on: false, color: '#8fd8ff' }, stroke: { color: '#141414', width: 7 }, outlines: outlinesOf(),
-        shadow: NO_SHADOW, extrude: { color: '#141414', depth: 8, angle: 45 }, skew: 10, accent: '#e5141b' } },
+        shadow: { color: 'rgba(0,30,70,.55)', blur: 6, x: 0, y: 6 }, extrude: NO_EXTRUDE, skew: 8, accent: '#ffc531', ...look() } },
+    purple3d: { name: '紫色立體', sample: '來幫你做', group: 'basic',
+      patch: { color: '#ffffff', gradient: grad('two', '#cfc0ff'), stroke: { color: '#5a3ea6', width: 9 }, outlines: outlinesOf(),
+        shadow: NO_SHADOW, extrude: { color: '#36207f', depth: 16, angle: 45 }, skew: 0, accent: '#ffd23f', ...look() } },
+    blackCyan: { name: '黑邊青框', sample: '要不要訂閱', group: 'basic',
+      patch: { color: '#ffffff', gradient: grad(), stroke: { color: '#111111', width: 9 },
+        outlines: outlinesOf({ color: '#3fd8d8', width: 5 }), shadow: NO_SHADOW, extrude: NO_EXTRUDE, skew: 0, accent: '#3fd8d8', ...look() } },
+    redAccent: { name: '黑邊強調紅', sample: '進行*瘋狂*的', group: 'basic',
+      patch: { color: '#fff8ec', gradient: grad(), stroke: { color: '#141414', width: 7 }, outlines: outlinesOf(),
+        shadow: NO_SHADOW, extrude: { color: '#141414', depth: 8, angle: 45 }, skew: 10, accent: '#e5141b', ...look() } },
+    // ---- 4.30 新增：綜藝 ----
+    varietyYellow: { name: '綜藝黃字', sample: '笑到肚子痛', group: 'variety',
+      patch: { color: '#ffe11a', gradient: grad(), stroke: { color: '#111111', width: 9 }, outlines: outlinesOf(),
+        shadow: { color: '#111111', blur: 0, x: 0, y: 7 }, extrude: NO_EXTRUDE, skew: 7, accent: '#ff3b30', ...look() } },
+    burstCard: { name: '爆炸字卡', sample: '爆炸', group: 'variety',
+      patch: { color: '#ffffff', gradient: grad(), stroke: { color: '#111111', width: 7 }, outlines: outlinesOf(),
+        shadow: NO_SHADOW, extrude: NO_EXTRUDE, skew: 8, accent: '#ffd400', ...look({ shape: { kind: 'burst', color: '#ffd400', color2: '#e5141b' } }) } },
+    pinkShout: { name: '粉紅驚嘆', sample: '太可愛了吧', group: 'variety',
+      patch: { color: '#ffffff', gradient: grad(), stroke: { color: '#ff4f9a', width: 7 }, outlines: outlinesOf(),
+        shadow: NO_SHADOW, extrude: { color: '#7a1446', depth: 9, angle: 45 }, skew: 0, accent: '#ffe14d', ...look() } },
+    bubbleTalk: { name: '吐槽對話框', sample: '欸你剛剛說什麼？', group: 'variety',
+      patch: { color: '#111111', gradient: grad(), stroke: { color: '#000000', width: 0 }, outlines: outlinesOf(),
+        shadow: NO_SHADOW, extrude: NO_EXTRUDE, skew: 0, accent: '#e5141b',
+        ...look({ shape: { kind: 'bubble', color: '#ffffff', border: '#111111', borderW: 6, tail: 'left' } }) } },
+    tagBar: { name: '標籤條', sample: '現場直擊\n排隊三小時', group: 'variety',
+      patch: { color: '#111111', gradient: grad(), stroke: { color: '#000000', width: 0 }, outlines: outlinesOf(),
+        shadow: NO_SHADOW, extrude: NO_EXTRUDE, skew: 0, accent: '#e5141b',
+        ...look({ shape: { kind: 'tag', color: '#ffffff', color2: '#e5141b' } }) } },
+    impact: { name: '效果字', sample: '蛤？！', group: 'variety',
+      patch: { color: '#ffffff', gradient: grad(), stroke: { color: '#2242c8', width: 10 }, outlines: outlinesOf(),
+        shadow: { color: '#0d1a5c', blur: 0, x: 6, y: 7 }, extrude: NO_EXTRUDE, skew: 14, accent: '#ffe14d',
+        ...look({ speedLines: { on: true, color: 'rgba(255,255,255,0.55)' } }) } },
+    // ---- 4.30 新增：社群 ----
+    lineBox: { name: '白底框字', sample: '今天帶你們去\n台南吃早餐', group: 'social',
+      patch: { color: '#111111', gradient: grad(), stroke: { color: '#000000', width: 0 }, outlines: outlinesOf(),
+        shadow: NO_SHADOW, extrude: NO_EXTRUDE, skew: 0, accent: '#e5141b',
+        ...look({ shape: { kind: 'lineBox', color: '#ffffff' } }) } },
+    wordHi: { name: '逐字高亮', sample: '真的超級好吃', group: 'social',
+      patch: { color: '#ffffff', gradient: grad(), stroke: { color: '#000000', width: 6 }, outlines: outlinesOf(),
+        shadow: NO_SHADOW, extrude: NO_EXTRUDE, skew: 0, accent: '#ffd400', ...look() } },
+    neon: { name: '霓虹發光', sample: '深夜食堂', group: 'social',
+      patch: { color: '#ffffff', gradient: grad(), stroke: { color: '#ff4fd8', width: 3 }, outlines: outlinesOf(),
+        shadow: NO_SHADOW, extrude: NO_EXTRUDE, skew: 0, accent: '#22e3ff',
+        ...look({ glow: { color: '#ff4fd8', blur: 26 } }) } },
+    thinSoft: { name: '極簡細字', sample: '那天的風 很溫柔', group: 'social',
+      patch: { color: '#ffffff', gradient: grad(), stroke: { color: '#000000', width: 0 }, outlines: outlinesOf(),
+        shadow: { color: 'rgba(0,0,0,.7)', blur: 8, x: 0, y: 2 }, extrude: NO_EXTRUDE, skew: 0, accent: '#ffd9a0',
+        ...look({ weight: 'light', spacing: 0.12 }) } },
+    stickerTag: { name: '貼紙標籤', sample: '#週末去哪玩', group: 'social',
+      patch: { color: '#111111', gradient: grad(), stroke: { color: '#000000', width: 0 }, outlines: outlinesOf(),
+        shadow: NO_SHADOW, extrude: NO_EXTRUDE, skew: 0, accent: '#e5141b',
+        ...look({ shape: { kind: 'sticker', color: '#ffef5c', border: '#ffffff', borderW: 7 } }) } },
+    rainbow: { name: '彩虹漸層', sample: '彩虹漸層', group: 'social',
+      patch: { color: '#ffffff', gradient: grad('rainbow'), stroke: { color: '#ffffff', width: 6 }, outlines: outlinesOf(),
+        shadow: { color: 'rgba(0,0,0,.5)', blur: 6, x: 0, y: 4 }, extrude: NO_EXTRUDE, skew: 0, accent: '#ff2d2d', ...look() } },
   };
   // defaults：切換樣式時套用 align／x／y／bg（size 只用在新增字幕）
   const TITLE_PRESETS = {
@@ -611,6 +679,12 @@
       ctx.shadowOffsetX = num(sh.x, 0) * k; ctx.shadowOffsetY = num(sh.y, 0) * k;
     } else { ctx.shadowColor = 'rgba(0,0,0,0)'; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0; }
   }
+  // 漸層種類：two＝由上（文字顏色）到下（gradient.color）；有 stops 的是多色（左到右）
+  const GRADIENTS = {
+    two: { name: '雙色（上到下）' },
+    rainbow: { name: '彩虹（左到右）', stops: ['#ff4d4d', '#ffa63d', '#ffe14d', '#4ade80', '#38bdf8', '#a78bfa'] },
+    sunset: { name: '日落（左到右）', stops: ['#ff5f6d', '#ffc371', '#ffe9a8'] },
+  };
   // 一段文字的外觀：外圈（描邊＋外框，最外圈在前）、立體、陰影、填色（可漸層）、斜體
   function glyphStyle(t, k, px) {
     const ring = [];
@@ -628,12 +702,30 @@
       ext = { n, dx: Math.cos(ang) * depth / n, dy: Math.sin(ang) * depth / n, color: t.extrude.color };
     }
     const sh = t.shadow && (num(t.shadow.blur, 0) > 0 || num(t.shadow.x, 0) || num(t.shadow.y, 0)) ? t.shadow : null;
-    return { ring, outer: r, ext, sh, k, px, color: t.color, grad: t.gradient && t.gradient.on ? t.gradient.color : null,
+    const gk = t.gradient && t.gradient.kind;
+    const glow = t.glow && num(t.glow.blur, 0) > 0 ? { color: t.glow.color, blur: num(t.glow.blur, 0) * k } : null;
+    return { ring, outer: r, ext, sh, k, px, lh: px * num(t.lineHeight, 1.25), color: t.color,
+      grad: t.gradient && t.gradient.on ? { kind: GRADIENTS[gk] ? gk : 'two', color: t.gradient.color } : null, glow,
+      tag: t.shape && t.shape.kind === 'tag' ? { label: '#ffffff' } : null, line: 0, nl: 1,   // line／nl：paintBlock 畫每一行前填入（標籤條的小標要知道是第幾行）
       accent: t.accent || '#ff2d2d', shear: -Math.tan(clamp(num(t.skew, 0), -45, 45) * Math.PI / 180) };
   }
   // 在 (x,y) 畫一段文字（textBaseline middle，textAlign 由呼叫端設）：立體 → 外圈（最外先）→ 填色；陰影只加在最底下那一層
   // fill：指定填色（卡拉OK 等逐字變色用），沒給就照強調／漸層／文字顏色
   function paintGlyphs(ctx, s, g, accent, x, y, fill) {
+    // 標籤條：第一行（不只一行時）是縮小的白字小標，畫在紅色小標底上，靠這一行的底部
+    if (g.tag && g.nl > 1 && g.line === 0) {
+      ctx.save();
+      ctx.translate(x, y + g.lh * 0.17); ctx.scale(TAG_LABEL, TAG_LABEL);
+      paintGlyphs(ctx, s, { ...g, tag: null, ring: [], ext: null, sh: null, glow: null, grad: null, color: g.tag.label }, false, 0, 0, g.tag.label);
+      ctx.restore();
+      return;
+    }
+    // 發光：先在最底下用光暈色疊兩次（陰影模糊疊起來才夠亮），再畫正常的文字蓋上去
+    if (g.glow) {
+      ctx.shadowColor = g.glow.color; ctx.shadowBlur = g.glow.blur; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+      ctx.fillStyle = ctx.strokeStyle = g.glow.color; ctx.lineWidth = g.outer * 2;
+      for (let i = 0; i < 2; i++) { if (g.outer > 0) ctx.strokeText(s, x, y); ctx.fillText(s, x, y); }
+    }
     let first = true;
     const shadow = () => { setShadow(ctx, first ? g.sh : null, g.k); first = false; };
     if (g.ext) {
@@ -649,8 +741,17 @@
     if (fill) ctx.fillStyle = fill;
     else if (accent) ctx.fillStyle = g.accent;
     else if (g.grad) {
-      const gr = ctx.createLinearGradient(0, y - g.px * 0.45, 0, y + g.px * 0.45);
-      gr.addColorStop(0, g.color); gr.addColorStop(1, g.grad);
+      const gd = GRADIENTS[g.grad.kind];
+      let gr;
+      if (gd && gd.stops) {   // 多色：從左到右鋪滿這一段文字的寬度
+        const w = ctx.measureText(s).width, a = ctx.textAlign;
+        const x0 = a === 'left' || a === 'start' ? x : a === 'right' || a === 'end' ? x - w : x - w / 2;
+        gr = ctx.createLinearGradient(x0, 0, x0 + Math.max(1, w), 0);
+        gd.stops.forEach((c, i) => gr.addColorStop(i / (gd.stops.length - 1), c));
+      } else {
+        gr = ctx.createLinearGradient(0, y - g.px * 0.45, 0, y + g.px * 0.45);
+        gr.addColorStop(0, g.color); gr.addColorStop(1, g.grad.color);
+      }
       ctx.fillStyle = gr;
     } else ctx.fillStyle = g.color;
     ctx.fillText(s, x, y);
@@ -670,14 +771,125 @@
   }
 
   // ---- 字幕底（樣式負責）---------------------------------------------------------------
-  // 文字區塊後面的底：目前是 bg 的圓角矩形；形狀（爆炸、對話框、每行圓角底、貼紙…）也畫在這裡。
+  // 文字區塊後面的底：t.shape.kind 是 none 就畫 bg 的圓角矩形；選了形狀（SHAPES）就改畫形狀（取代 bg）。
   // box：{ left, top, w }，bh：文字區塊高，L：排版結果（每行寬 L.widths），已經套用整塊的進出場變形
+  // 形狀 { name, fields（inspector 顯示哪些欄位）, ext(t, L, lh, k, bh)：往外多出文字區塊的 [左, 上, 右, 下]（輸出像素）, paint(...)：畫 }
+  // 尺寸都用行高 lh 的倍數，字級改了形狀跟著變；框線粗細 borderW 是「短邊 1080 時的像素」，乘 k
+  const TAG_LABEL = 0.6;   // 標籤條的小標字級比例
+  const lineX = (t, L, box, i) => (t.align === 'left' ? box.left : t.align === 'right' ? box.left + box.w - L.widths[i] : box.left + (box.w - L.widths[i]) / 2);
+  // 爆炸：以橢圓（剛好框住文字）為底的鋸齒星，單數頂點凹進橢圓上、雙數頂點往外尖出（高低固定的亂數，每一幀都一樣）
+  const BURST_N = 14, BURST_BASE = 1.12, BURST_MAX = 1.38;
+  function burstR(L, lh, bh) {
+    const ex = L.w / 2 + lh * 0.32, ey = bh / 2 + lh * 0.24;
+    return { rx: ex * Math.SQRT2 * BURST_BASE, ry: ey * Math.SQRT2 * BURST_BASE };
+  }
+  function burstPath(ctx, cx, cy, r, sc) {
+    ctx.beginPath();
+    for (let i = 0; i < BURST_N * 2; i++) {
+      const a = i * Math.PI / BURST_N - Math.PI / 2, f = i % 2 ? 1 : 1.22 + 0.16 * (0.5 + 0.5 * Math.sin(i * 2.1 + 1));
+      const x = cx + Math.cos(a) * r.rx * f * sc, y = cy + Math.sin(a) * r.ry * f * sc;
+      if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+    }
+    ctx.closePath();
+  }
+  // 對話框的尾巴：落在底邊的位置（0~1）與尖端歪向
+  const TAILS = { left: [0.25, -1], center: [0.5, 0], right: [0.75, 1] };
+  function bubbleGeo(t, lh, k) {
+    const bw = Math.max(0, num(t.shape.borderW, 6)) * k, tl = TAILS[t.shape.tail] || null;
+    return { px: lh * 0.38, py: lh * 0.22, bw, tl, th: tl ? lh * 0.5 : 0, tw: lh * 0.5, r: lh * 0.45 };
+  }
+  const SHAPES = {
+    none: { name: '無（用背景色）' },
+    burst: { name: '爆炸', fields: ['color', 'color2'],
+      ext(t, L, lh, k, bh) { const r = burstR(L, lh, bh), m = BURST_MAX, a = r.rx * m - L.w / 2, b = r.ry * m - bh / 2; return [a, b, a, b]; },
+      paint(ctx, t, L, k, lh, box, bh) {
+        const r = burstR(L, lh, bh), cx = box.left + box.w / 2, cy = box.top + bh / 2;
+        ctx.lineJoin = 'miter';
+        burstPath(ctx, cx, cy, r, 1); ctx.fillStyle = t.shape.color; ctx.fill();
+        burstPath(ctx, cx, cy, r, 0.86); ctx.fillStyle = t.shape.color2; ctx.fill();
+      } },
+    bubble: { name: '對話框', fields: ['color', 'border', 'borderW', 'tail'],
+      ext(t, L, lh, k) { const g = bubbleGeo(t, lh, k); return [g.px + g.bw, g.py + g.bw, g.px + g.bw, g.py + g.bw + g.th]; },
+      paint(ctx, t, L, k, lh, box, bh) {
+        const g = bubbleGeo(t, lh, k), x = box.left - g.px, y = box.top - g.py, w = box.w + g.px * 2, h = bh + g.py * 2, bw = g.bw;
+        ctx.lineJoin = 'round'; ctx.lineWidth = bw; ctx.strokeStyle = t.shape.border; ctx.fillStyle = t.shape.color;
+        roundRectPath(ctx, x, y, w, h, g.r);
+        ctx.fill(); if (bw > 0) ctx.stroke();
+        if (!g.tl) return;
+        // 尾巴：底邊那一段框線用底色蓋掉，再畫兩條斜邊，接起來才不會有一條線切在中間
+        const half = g.tw / 2, lo = x + g.r + half, hi = x + w - g.r - half;
+        const tx = lo <= hi ? clamp(x + w * g.tl[0], lo, hi) : x + w / 2, yb = y + h, tipx = tx + g.tl[1] * g.tw * 0.5;
+        ctx.beginPath(); ctx.moveTo(tx - half, yb - bw); ctx.lineTo(tx + half, yb - bw); ctx.lineTo(tx + half, yb); ctx.lineTo(tipx, yb + g.th); ctx.lineTo(tx - half, yb); ctx.closePath();
+        ctx.fill();
+        if (bw > 0) { ctx.beginPath(); ctx.moveTo(tx - half, yb); ctx.lineTo(tipx, yb + g.th); ctx.lineTo(tx + half, yb); ctx.stroke(); }
+      } },
+    tag: { name: '標籤條', fields: ['color', 'color2'],
+      ext(t, L, lh) { return [lh * 0.22, 0, lh * 0.22, 0]; },
+      paint(ctx, t, L, k, lh, box) {
+        const px = lh * 0.22, n = L.lines.length;
+        for (let i = 0; i < n; i++) {
+          const x = lineX(t, L, box, i), y = box.top + i * lh;
+          if (i === 0 && n > 1) {   // 小標：縮小的字，紅底靠這一行底部
+            ctx.fillStyle = t.shape.color2;
+            ctx.fillRect(x - px, y + lh * 0.34, (L.widths[0] + px * 2.4) * TAG_LABEL, lh * 0.66);
+          } else { ctx.fillStyle = t.shape.color; ctx.fillRect(x - px, y, L.widths[i] + px * 2, lh); }
+        }
+      } },
+    lineBox: { name: '每行圓角底', fields: ['color'],
+      ext(t, L, lh) { return [lh * 0.22, lh * 0.03, lh * 0.22, lh * 0.03]; },
+      paint(ctx, t, L, k, lh, box) {
+        const px = lh * 0.22;
+        ctx.fillStyle = t.shape.color;
+        L.lines.forEach((line, i) => {
+          roundRectPath(ctx, lineX(t, L, box, i) - px, box.top + i * lh + lh * 0.03, L.widths[i] + px * 2, lh * 0.94, lh * 0.2);
+          ctx.fill();
+        });
+      } },
+    sticker: { name: '貼紙', fields: ['color', 'border', 'borderW'],
+      ext(t, L, lh, k) { const bw = Math.max(0, num(t.shape.borderW, 6)) * k; return [lh * 0.38 + bw, lh * 0.2 + bw, lh * 0.38 + bw, lh * 0.2 + bw]; },
+      paint(ctx, t, L, k, lh, box, bh) {
+        const bw = Math.max(0, num(t.shape.borderW, 6)) * k, px = lh * 0.38, py = lh * 0.2;
+        const x = box.left - px, y = box.top - py, w = box.w + px * 2, h = bh + py * 2;
+        setShadow(ctx, { color: 'rgba(0,0,0,.45)', blur: 18, x: 0, y: 8 }, k);
+        ctx.fillStyle = t.shape.border;
+        roundRectPath(ctx, x - bw, y - bw, w + bw * 2, h + bw * 2, lh * 0.3 + bw);
+        ctx.fill();
+        setShadow(ctx, null, k);
+        ctx.fillStyle = t.shape.color;
+        roundRectPath(ctx, x, y, w, h, lh * 0.3);
+        ctx.fill();
+      } },
+  };
+  // 形狀往外多出文字區塊的範圍 [左, 上, 右, 下]（選了形狀才有；沒有就 null）
+  function shapeExt(t, L, lh, k, bh) {
+    const d = t.shape && SHAPES[t.shape.kind];
+    return d && d.ext ? d.ext(t, L, lh, k, bh) : null;
+  }
   function paintBackdrop(ctx, t, L, k, lh, box, bh) {
+    const sd = t.shape && SHAPES[t.shape.kind];
+    if (sd && sd.paint) { ctx.save(); sd.paint(ctx, t, L, k, lh, box, bh); ctx.restore(); return; }
     if (!(t.bg && t.bg.color)) return;
     const pad = num(t.bg.padding, 0) * k;
     ctx.fillStyle = t.bg.color;
     roundRectPath(ctx, box.left - pad, box.top - pad, box.w + pad * 2, bh + pad * 2, num(t.bg.radius, 0) * k);
     ctx.fill();
+  }
+
+  // 集中線：整個畫面、以 (fx, fy) 為焦點的放射細線，中心淡出；亂數用固定的雜湊，每 3 格換一組（漫畫的抖動感），預覽和匯出一樣
+  const hash01 = n => { const v = Math.sin(n * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  function paintSpeedLines(ctx, sl, fx, fy, outW, outH, f) {
+    const R = Math.hypot(Math.max(fx, outW - fx), Math.max(fy, outH - fy)) * 1.05, N = 44, seed = Math.floor(f / 3) * 101;
+    const p = parseColor(sl.color);
+    const gr = ctx.createRadialGradient(fx, fy, 0, fx, fy, R);
+    gr.addColorStop(0, formatColor(p.hex, 0)); gr.addColorStop(0.4, formatColor(p.hex, 0)); gr.addColorStop(0.7, formatColor(p.hex, p.a)); gr.addColorStop(1, formatColor(p.hex, p.a));
+    ctx.fillStyle = gr;
+    const step = Math.PI * 2 / N;
+    for (let i = 0; i < N; i++) {
+      const a = i * step + (hash01(i + seed) - 0.5) * step * 0.6, w = step * (0.1 + 0.28 * hash01(i * 7 + seed + 3));
+      ctx.beginPath(); ctx.moveTo(fx, fy);
+      ctx.lineTo(fx + Math.cos(a - w) * R, fy + Math.sin(a - w) * R); ctx.lineTo(fx + Math.cos(a + w) * R, fy + Math.sin(a + w) * R);
+      ctx.closePath(); ctx.fill();
+    }
   }
 
   // ---- 字幕動畫（效果引擎負責）-----------------------------------------------------------
@@ -731,6 +943,7 @@
       const count = Math.max(0, Math.min(cs.length, left));
       left -= cs.length;
       const y = box.top + (i + 0.5) * lh;
+      g.line = i; g.nl = L.lines.length;
       const x = align === 'left' ? box.left : align === 'right' ? box.left + box.w : box.left + box.w / 2;
       ctx.save();
       const sl = fxAt(P, t, 'line', i);
@@ -851,6 +1064,8 @@
     if (tt.preset === 'crawl') return [0, tt.y * outH - lh / 2 - pad, outW, lh + pad * 2];
     const L = layoutTitle(ctx, tt, font, (tt.preset === 'scroll' ? outW * 0.8 : outW * 0.9) - 2 * pad);
     const bh = L.lines.length * lh;
+    const se = tt.preset === 'scroll' ? null : shapeExt(tt, L, lh, k, bh);   // 選了形狀就用形狀的範圍（泡泡尾巴、爆炸、貼紙…）取代內距
+    if (se) return [tt.x * outW - L.w / 2 - se[0], tt.y * outH - bh / 2 - se[1], L.w + se[0] + se[2], bh + se[1] + se[3]];
     return tt.preset === 'scroll' ? [tt.x * outW - L.w / 2 - pad, 0, L.w + pad * 2, outH]
       : [tt.x * outW - L.w / 2 - pad, tt.y * outH - bh / 2 - pad, L.w + pad * 2, bh + pad * 2];
   }
@@ -903,10 +1118,17 @@
     };
     ctx.save();
     const m = clipMatrix(clip, outW, outH, outW, outH, f);
+    const nt = normTitle(t);
+    if (nt.shape.kind === 'tag') nt.align = 'left';   // 標籤條一律靠左（不留在字幕設定裡，換掉樣式就恢復）
+    if (nt.speedLines.on) {   // 整個畫面的集中線（不跟著字幕變形，只以字幕中心為焦點），畫在字幕後面
+      const [fx, fy] = applyMatrix(m, nt.x * outW, nt.y * outH);
+      ctx.save(); ctx.globalAlpha *= op; paintSpeedLines(ctx, nt.speedLines, fx, fy, outW, outH, f); ctx.restore();
+    }
     ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
     ctx.globalAlpha *= op;
     ctx.font = o.font;
-    (TITLE_DRAW[t.preset] || TITLE_DRAW.static)(ctx, normTitle(t), o);
+    setSpacing(ctx, nt, px);
+    (TITLE_DRAW[t.preset] || TITLE_DRAW.static)(ctx, nt, o);
     ctx.restore();
   }
 
@@ -1396,6 +1618,8 @@
     return packOutlines([...on, { color: on.length % 2 ? '#1593d6' : '#ffffff', width: 6 }]);
   };
 
+  // 底形狀要不要顯示這個欄位（SHAPES 的 fields）
+  const shapeHas = f => c => { const d = SHAPES[ttSub(c, 'shape', 'kind')]; return !!(d && d.fields && d.fields.includes(f)); };
   const isTitleClip = c => !!c && !isTransition(c) && c.type === 'title' && !!c.title;
   const SECTIONS = [
     {
@@ -1482,8 +1706,11 @@
           ]),
           { type: 'btn', label: '＋ 增加外框', show: c => outlineCount(c) < OUTLINE_SLOTS, patch: c => T({ outlines: addOutline(c) }) },
           { type: 'head', label: '文字效果' },
-          { type: 'check', label: '漸層（由上往下：文字顏色 → 漸層顏色）', get: c => ttSub(c, 'gradient', 'on'), patch: v => T({ gradient: { on: !!v } }) },
-          { type: 'color', label: '漸層顏色', show: c => !!ttSub(c, 'gradient', 'on'), get: c => ttSub(c, 'gradient', 'color'), patch: v => T({ gradient: { color: v } }) },
+          { type: 'check', label: '漸層', get: c => ttSub(c, 'gradient', 'on'), patch: v => T({ gradient: { on: !!v } }) },
+          { type: 'select', label: '漸層種類', show: c => !!ttSub(c, 'gradient', 'on'), options: Object.keys(GRADIENTS).map(k => [k, GRADIENTS[k].name]), get: c => ttSub(c, 'gradient', 'kind'), patch: v => T({ gradient: { kind: v } }) },
+          { type: 'color', label: '漸層顏色（下方）', show: c => !!ttSub(c, 'gradient', 'on') && !(GRADIENTS[ttSub(c, 'gradient', 'kind')] || {}).stops, get: c => ttSub(c, 'gradient', 'color'), patch: v => T({ gradient: { color: v } }) },
+          { type: 'select', label: '字重', options: [['auto', '字型本身'], ['light', '細字']], get: c => tt(c, 'weight'), patch: v => T({ weight: v }) },
+          { type: 'num', label: '字距', get: c => tt(c, 'spacing'), def: 0, min: -0.2, max: 1, dpp: 0.005, dec: 2, unit: '倍字級', slider: [-0.1, 0.5], sliderStep: 0.01, patch: v => T({ spacing: v }) },
           { type: 'num', label: '斜體', get: c => tt(c, 'skew'), def: 0, min: -30, max: 30, dpp: 0.1, dec: 1, unit: '°', slider: [-30, 30], sliderStep: 1, patch: v => T({ skew: v }) },
           { type: 'head', label: '立體' },
           { type: 'num', label: '立體深度', get: c => ttSub(c, 'extrude', 'depth'), def: 0, min: 0, max: 80, dpp: 0.1, dec: 0, unit: 'px', slider: [0, 40], sliderStep: 1, patch: v => T({ extrude: { depth: v } }) },
@@ -1494,6 +1721,20 @@
           { type: 'num', label: '模糊', get: c => ttSub(c, 'shadow', 'blur'), def: 8, min: 0, max: 100, dpp: 0.2, dec: 0, unit: 'px', patch: v => T({ shadow: { blur: v } }) },
           { type: 'num', label: '位移 X', get: c => ttSub(c, 'shadow', 'x'), def: 0, min: -100, max: 100, dpp: 0.2, dec: 0, unit: 'px', patch: v => T({ shadow: { x: v } }) },
           { type: 'num', label: '位移 Y', get: c => ttSub(c, 'shadow', 'y'), def: 4, min: -100, max: 100, dpp: 0.2, dec: 0, unit: 'px', patch: v => T({ shadow: { y: v } }) },
+          { type: 'head', label: '發光' },
+          { type: 'num', label: '發光強度', get: c => ttSub(c, 'glow', 'blur'), def: 0, min: 0, max: 100, dpp: 0.2, dec: 0, unit: 'px', slider: [0, 60], sliderStep: 1, patch: v => T({ glow: { blur: v } }) },
+          { type: 'color', label: '發光顏色', show: c => ttSub(c, 'glow', 'blur') > 0, get: c => ttSub(c, 'glow', 'color'), patch: v => T({ glow: { color: v } }) },
+          { type: 'head', label: '集中線' },
+          { type: 'check', label: '集中線（整個畫面，以字幕為中心）', get: c => !!ttSub(c, 'speedLines', 'on'), patch: v => T({ speedLines: { on: !!v } }) },
+          { type: 'color', label: '集中線顏色', alpha: true, show: c => !!ttSub(c, 'speedLines', 'on'), get: c => ttSub(c, 'speedLines', 'color'), patch: v => T({ speedLines: { color: v } }) },
+          { type: 'head', label: '底形狀' },
+          { type: 'select', label: '形狀', options: Object.keys(SHAPES).map(k => [k, SHAPES[k].name]), get: c => ttSub(c, 'shape', 'kind'), patch: v => T({ shape: { kind: v } }) },
+          { type: 'hint', label: '選了形狀就用形狀取代下面的背景色；「下三分之一條」「跑馬燈」的過場不畫形狀。', show: c => ttSub(c, 'shape', 'kind') !== 'none' },
+          { type: 'color', label: '形狀顏色', show: shapeHas('color'), get: c => ttSub(c, 'shape', 'color'), patch: v => T({ shape: { color: v } }) },
+          { type: 'color', label: '第二色', show: shapeHas('color2'), get: c => ttSub(c, 'shape', 'color2'), patch: v => T({ shape: { color2: v } }) },
+          { type: 'color', label: '框線顏色', show: shapeHas('border'), get: c => ttSub(c, 'shape', 'border'), patch: v => T({ shape: { border: v } }) },
+          { type: 'num', label: '框線粗細', show: shapeHas('borderW'), get: c => ttSub(c, 'shape', 'borderW'), def: 6, min: 0, max: 40, dpp: 0.1, dec: 1, unit: 'px', patch: v => T({ shape: { borderW: v } }) },
+          { type: 'select', label: '尾巴方向', show: shapeHas('tail'), options: [['left', '靠左'], ['center', '置中'], ['right', '靠右'], ['none', '沒有尾巴']], get: c => ttSub(c, 'shape', 'tail'), patch: v => T({ shape: { tail: v } }) },
           { type: 'head', label: '背景' },
           { type: 'color', label: '背景顏色', alpha: true, get: c => ttSub(c, 'bg', 'color'), patch: v => T({ bg: { color: v } }) },
           { type: 'num', label: '內距', get: c => ttSub(c, 'bg', 'padding'), def: 24, min: 0, max: 300, dpp: 0.3, dec: 0, unit: 'px', patch: v => T({ bg: { padding: v } }) },
@@ -1538,7 +1779,7 @@
     DEFAULT_TRANSFORM, DEFAULT_CROP, defaultTransform, defaultCrop, defaultVideo,
     fitRect, clipMatrix, applyMatrix, cropRect, getParam, FIT_OPTIONS, BG_BLUR_DEFAULT,
     drawClipVisual, drawSolid, drawTitle, titleBounds, clipQuad, LOOKS, LOOK_OPTIONS,
-    TRANSITIONS, ease, TITLE_PRESETS, TITLE_STYLES, TEXT_FX, TEXT_LOOP, TEXT_OUT, makeTitle, normTitle, parseAccent, buildAccent, parseSrt, formatSrt, fitCues, planSubtitleMark, wrapText, parseColor, formatColor,
+    TRANSITIONS, ease, TITLE_PRESETS, TITLE_STYLES, TITLE_STYLE_GROUPS, SHAPES, GRADIENTS, TEXT_FX, TEXT_LOOP, TEXT_OUT, makeTitle, normTitle, parseAccent, buildAccent, parseSrt, formatSrt, fitCues, planSubtitleMark, wrapText, parseColor, formatColor,
     ready, get fontLoaded() { return defaultFontLoaded(); }, FONTS, loadFont, onFontLoad, fontIsLoaded,
     inspector: { sections: SECTIONS },
     ensureStyle,                 // 插入詳細內容樣式（.ed-fx-*）；UI 自己的區段也用這套外觀，啟動時先呼叫一次

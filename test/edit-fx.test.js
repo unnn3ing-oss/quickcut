@@ -521,3 +521,138 @@ test('drawClipVisual：濾鏡先在離屏用混合模式調色、還原 alpha，
   const bg = calls(ctx3, 'drawImage')[0][1];
   assert.equal(calls(bg.cx, 'drawImage')[0][1], lk3);
 });
+
+// ---- 4.30 字幕樣式：外觀與底形狀 ----
+// 模仿 core 的 deepMerge（物件逐欄合併、陣列逐格合併），驗證「套用樣式」之後的字幕
+function mergeInto(t, s) {
+  const copy = v => JSON.parse(JSON.stringify(v));
+  for (const [k, v] of Object.entries(s)) {
+    if (Array.isArray(v)) { if (!Array.isArray(t[k])) t[k] = []; v.forEach((e, i) => { if (e && typeof e === 'object' && t[k][i] && typeof t[k][i] === 'object') mergeInto(t[k][i], e); else t[k][i] = copy(e); }); }
+    else if (v && typeof v === 'object' && t[k] && typeof t[k] === 'object') mergeInto(t[k], v);
+    else t[k] = v && typeof v === 'object' ? copy(v) : v;
+  }
+  return t;
+}
+const applyStyle = (title, key) => mergeInto(title, fx.TITLE_STYLES[key].patch);
+const NEW_STYLES = ['varietyYellow', 'burstCard', 'pinkShout', 'bubbleTalk', 'tagBar', 'impact', 'lineBox', 'wordHi', 'neon', 'thinSoft', 'stickerTag', 'rainbow'];
+// 外觀欄位（每個樣式都要設定；樣式不能動其他欄位）
+const LOOK_KEYS = ['shape', 'glow', 'speedLines', 'gradient', 'weight', 'spacing', 'color', 'stroke', 'outlines', 'shadow', 'extrude', 'skew', 'accent'];
+const lookOf = t => { const n = fx.normTitle(t); const o = {}; for (const k of LOOK_KEYS) o[k] = n[k]; return JSON.parse(JSON.stringify(o)); };
+
+test('字幕樣式 4.30：12 種新樣式都在、每個樣式都重設所有新欄位', () => {
+  for (const k of NEW_STYLES) assert.ok(fx.TITLE_STYLES[k], k);
+  for (const [k, st] of Object.entries(fx.TITLE_STYLES)) {
+    const p = st.patch;
+    for (const f of ['shape', 'glow', 'speedLines', 'weight', 'spacing', 'gradient']) assert.ok(p[f] !== undefined, `${k} 要設定 ${f}`);
+    assert.ok(p.gradient.kind, `${k} 要設定漸層種類`);
+    assert.ok(['kind', 'color', 'color2', 'border', 'borderW', 'tail'].every(f => p.shape[f] !== undefined), `${k} 的 shape 欄位要完整`);
+    assert.ok(fx.SHAPES[p.shape.kind], `${k} 的形狀存在`);
+    for (const f of ['text', 'x', 'y', 'font', 'size', 'preset', 'textFx', 'textLoop', 'textOut']) assert.ok(!(f in p), `${k} 不能動 ${f}`);
+  }
+});
+test('字幕樣式 4.30：各樣式 normTitle 之後的新欄位正確', () => {
+  const get = k => fx.normTitle(applyStyle(fx.makeTitle('static', '字幕'), k));
+  assert.equal(get('burstCard').shape.kind, 'burst'); assert.equal(get('burstCard').shape.color2, '#e5141b');
+  assert.equal(get('bubbleTalk').shape.kind, 'bubble'); assert.equal(get('bubbleTalk').shape.tail, 'left');
+  assert.equal(get('tagBar').shape.kind, 'tag');
+  assert.equal(get('impact').speedLines.on, true); assert.ok(get('impact').skew >= 10);
+  assert.equal(get('lineBox').shape.kind, 'lineBox');
+  assert.ok(get('neon').glow.blur > 0);
+  assert.equal(get('thinSoft').weight, 'light'); assert.ok(get('thinSoft').spacing > 0);
+  assert.equal(get('stickerTag').shape.kind, 'sticker');
+  assert.equal(get('rainbow').gradient.kind, 'rainbow'); assert.equal(get('rainbow').gradient.on, true);
+  assert.ok(fx.GRADIENTS.rainbow.stops.length >= 3);
+});
+test('字幕樣式 4.30：從任何新樣式切回基本，外觀跟全新的基本字幕一樣（不殘留）', () => {
+  const fresh = lookOf(applyStyle(fx.makeTitle('static', '字幕'), 'plain'));
+  for (const k of NEW_STYLES.concat(['blueGlow', 'purple3d', 'blackCyan', 'redAccent'])) {
+    const t = applyStyle(fx.makeTitle('static', '字幕'), k);
+    assert.notDeepEqual(lookOf(t), fresh, k + ' 應該和基本不同');
+    applyStyle(t, 'plain');
+    assert.deepEqual(lookOf(t), fresh, k + ' → 基本 有殘留');
+    assert.equal(t.text, '字幕'); assert.equal(t.preset, 'static'); assert.equal(t.x, 0.5); assert.equal(t.y, 0.5);
+  }
+  const t = applyStyle(fx.makeTitle('static', '字幕'), 'burstCard'); applyStyle(t, 'blueGlow');
+  assert.equal(fx.normTitle(t).shape.kind, 'none'); assert.equal(fx.normTitle(t).glow.blur, 0);
+});
+test('字幕樣式 4.30：舊專案（沒有新欄位）normTitle 補預設值', () => {
+  const n = fx.normTitle({ text: '舊', stroke: { color: '#000', width: 4 } });
+  assert.equal(n.shape.kind, 'none'); assert.equal(n.glow.blur, 0); assert.equal(n.speedLines.on, false);
+  assert.equal(n.gradient.kind, 'two'); assert.equal(n.weight, 'auto'); assert.equal(n.spacing, 0);
+});
+
+// 一個套了樣式的字幕片段
+const styledClip = (key, text, extra = {}) => { const t = applyStyle(fx.makeTitle('static', text), key); Object.assign(t, extra); return { id: 't', type: 'title', duration: 90, video: fx.defaultVideo(), title: t }; };
+const NO_BG = { bg: { color: 'rgba(0,0,0,0)', padding: 0, radius: 0 } };
+// 記錄「形狀」畫了哪些點的假 ctx（moveTo／lineTo／roundRect／fillRect，不含文字）
+function shapeMock() {
+  const base = mockCtx(), pts = [];
+  return new Proxy(base, { get(t, k) {
+    if (k === 'pts') return pts;
+    if (k === 'moveTo' || k === 'lineTo') return (x, y) => { pts.push([x, y]); };
+    if (k === 'roundRect' || k === 'fillRect') return (x, y, w, h) => { pts.push([x, y], [x + w, y + h]); };
+    return t[k];
+  }, set(t, k, v) { t[k] = v; return true; } });
+}
+test('字幕樣式 4.30：titleBounds 包含形狀範圍（泡泡尾巴、爆炸、貼紙）', () => {
+  const plainB = fx.titleBounds(styledClip('plain', '你好嗎', NO_BG), 1000, 1000, 0);
+  const bottom = b => b.y + b.h;
+  const bub = fx.titleBounds(styledClip('bubbleTalk', '你好嗎', NO_BG), 1000, 1000, 0);
+  assert.ok(bub.w > plainB.w && bub.y < plainB.y, '泡泡比字大');
+  assert.ok(bottom(bub) - bottom(plainB) > (plainB.y - bub.y) + 10, '尾巴多出的下緣比上緣多');
+  const noTail = styledClip('bubbleTalk', '你好嗎', NO_BG); noTail.title.shape.tail = 'none';
+  const nt = fx.titleBounds(noTail, 1000, 1000, 0);
+  assert.ok(Math.abs((nt.y + nt.h - bottom(plainB)) - (plainB.y - nt.y)) < 1e-6, '沒有尾巴時上下對稱');
+  const burst = fx.titleBounds(styledClip('burstCard', '爆炸'), 1000, 1000, 0), plain2 = fx.titleBounds(styledClip('plain', '爆炸', NO_BG), 1000, 1000, 0);
+  assert.ok(burst.w > plain2.w * 1.5 && burst.h > plain2.h * 1.5, '爆炸範圍大很多');
+  const stk = fx.titleBounds(styledClip('stickerTag', '貼紙', NO_BG), 1000, 1000, 0), plain3 = fx.titleBounds(styledClip('plain', '貼紙', NO_BG), 1000, 1000, 0);
+  assert.ok(stk.w > plain3.w + 20 && stk.h > plain3.h + 20, '貼紙包含白邊');
+  // 形狀真的畫出來的點，都在 titleBounds 裡
+  for (const k of ['burstCard', 'bubbleTalk', 'tagBar', 'lineBox', 'stickerTag']) {
+    for (const align of ['left', 'center', 'right']) {
+      const clip = styledClip(k, '第一行\n第二行字', { align });
+      const b = fx.titleBounds(clip, 1000, 1000, 0), ctx = shapeMock();
+      fx.drawTitle(ctx, clip, 1000, 1000, 0, 30);
+      assert.ok(ctx.pts.length > 0, k + ' 有畫形狀');
+      for (const [x, y] of ctx.pts) assert.ok(x >= b.x - 1 && x <= b.x + b.w + 1 && y >= b.y - 1 && y <= b.y + b.h + 1, `${k}/${align} 畫到範圍外：${x},${y} 不在 ${JSON.stringify(b)}`);
+    }
+  }
+});
+test('字幕樣式 4.30：標籤條靠左、小標縮小；集中線只在 on 時畫、畫在文字後面', () => {
+  const aligns = ctx => ctx.__log.filter(e => e[0] === 'set:textAlign').map(e => e[1]);
+  const c1 = mockCtx(); const clip = styledClip('tagBar', '現場\n排隊三小時');
+  fx.drawTitle(c1, clip, 1000, 1000, 0, 30);
+  assert.ok(aligns(c1).every(a => a === 'left'), '標籤條靠左：' + aligns(c1));
+  assert.equal(clip.title.align, 'center', '不改字幕本身的對齊設定');
+  assert.ok(calls(c1, 'scale').some(e => Math.abs(e[1] - 0.6) < 1e-9), '小標縮小');
+  const withRadial = () => { const c = mockCtx(); return new Proxy(c, { get(t, k) { return k === 'createRadialGradient' ? (...a) => { t.__log.push(['createRadialGradient', ...a]); return { addColorStop() {} }; } : t[k]; }, set(t, k, v) { t[k] = v; return true; } }); };
+  const on = withRadial(); fx.drawTitle(on, styledClip('impact', '蛤？！'), 1000, 1000, 0, 30);
+  assert.equal(calls(on, 'createRadialGradient').length, 1, '集中線畫一次');
+  assert.ok(calls(on, 'fill').length >= 44, '很多條放射線');
+  const off = withRadial(); fx.drawTitle(off, styledClip('plain', '蛤？！'), 1000, 1000, 0, 30);
+  assert.equal(calls(off, 'createRadialGradient').length, 0);
+  const iLine = on.__log.findIndex(e => e[0] === 'createRadialGradient'), iText = on.__log.findIndex(e => e[0] === 'fillText');
+  assert.ok(iLine >= 0 && iLine < iText, '集中線在文字後面');
+});
+test('字幕樣式 4.30：發光、彩虹漸層、細字', () => {
+  const neon = mockCtx(); fx.drawTitle(neon, styledClip('neon', '霓虹'), 1000, 1000, 0, 30);
+  assert.ok(neon.__log.filter(e => e[0] === 'set:shadowBlur').some(e => e[1] > 10), '發光用大的陰影模糊');
+  assert.ok(calls(neon, 'fillText').length >= 3, '發光疊兩次再畫文字');
+  const none = mockCtx(); fx.drawTitle(none, styledClip('plain', '霓虹'), 1000, 1000, 0, 30);
+  assert.equal(calls(none, 'fillText').length, 1);
+  const rb = mockCtx(), stops = [];
+  const wrap = new Proxy(rb, { get(t, k) { return k === 'createLinearGradient' ? (...a) => { t.__log.push(['createLinearGradient', ...a]); return { addColorStop: (o, c) => stops.push(c) }; } : t[k]; }, set(t, k, v) { t[k] = v; return true; } });
+  fx.drawTitle(wrap, styledClip('rainbow', '彩虹漸層'), 1000, 1000, 0, 30);
+  assert.ok(stops.length >= fx.GRADIENTS.rainbow.stops.length && stops.includes('#ff4d4d'), '多色漸層');
+  const grad = calls(rb, 'createLinearGradient')[0];
+  assert.equal(grad[2], 0); assert.equal(grad[4], 0);   // 左右方向（起點終點 y 都是 0）
+  const thin = mockCtx(); fx.drawTitle(thin, styledClip('thinSoft', '細字'), 1000, 1000, 0, 30);
+  const fonts = thin.__log.filter(e => e[0] === 'set:font').map(e => e[1]);
+  assert.ok(fonts.length && fonts.every(f => /^300 /.test(f)), '細字用 300 字重：' + fonts[0]);
+});
+test('字幕樣式 4.30：每個樣式都有合法的 group，且 group 不在 patch 裡', () => {
+  assert.deepEqual(Object.keys(fx.TITLE_STYLE_GROUPS), ['basic', 'variety', 'social']);
+  for (const [k, st] of Object.entries(fx.TITLE_STYLES)) { assert.ok(fx.TITLE_STYLE_GROUPS[st.group], k + ' group'); assert.ok(!('group' in st.patch), k); }
+  const n = g => Object.values(fx.TITLE_STYLES).filter(s => s.group === g).length;
+  assert.equal(n('basic'), 5); assert.equal(n('variety'), 6); assert.equal(n('social'), 6);
+});
