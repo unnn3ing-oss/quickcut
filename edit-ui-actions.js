@@ -111,6 +111,16 @@
     if (r && r.ok) { state.selection = new Set(); UI.refreshSelectionUI(); }
   }
 
+  // 清除空隙：整條軌的空白一次收掉（沒指定軌道就用選取片段所在的軌，沒選取就用第一條影像軌）
+  function closeGaps(trackId) {
+    const p = state.project;
+    if (!trackId) { const id = lastSel(); trackId = id ? p.clips[id].trackId : (C.tracksOf(p, 'video')[0] || {}).id; }
+    const t = C.getTrack(p, trackId);
+    const r = op('清除空隙', q => C.closeAllGaps(q, trackId));
+    if (r && r.ok) say(`已清除「${t ? (UI.trackLabel ? UI.trackLabel(t) : t.name) : ''}」軌 ${r.closed} 個空隙（共 ${tc(r.frames, fps())}）` + (r.skipped ? `；${r.skipped} 個被其他軌的片段擋住沒收` : ''), r.skipped ? 'error' : 'ok');
+    return r;
+  }
+
   // ---- In／Out -----------------------------------------------------------------------
   function markIn() {
     if (state.mode === 'source') { setSourceIO('in'); return; }
@@ -727,7 +737,8 @@
 
     grp('del',
       btn('edDelete', '刪除', '', '刪除選取的片段（留下空隙）。快捷鍵 Delete', () => deleteSelection(false)),
-      btn('edRipple', '波紋刪除', '', '波紋刪除：刪掉並把後面的片段補上來。快捷鍵 Shift+Delete 或 Backspace', () => deleteSelection(true)));
+      btn('edRipple', '波紋刪除', '', '波紋刪除：刪掉並把後面的片段補上來。快捷鍵 Shift+Delete 或 Backspace', () => deleteSelection(true)),
+      btn('edCloseGaps', '清除空隙', '', '清除空隙：把選取片段所在的軌（沒選取時是第一條影像軌）所有片段之間的空白一次收掉，其他軌跟著移、保持同步', () => closeGaps()));
 
     const bl = btn('edToggleLink', '連結選取', '', '連結選取：開啟時連結的影像與聲音一起選、一起動。快捷鍵 ' + MOD + 'Shift+L', toggleLink, 'toggle');
     const bs = btn('edToggleSnap', '吸附', 'N', '吸附：拖曳時貼齊片段邊緣、播放頭、標記、In／Out', toggleSnap, 'toggle');
@@ -861,7 +872,7 @@
 
   Object.assign(UI, {
     MOD, TRANS_SIDE_TEXT, addMarkerHere, openBeatPop, addTitle, addTransitionAt, addTransitionToSelection, applyTextFx,
-    applyTitleStyle, bladeAtPlayhead, buildToolbar, clearInOut, clickSelect, deleteSelection, doEdit, exportSrt,
+    applyTitleStyle, bladeAtPlayhead, buildToolbar, clearInOut, clickSelect, closeGaps, deleteSelection, doEdit, exportSrt,
     flushPop, importSrt, isSrtFile, linkSelection, markClipRange, markIn, markOut, markSubtitle, onKeyDown, onKeyUp,
     op, openFlagPop, openFreezePop, openMarkerPop, openSpeedPop, redo, sanitizeSelection, selectClips,
     selectTransition, setTool, subClips, toggleLink, toggleSnap, undo, updateSubMark, updateToolbar,

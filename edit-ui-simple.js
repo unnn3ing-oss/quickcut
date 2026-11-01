@@ -34,6 +34,7 @@
     redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/>',
     txt: '<path d="M4 7V5h16v2M12 5v14M9 19h6"/>',
     mus: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+    gap: '<path d="M4 5v14M20 5v14M8 12h8M11 9l-3 3 3 3M13 9l3 3-3 3"/>',
     beat: '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
   };
   const svg = k => `<svg viewBox="0 0 24 24" aria-hidden="true">${SVG[k]}</svg>`;
@@ -97,6 +98,7 @@
     btn('edSAdd', 'add', '加素材', '選影片、照片或音樂；會自動依序接在時間軸最後面（也可以直接拖進來）', () => pickFiles('video/*,audio/*,image/*'));
     btn('edSCut', 'cut', '分割', '在播放頭（紅線）把片段切成兩段（快捷鍵 Ctrl／⌘＋B）', () => UI.bladeAtPlayhead());
     btn('edSDel', 'del', '刪除', '刪除選取的片段，後面的自動往前補（快捷鍵 Delete）', () => UI.deleteSelection(true));
+    btn('edSGaps', 'gap', '清除空隙', '把片段之間的空白一次收掉，後面的自動往前補（字幕、音樂跟著移）', () => UI.closeGaps());
     btn('edSUndo', 'undo', '復原', '復原上一步（Ctrl／⌘＋Z）', () => UI.undo());
     btn('edSRedo', 'redo', '重做', '重做（Ctrl／⌘＋Shift＋Z）', () => UI.redo());
     sep();

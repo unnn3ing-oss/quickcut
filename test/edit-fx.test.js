@@ -522,22 +522,22 @@ test('drawClipVisual：濾鏡先在離屏用混合模式調色、還原 alpha，
   assert.equal(calls(bg.cx, 'drawImage')[0][1], lk3);
 });
 
-// ---- 4.20 拆解參考影片加的效果 ----
-test('4.20 負片閃：前半只畫 A、後半只畫 B，中點用 difference 疊白並還原 alpha', () => {
+// ---- 4.30 拆解參考影片加的效果 ----
+test('4.30 負片閃：前半只畫 A、後半只畫 B，中點用 difference 疊白並還原 alpha', () => {
   fx._setCanvasFactory((w, h) => { const cx = mockCtx(); return { width: w, height: h, getContext: () => cx }; });
   const run = t => { const hits = { A: 0, B: 0 }; const ctx = mockCtx();
     fx.TRANSITIONS.invertFlash.draw(ctx, () => { hits.A++; }, () => { hits.B++; }, t, { type: 'invertFlash' }, 320, 180); return hits; };
   assert.deepEqual(run(0.3), { A: 1, B: 0 });
   assert.deepEqual(run(0.7), { A: 0, B: 1 });
 });
-test('4.20 光線劃開：兩邊都畫、邊界上畫一條線（用轉場顏色）', () => {
+test('4.30 光線劃開：兩邊都畫、邊界上畫一條線（用轉場顏色）', () => {
   fx._setCanvasFactory((w, h) => { const cx = mockCtx(); return { width: w, height: h, getContext: () => cx }; });
   const hits = { A: 0, B: 0 }, ctx = mockCtx();
   fx.TRANSITIONS.lineSweep.draw(ctx, () => { hits.A++; }, () => { hits.B++; }, 0.5, { type: 'lineSweep', color: '#ff0000', direction: 'left' }, 320, 180);
   assert.deepEqual(hits, { A: 1, B: 1 });
   assert.ok(calls(ctx, 'fillRect').length >= 2, '光暈＋細線');
 });
-test('4.20 字幕樣式與字體特效：新增的都有名字，畫得出來（含沒有 getTransform 的退回）', () => {
+test('4.30 字幕樣式與字體特效：新增的都有名字，畫得出來（含沒有 getTransform 的退回）', () => {
   for (const k of ['limeKey', 'neonBlue', 'warmGlow', 'dreamWhite']) assert.ok(fx.TITLE_STYLES[k] && fx.TITLE_STYLES[k].name, k);
   for (const k of ['fade', 'fadeLine', 'fadeChar', 'blurIn', 'echo', 'smear']) {
     assert.ok(fx.TEXT_FX[k] && fx.TEXT_FX[k].name, k);

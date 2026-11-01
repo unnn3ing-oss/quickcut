@@ -137,7 +137,7 @@ async function main() {
   ok(await page.isVisible('#edUiMode'), '頁首有「簡易｜專業」切換');
   eq(await pressed(page), [['simple', 'true'], ['pro', 'false']], '切換鈕：簡易 aria-pressed＝true');
   eq(await page.evaluate(() => [...document.querySelectorAll('#edSimpleBar .ed-sbtn')].map(b => b.id)),
-    ['edSAdd', 'edSCut', 'edSDel', 'edSUndo', 'edSRedo', 'edSText', 'edSMusic', 'edSBeat', 'edSAuto'], '大按鈕工具列的按鈕');
+    ['edSAdd', 'edSCut', 'edSDel', 'edSGaps', 'edSUndo', 'edSRedo', 'edSText', 'edSMusic', 'edSBeat', 'edSAuto'], '大按鈕工具列的按鈕');
   eq(await ls(page, 'qc-ui'), null, '還沒切換過：不寫 qc-ui');
   eq(await proj(page, p => p.aspect), 'source', '專案一開始是「依素材」比例');
   await shot(page, 'S1-start');
@@ -183,6 +183,23 @@ async function main() {
   const selNow = () => page.evaluate(() => [...window.QPTEdit.ui.state.selection].sort());
   eq(await selNow(), [land.id, landA.id].sort(), '第一個新片段（含連結的聲音）被選取');
   ok((await page.textContent('#edStatus')).includes('模糊背景'), '狀態列說明加了模糊背景');
+
+  // ---------------------------------------------------------------- 清除空隙
+  console.log('清除空隙');
+  await page.evaluate(id => { const U = window.QPTEdit.ui; U.selectClips([id]); U.deleteSelection(false); }, port.id); await settle(page);
+  T = await byTrack(page);
+  ok(T.V1.length === 3 && T.V1[1].s > T.V1[0].s + T.V1[0].d, '抬起中間的片段：V1 留下空隙');
+  await page.evaluate(id => window.QPTEdit.ui.selectClips([id]), land.id); await settle(page);
+  await page.click('#edSGaps'); await settle(page);
+  T = await byTrack(page);
+  ok(T.V1.every((c, i) => i === 0 ? c.s === 0 : c.s === T.V1[i - 1].s + T.V1[i - 1].d), '按「清除空隙」：V1 又首尾相接');
+  eq(T.A2.map(c => c.s), [0], '整首音樂橫跨空隙：不動、不擋');
+  ok((await page.textContent('#edStatus')).includes('已清除'), `狀態列回報：${await page.textContent('#edStatus')}`);
+  await page.click('#edSGaps'); await settle(page);
+  ok((await page.textContent('#edStatus')).includes('沒有空隙'), '沒空隙時說明原因');
+  await page.click('#edSUndo'); await page.click('#edSUndo'); await settle(page);
+  T = await byTrack(page);
+  eq(T.V1.map(c => c.name), [FILES.land, FILES.port, FILES.mute, FILES.still], '復原兩次：回到原本');
 
   // ---------------------------------------------------------------- 白話軌道名稱
   const thNames = () => page.evaluate(() => [...document.querySelectorAll('.ed-th')].map(h => {

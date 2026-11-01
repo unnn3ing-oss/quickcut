@@ -490,7 +490,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   await settle(page);
   await page.click('.ed-tab[data-tab="trans"]');
   ok(await page.isVisible('#edTransList .ed-gitem'), '轉場分頁：列出轉場縮圖');
-  eq(await page.evaluate(() => document.querySelectorAll('#edTransList .ed-gitem').length), 21, '列出 21 種轉場（8 種基本＋11 種 WebGL＋4.20 的負片閃、光線劃開）');
+  eq(await page.evaluate(() => document.querySelectorAll('#edTransList .ed-gitem').length), 21, '列出 21 種轉場（8 種基本＋11 種 WebGL＋4.30 的負片閃、光線劃開）');
   await page.click('#edTransAdd');
   await settle(page);
   let trs = await proj(page, p => Object.values(p.transitions));
@@ -656,7 +656,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   // ---------------------------------------------------------------- 字幕
   console.log('字幕');
   await page.click('.ed-tab[data-tab="title"]');
-  eq(await page.evaluate(() => document.querySelectorAll('#edTitleList .ed-gitem').length), 7, '字幕分頁：列出 7 種樣式（含 4.20 黑底小字幕）');
+  eq(await page.evaluate(() => document.querySelectorAll('#edTitleList .ed-gitem').length), 7, '字幕分頁：列出 7 種樣式（含 4.30 黑底小字幕）');
   await page.evaluate(() => QPTEdit.ui.seekTimeline(30));
   await page.click('#edTitleAdd');
   await settle(page);
@@ -683,7 +683,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   const heads = () => page.evaluate(() => [...document.querySelectorAll('.ed-panel:not([hidden]) .ed-ghead')].map(h => h.textContent));
   eq(await page.textContent('.ed-tab[data-tab="trans"]'), '特效', '分頁「轉場」改名為「特效」');
   eq(await heads(), ['字幕清單', '字幕過場', '字幕樣式'], '字幕分頁分成「字幕清單」「字幕過場」「字幕樣式」');
-  eq(await page.evaluate(() => document.querySelectorAll('#edTStyleList .ed-gitem').length), 9, '列出 9 種字幕樣式（基本＋4 種附圖樣式＋4.20 的 4 種）');
+  eq(await page.evaluate(() => document.querySelectorAll('#edTStyleList .ed-gitem').length), 9, '列出 9 種字幕樣式（基本＋4 種附圖樣式＋4.30 的 4 種）');
   const [tA, tB] = on(await clips(page), 'V2');
   const tOf = id => proj(page, (p, Q, id) => p.clips[id].title, id);
   const selClip = async id => { const b = await clipBox(page, id); await page.mouse.click(b.x + b.w / 2, b.y + b.h / 2); await settle(page); };
@@ -714,7 +714,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   // 字體特效（在「特效」分頁）
   await page.click('.ed-tab[data-tab="trans"]');
   eq(await heads(), ['轉場特效', '字體特效'], '特效分頁分成「轉場特效」「字體特效」');
-  eq(await page.evaluate(() => [...document.querySelectorAll('#edTextFxList .ed-gitem')].map(i => i.dataset.textfx)), ['none', 'pop', 'popLine', 'popChar', 'jump', 'jumpLine', 'jumpChar', 'fade', 'fadeLine', 'fadeChar', 'blurIn', 'echo', 'smear'], '字體特效：無／彈出／逐行彈出／逐字彈出／下往上跳起／逐行跳起／逐字跳起＋4.20 的淡入／逐行淡入／逐字淡入／模糊浮現／殘影／拖影上衝');
+  eq(await page.evaluate(() => [...document.querySelectorAll('#edTextFxList .ed-gitem')].map(i => i.dataset.textfx)), ['none', 'pop', 'popLine', 'popChar', 'jump', 'jumpLine', 'jumpChar', 'fade', 'fadeLine', 'fadeChar', 'blurIn', 'echo', 'smear'], '字體特效：無／彈出／逐行彈出／逐字彈出／下往上跳起／逐行跳起／逐字跳起＋4.30 的淡入／逐行淡入／逐字淡入／模糊浮現／殘影／拖影上衝');
   await selClip(tA.id);
   await page.click('#edTextFxList .ed-gitem[data-textfx="jumpChar"]');
   await page.click('#edTextFxApply');
@@ -1032,6 +1032,33 @@ async function runViewport(browser, base, fix, [W, H]) {
   await settle(page);
   ok((await proj(page, p => Object.values(p.clips).filter(c => c.type === 'media' && c.video).map(c => c.video.fit))).every(f => f === 'fit'), '復原：回到原本的「符合」');
   ok(await page.$eval('#edAspect', s => [...s.options].some(o => o.value === '1:1')), '輸出比例有 1:1 方形');
+  // 電影黑邊：沒選片段時「詳細內容 → 專案」的下拉選單，一筆復原，畫面上下真的變黑
+  await page.evaluate(() => { QPTEdit.ui.selectClips([]); QPTEdit.ui.seekTimeline(10); });
+  await settle(page);
+  ok(await page.isVisible('#edLetterbox'), '沒選片段：專案區段有「電影黑邊」選單');
+  eq(await page.$$eval('#edLetterbox option', os => os.map(o => o.value)), ['none', '2.39', '2.00', '1.85', '1.50'], '電影黑邊選項：不加／2.39／2.00／1.85／Open Gate');
+  // 預覽畫布上「黑邊內緣往上 4px」那一列最亮的像素（9:16 的橫式影片：沒黑邊時那裡是影片畫面）
+  const lbRow = () => page.evaluate(() => {
+    const cv = document.getElementById('edCanvas'), c = document.createElement('canvas');
+    c.width = cv.width; c.height = cv.height; const g = c.getContext('2d'); g.drawImage(cv, 0, 0);
+    const p = QPTEdit.ui.state.project, bar = Math.round(QPTEdit.core.letterboxBar(Object.assign({}, p, { letterbox: '2.39' })) * cv.height / p.height);
+    const row = y => { const d = g.getImageData(0, y, cv.width, 1).data; let m = 0; for (let i = 0; i < d.length; i += 4) m = Math.max(m, d[i], d[i + 1], d[i + 2]); return m; };
+    return { bar, top: row(bar - 4), bottom: row(cv.height - bar + 3) };
+  });
+  await page.waitForTimeout(300);
+  const lbBefore = await lbRow();
+  await page.selectOption('#edLetterbox', '2.39');
+  await settle(page);
+  eq(await proj(page, p => p.letterbox), '2.39', '選 2.39：專案設定電影黑邊');
+  await page.waitForTimeout(300);
+  const lbPx = await lbRow();
+  ok(lbPx.bar > 100 && lbBefore.top > 40 && lbPx.top < 8 && lbPx.bottom < 8, '預覽畫布：原本是影片的那一列變成黑邊 ' + JSON.stringify([lbBefore, lbPx]));
+  ok((await page.textContent('#edUndoLab')).includes('電影黑邊'), '一筆復原（電影黑邊）');
+  await shot(page, `${tag}-6e-letterbox`);
+  await page.evaluate(() => document.activeElement && document.activeElement.blur());   // 焦點在下拉選單時 Ctrl+Z 交給瀏覽器（同其他欄位）
+  await page.keyboard.press('Control+z');
+  await settle(page);
+  eq([await proj(page, p => p.letterbox), await page.inputValue('#edLetterbox')], ['none', 'none'], '復原：拿掉黑邊，選單也同步');
 
   // ---------------------------------------------------------------- 直式版面（有素材、播放中切換）
   console.log('直式版面：改成 9:16 後預設開啟、播放中切換不中斷');

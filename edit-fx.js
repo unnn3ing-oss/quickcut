@@ -220,7 +220,7 @@
     warm: { op: 'soft-light', color: 'rgb(255,150,60)', a: 0.55 },
     cool: { op: 'soft-light', color: 'rgb(60,140,255)', a: 0.5 },
     mono: { op: 'saturation', color: 'rgb(128,128,128)', a: 1 },
-    // 4.20：拆解參考影片（黑柔濾鏡教學）得到的兩種。fn 型：自己畫（c 已經畫好原圖）
+    // 4.30：拆解參考影片（黑柔濾鏡教學）得到的兩種。fn 型：自己畫（c 已經畫好原圖）
     mist: { fn: mistLook },
     film: { fn: filmLook },
   };
@@ -580,7 +580,7 @@
     jump: { name: '下往上跳起' },
     jumpLine: { name: '逐行跳起', line: true },
     jumpChar: { name: '逐字跳起', char: true },
-    // 4.20 拆解參考影片加的
+    // 4.30 拆解參考影片加的
     fade: { name: '淡入' },
     fadeLine: { name: '逐行淡入', line: true },
     fadeChar: { name: '逐字淡入', char: true },
@@ -620,7 +620,7 @@
     redAccent: { name: '黑邊強調紅', sample: '進行*瘋狂*的',
       patch: { color: '#fff8ec', gradient: { on: false, color: '#8fd8ff' }, stroke: { color: '#141414', width: 7 }, outlines: outlinesOf(),
         shadow: NO_SHADOW, extrude: { color: '#141414', depth: 8, angle: 45 }, skew: 10, accent: '#e5141b' } },
-    // 4.20 拆解參考影片的字幕：發光都用「不偏移的同色陰影」做（陰影只加在最底層，所以不會吃掉字的邊緣）
+    // 4.30 拆解參考影片的字幕：發光都用「不偏移的同色陰影」做（陰影只加在最底層，所以不會吃掉字的邊緣）
     limeKey: { name: '螢光綠重點', sample: '快速',
       patch: { color: '#d4f58c', gradient: { on: false, color: '#8fd8ff' }, stroke: { color: '#000000', width: 0 }, outlines: outlinesOf(),
         shadow: { color: 'rgba(0,0,0,.45)', blur: 10, x: 0, y: 3 }, extrude: NO_EXTRUDE, skew: 0, accent: '#ffffff' } },
@@ -642,7 +642,7 @@
     crawl: { name: '橫向跑馬燈', defaults: { size: 56, align: 'left', x: 0.5, y: 0.9, bg: { color: 'rgba(0,0,0,0.55)', padding: 14, radius: 0 } } },
     typewriter: { name: '打字機（逐字）', defaults: { size: 80, align: 'center', x: 0.5, y: 0.5, bg: { color: 'rgba(0,0,0,0)', padding: 24, radius: 8 } } },
     fadeUp: { name: '淡入上移', defaults: { size: 80, align: 'center', x: 0.5, y: 0.5, bg: { color: 'rgba(0,0,0,0)', padding: 24, radius: 8 } } },
-    // 4.20：參考影片教學段落的旁白字幕——畫面下方、小字、貼身的黑底
+    // 4.30：參考影片教學段落的旁白字幕——畫面下方、小字、貼身的黑底
     caption: { name: '黑底小字幕', defaults: { size: 36, align: 'center', x: 0.5, y: 0.8, bg: { color: 'rgba(0,0,0,0.85)', padding: 10, radius: 2 } } },
   };
   function makeTitle(preset, text) {
@@ -1096,7 +1096,7 @@
       const filter = px > 0.2 ? `blur(${px.toFixed(2)}px)` : null;
       blend(ctx, layer('tA', dA, W, H), layer('tB', dB, W, H), u, W, H, { filter }, { filter });
     }),
-    // 4.20 負片閃：參考影片 6.4 秒「先收藏起來」→「黑柔效果」字卡，中間只有 1 格負片。
+    // 4.30 負片閃：參考影片 6.4 秒「先收藏起來」→「黑柔效果」字卡，中間只有 1 格負片。
     //   前半畫 A、後半畫 B（中點硬切），只有中點前後 10% 是負片（中點最強）——不管轉場拉多長，看起來都是「一閃」。
     //   負片＝和白色做 difference；畫在離屏再用原圖 destination-in 還原 alpha，透明的地方（單邊轉場）不會變成白色。
     invertFlash: defineTransition('負片閃', (ctx, dA, dB, u, o, W, H) => {
@@ -1113,7 +1113,7 @@
       }
       ctx.drawImage(s.canvas, 0, 0);
     }),
-    // 4.20 光線劃開：參考影片 1 秒處一條細細的亮線橫掃過畫面。做成「擦拭＋邊界上一條發光的線」，線的顏色可改（預設白）。
+    // 4.30 光線劃開：參考影片 1 秒處一條細細的亮線橫掃過畫面。做成「擦拭＋邊界上一條發光的線」，線的顏色可改（預設白）。
     lineSweep: defineTransition('光線劃開', (ctx, dA, dB, u, o, W, H) => {
       TRANSITIONS.wipe.draw(ctx, dA, dB, u, { direction: o.direction }, W, H);
       const [dx] = dirOf(o), k = Math.min(W, H) / 1080;
