@@ -1088,6 +1088,33 @@
     return rippleReason(tx(p, q => { closeRanges(q, [[from, next.start]]); return { removed: next.start - from, from }; }), '無法刪除空隙');
   });
 
+  // 清除整條軌的空隙：開頭的空白＋片段之間的空隙全部收合（所有未鎖定軌一起收，保持同步）。
+  // 一次收不了（別的軌在空隙裡有片段擋住）就從後面往前一個一個收，收得了的收、擋住的留著，回報 skipped。
+  // trackId 沒給就用第一條影像軌。回傳 { closed, skipped, frames }
+  const closeAllGaps = guard((p, trackId) => {
+    const t = trackId ? getTrack(p, trackId) : tracksOf(p, 'video')[0];
+    if (!t) return fail('找不到這條軌道');
+    if (t.locked) return fail(`「${t.name}」軌已鎖定，不能修改`);
+    const gaps = [];
+    let end = 0;
+    for (const c of clipsOnTrack(p, t.id)) {
+      if (c.start > end) gaps.push([end, c.start]);
+      end = Math.max(end, clipEnd(c));
+    }
+    if (!gaps.length) return fail(`「${t.name}」軌沒有空隙`);
+    const total = gaps.reduce((s, [a, b]) => s + b - a, 0);
+    const all = tx(p, q => { closeRanges(q, gaps); return { closed: gaps.length, skipped: 0, frames: total }; });
+    if (all.ok) return all;
+    let closed = 0, frames = 0, last = all;
+    for (let i = gaps.length - 1; i >= 0; i--) {
+      const g = gaps[i];
+      const r = tx(p, q => { closeRanges(q, [g]); return {}; });
+      if (r.ok) { closed++; frames += g[1] - g[0]; } else last = r;
+    }
+    if (!closed) return rippleReason(last, '無法清除空隙');
+    return { ok: true, closed, skipped: gaps.length - closed, frames };
+  });
+
   // 滾動修剪：相鄰兩片段的剪接點移動 dFrames，總長不變
   const roll = guard((p, leftId, rightId, dFrames, opts = {}) => {
     const [L, R] = needClips(p, [leftId, rightId]);
@@ -2134,7 +2161,7 @@
     audioTransitionPlan, transitionFadeGain,
     checkInvariants,
     // 編輯
-    moveClips, trimEdge, blade, rippleTrim, rippleDelete, deleteGap, lift, roll, slip, slide,
+    moveClips, trimEdge, blade, rippleTrim, rippleDelete, deleteGap, closeAllGaps, lift, roll, slip, slide,
     setInOut, clearInOut, editToTimeline, addClip, link, unlink,
     addMarker, updateMarker, removeMarker, addClipMarker, updateClipMarker, removeClipMarker, setFlags,
     autoEdit, AUTO_STYLES, setSpeed, setRetime, clearRetime, RETIME_PRESETS, retimeCurve, retimeFactor, srcOffset, freezeFrame, addTransition, updateTransition, removeTransition, setClipProps, setFitAll, aspectMismatch,

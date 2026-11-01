@@ -998,6 +998,7 @@
       const gap = !C.clipAt(p, h.trackId, f) && C.clipsOnTrack(p, h.trackId).some(c => c.start > f);
       openMenu(e.clientX, e.clientY, [
         { label: '刪除空隙', disabled: !gap, run: () => op('刪除空隙', q => C.deleteGap(q, h.trackId, f), '已刪除空隙') },
+        { label: '清除這條軌的所有空隙', run: () => UI.closeGaps(h.trackId) },
         { label: '在這裡設播放頭', run: () => seekTimeline(f) },
       ]);
     }

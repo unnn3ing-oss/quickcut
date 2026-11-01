@@ -652,6 +652,35 @@ t('rippleDelete：別的軌擋住失敗不改、鎖定失敗、lift 只刪不補
   return p;
 });
 
+t('closeAllGaps：開頭＋片段之間的空隙一次收掉，其他軌跟著移；擋住的跳過；沒空隙／鎖定', () => {
+  const p = setup();
+  const [a] = put(p, 'mn', 10, 0, 1, { video: V(p) });   // [10,40)
+  const [b] = put(p, 'mn', 50, 0, 1, { video: V(p) });   // [50,80)
+  const [c] = put(p, 'mn', 100, 0, 1, { video: V(p) });  // [100,130)
+  const ti = core.addClip(p, { type: 'title', trackId: V(p, 1), start: 55, duration: 5 });
+  let r = core.closeAllGaps(p);
+  assert.ok(r.ok, r.reason);
+  assert.deepStrictEqual([r.closed, r.skipped, r.frames], [3, 0, 40]);
+  assert.deepStrictEqual([a, b, c].map(i => C(p, i).start), [0, 30, 60]);
+  assert.strictEqual(C(p, ti.id).start, 35, '字幕跟著它上面的畫面移');
+  unchanged(p, () => core.closeAllGaps(p, V(p)), /沒有空隙/);
+  // 第一個空隙被 A1 擋住：跳過它，後面的照收
+  const q = setup();
+  put(q, 'mn', 0, 0, 1, { video: V(q) });                 // [0,30)
+  const [y] = put(q, 'mn', 50, 0, 1, { video: V(q) });     // [50,80)
+  const [z] = put(q, 'mn', 100, 0, 1, { video: V(q) });    // [100,130)
+  put(q, 'ma', 20, 0, 1);                                  // A1 [20,50) 在第一個空隙裡
+  put(q, 'ma', 50, 0, 1);                                  // A1 [50,80)
+  r = core.closeAllGaps(q, V(q));
+  assert.ok(r.ok, r.reason);
+  assert.deepStrictEqual([r.closed, r.skipped, r.frames], [1, 1, 20]);
+  assert.deepStrictEqual([C(q, y).start, C(q, z).start], [50, 80]);
+  lock(q, V(q));
+  unchanged(q, () => core.closeAllGaps(q, V(q)), /鎖定/);
+  unchanged(q, () => core.closeAllGaps(q, 'nope'), /找不到/);
+  return [p, q];
+});
+
 t('deleteGap：收合空隙、不是空隙／最後面／鎖定／別的軌擋住', () => {
   const p = setup();
   put(p, 'mn', 0, 0, 1, { video: V(p) });
