@@ -232,6 +232,7 @@ async function main() {
   ok(D.style.every(s => s.on === s.cls), '風格 .on 與 aria-checked 一致');
   await page.click('#edAutoStyle [data-style="cinema"]'); await settle(page);
   eq(checked((await dlgState(page)).style), 'cinema', '點電影感');
+  ok((await page.textContent('#edAutoStyle [data-style="cinema"]')).includes('上下黑邊'), '電影感的說明提到上下黑邊');
   await page.click('#edAutoStyle [data-style="beat"]'); await settle(page);
   eq(checked((await dlgState(page)).style), 'beat', '點回節奏感');
   await page.click('#edAutoMusic [data-music=""]'); await settle(page);
@@ -271,6 +272,7 @@ async function main() {
   const zx = await proj(page, (p, Q, ids) => ids.map(id => p.clips[id].keyframes['video.transform.zoomX'].map(k => k.v)), V1.map(c => c.id));
   ok(zx.every((v, i) => v.length === 2 && (i % 2 === 0 ? v[0] < v[1] : v[0] > v[1])), `放大、縮小輪流 ${JSON.stringify(zx)}`);
   ok(V1.every(c => !c.look), '節奏感：不加濾鏡');
+  eq(await proj(page, p => p.letterbox), 'none', '節奏感：不加電影黑邊');
   let TR = await transitions(page);
   ok(TR.every(t => t.type === 'dipToColor' && String(t.color).toLowerCase() === '#ffffff'), `節奏感的轉場都是閃白（${TR.length} 個）`);
   ok(TR.every(t => V1.findIndex(c => c.id === t.left) % 2 === 1), '閃白每 2 個剪接點放一個（接在第 2、4…段後）');
@@ -349,7 +351,9 @@ async function main() {
   for (const id of D.sel.filter(id => id !== still)) await page.click(`#edAutoMedia [data-media="${id}"]`);
   await page.click('#edAutoMusic [data-music=""]'); await settle(page);
   eq((await dlgState(page)).sel, [still], '只選照片');
+  await page.click('#edAutoStyle [data-style="cinema"]'); await settle(page);
   await generate(page);
+  eq(await proj(page, p => p.letterbox), '2.39', '電影感：專案加上 2.39 電影黑邊');
   T = await byTrack(page);
   const added = T[vTracks[0]].filter(c => !before7.includes(c.id));
   eq(added.map(c => [c.name, c.s]), [[FILES.still, end2]], `新的一段從原本的結尾（${end2}）開始`);
@@ -357,6 +361,7 @@ async function main() {
   eq(await invariants(page), [], 'checkInvariants：沒有問題');
   await page.keyboard.press('Control+z'); await settle(page);
   eq(await proj(page, p => Object.keys(p.clips).sort()), before7, 'Ctrl+Z：只取消這一批');
+  eq(await proj(page, p => p.letterbox), 'none', 'Ctrl+Z：電影黑邊也一起拿掉');
 
   // ---------------------------------------------------------------- 8. 關閉方式
   console.log('Esc／取消／點背景');

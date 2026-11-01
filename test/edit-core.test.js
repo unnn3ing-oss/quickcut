@@ -2099,3 +2099,75 @@ t('autoEdit 失敗：沒選素材、音訊當畫面、不認得的風格、鎖�
   unchanged(p, () => core.autoEdit(p, { mediaIds: ['mi'] }), /鎖定/);
   return p;
 });
+
+// ---- 電影黑邊（專案層級 p.letterbox） ----------------------------------------------------
+t('電影黑邊：預設不加；setLetterbox 驗證、一筆復原；鎖定軌不影響', () => {
+  const p = setup();
+  assert.strictEqual(p.letterbox, 'none');
+  assert.strictEqual(core.letterboxBar(p), 0);
+  unchanged(p, () => core.setLetterbox(p, '3.00'), /電影黑邊/);
+  unchanged(p, () => core.setLetterbox(p, 'abc'), /電影黑邊/);
+  unchanged(p, () => core.setLetterbox(p, null), /電影黑邊/);
+  for (const tr of p.tracks) lock(p, tr.id);
+  const h = core.createHistory(() => p, () => {});
+  const r = h.run('電影黑邊', q => core.setLetterbox(q, 2.39));        // 數字也收，統一成字串
+  assert.ok(r.ok, r.reason);
+  assert.strictEqual(p.letterbox, '2.39');
+  const c2 = core.clone(p);
+  assert.ok(core.setLetterbox(c2, 2).ok);
+  assert.strictEqual(c2.letterbox, '2.00', '2 → 2.00');
+  assert.ok(h.undo());
+  assert.strictEqual(p.letterbox, 'none');
+  assert.ok(h.redo());
+  assert.strictEqual(p.letterbox, '2.39');
+  for (const v of core.LETTERBOXES) assert.ok(core.setLetterbox(p, v).ok, v);
+  return p;
+});
+
+t('電影黑邊：黑邊高度（16:9、9:16、本來就比目標寬）', () => {
+  const p = setup();
+  core.setAspect(p, '16:9');
+  core.setLetterbox(p, '2.39');
+  assert.strictEqual(core.letterboxBar(p), Math.round((1080 - 1920 / 2.39) / 2));   // 138
+  core.setLetterbox(p, '1.85');
+  assert.strictEqual(core.letterboxBar(p), Math.round((1080 - 1920 / 1.85) / 2));   // 21
+  core.setAspect(p, '9:16');
+  core.setLetterbox(p, '2.39');
+  assert.strictEqual(core.letterboxBar(p), Math.round((1920 - 1080 / 2.39) / 2));   // 734：直式一樣以寬度為準
+  const wide = core.clone(p); wide.width = 2400; wide.height = 1000;               // 比 2.39 還寬：不加
+  assert.strictEqual(core.letterboxBar(wide), 0);
+  return p;
+});
+
+t('電影黑邊：存檔讀回一樣；舊專案沒有＝不加；不認得的值讀回變不加、檢查器會擋', () => {
+  const p = setup();
+  core.setLetterbox(p, '2.00');
+  const q = core.deserialize(core.serialize(p));
+  assert.strictEqual(q.letterbox, '2.00');
+  assert.strictEqual(core.serialize(q), core.serialize(p));
+  const old = JSON.parse(core.serialize(p)); delete old.letterbox;
+  assert.strictEqual(core.deserialize(old).letterbox, 'none');
+  old.letterbox = '9.99';
+  assert.strictEqual(core.deserialize(old).letterbox, 'none');
+  const bad = core.clone(p); bad.letterbox = 'wide';
+  assert.ok(core.checkInvariants(bad).some(m => /電影黑邊/.test(m)));
+  return [p, q];
+});
+
+t('電影黑邊：一鍵成片的電影感順便加 2.39，同一筆復原；其他風格不動原本的設定', () => {
+  const p = setup();
+  const h = core.createHistory(() => p, () => {});
+  const r = h.run('一鍵成片', q => core.autoEdit(q, { mediaIds: ['mi', 'mi'], style: 'cinema' }));
+  assert.ok(r.ok, r.reason);
+  assert.strictEqual(p.letterbox, '2.39');
+  assert.ok(h.undo());
+  assert.strictEqual(p.letterbox, 'none');
+  assert.strictEqual(Object.keys(p.clips).length, 0, '片段也一起復原');
+  const g = setup();
+  core.setLetterbox(g, '1.85');
+  assert.ok(core.autoEdit(g, { mediaIds: ['mi'], style: 'gentle' }).ok);
+  assert.strictEqual(g.letterbox, '1.85');
+  assert.ok(core.autoEdit(g, { mediaIds: ['mi'], style: 'beat' }).ok);
+  assert.strictEqual(g.letterbox, '1.85');
+  return [p, g];
+});

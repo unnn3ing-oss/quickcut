@@ -1032,6 +1032,33 @@ async function runViewport(browser, base, fix, [W, H]) {
   await settle(page);
   ok((await proj(page, p => Object.values(p.clips).filter(c => c.type === 'media' && c.video).map(c => c.video.fit))).every(f => f === 'fit'), '復原：回到原本的「符合」');
   ok(await page.$eval('#edAspect', s => [...s.options].some(o => o.value === '1:1')), '輸出比例有 1:1 方形');
+  // 電影黑邊：沒選片段時「詳細內容 → 專案」的下拉選單，一筆復原，畫面上下真的變黑
+  await page.evaluate(() => { QPTEdit.ui.selectClips([]); QPTEdit.ui.seekTimeline(10); });
+  await settle(page);
+  ok(await page.isVisible('#edLetterbox'), '沒選片段：專案區段有「電影黑邊」選單');
+  eq(await page.$$eval('#edLetterbox option', os => os.map(o => o.value)), ['none', '2.39', '2.00', '1.85'], '電影黑邊選項：不加／2.39／2.00／1.85');
+  // 預覽畫布上「黑邊內緣往上 4px」那一列最亮的像素（9:16 的橫式影片：沒黑邊時那裡是影片畫面）
+  const lbRow = () => page.evaluate(() => {
+    const cv = document.getElementById('edCanvas'), c = document.createElement('canvas');
+    c.width = cv.width; c.height = cv.height; const g = c.getContext('2d'); g.drawImage(cv, 0, 0);
+    const p = QPTEdit.ui.state.project, bar = Math.round(QPTEdit.core.letterboxBar(Object.assign({}, p, { letterbox: '2.39' })) * cv.height / p.height);
+    const row = y => { const d = g.getImageData(0, y, cv.width, 1).data; let m = 0; for (let i = 0; i < d.length; i += 4) m = Math.max(m, d[i], d[i + 1], d[i + 2]); return m; };
+    return { bar, top: row(bar - 4), bottom: row(cv.height - bar + 3) };
+  });
+  await page.waitForTimeout(300);
+  const lbBefore = await lbRow();
+  await page.selectOption('#edLetterbox', '2.39');
+  await settle(page);
+  eq(await proj(page, p => p.letterbox), '2.39', '選 2.39：專案設定電影黑邊');
+  await page.waitForTimeout(300);
+  const lbPx = await lbRow();
+  ok(lbPx.bar > 100 && lbBefore.top > 40 && lbPx.top < 8 && lbPx.bottom < 8, '預覽畫布：原本是影片的那一列變成黑邊 ' + JSON.stringify([lbBefore, lbPx]));
+  ok((await page.textContent('#edUndoLab')).includes('電影黑邊'), '一筆復原（電影黑邊）');
+  await shot(page, `${tag}-6e-letterbox`);
+  await page.evaluate(() => document.activeElement && document.activeElement.blur());   // 焦點在下拉選單時 Ctrl+Z 交給瀏覽器（同其他欄位）
+  await page.keyboard.press('Control+z');
+  await settle(page);
+  eq([await proj(page, p => p.letterbox), await page.inputValue('#edLetterbox')], ['none', 'none'], '復原：拿掉黑邊，選單也同步');
 
   // ---------------------------------------------------------------- 直式版面（有素材、播放中切換）
   console.log('直式版面：改成 9:16 後預設開啟、播放中切換不中斷');

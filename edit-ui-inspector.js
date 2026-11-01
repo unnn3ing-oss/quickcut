@@ -220,6 +220,19 @@
     for (const [k, t] of [['size', '輸出尺寸'], ['fps', '影格率'], ['dur', '時間軸長度'], ['io', 'In／Out'], ['tracks', '軌道'], ['media', '素材']]) {
       const dt = el('dt', null, t), dd = el('dd'); insp.projRows[k] = dd; dl.append(dt, dd);
     }
+    // 電影黑邊（專案層級，整支影片一起；core.setLetterbox，一筆復原）
+    const lbT = el('dt'), lbD = el('dd');
+    const lbL = el('label', null, '電影黑邊'); lbL.htmlFor = 'edLetterbox'; lbT.appendChild(lbL);
+    const lb = el('select'); lb.id = 'edLetterbox';
+    lb.title = '在畫面上下加黑邊，做出寬銀幕電影的感覺（蓋在影片上、字幕下面，預覽和匯出一樣）';
+    for (const [v, t] of [['none', '不加'], ['2.39', '2.39：1 寬銀幕'], ['2.00', '2：1'], ['1.85', '1.85：1 遮幅']]) { const o = el('option', null, t); o.value = v; lb.appendChild(o); }
+    lb.addEventListener('change', () => {
+      const v = lb.value;
+      const r = op('電影黑邊', p => C.setLetterbox(p, v), v === 'none' ? '已拿掉電影黑邊' : `已加上 ${v}：1 電影黑邊`);
+      if (!r.ok) lb.value = state.project.letterbox || 'none';
+    });
+    lbD.appendChild(lb); dl.append(lbT, lbD);
+    insp.letterbox = lb;
     const tip = el('div', 'ed-hint');
     tip.innerHTML = '點選時間軸上的片段，這裡會出現它的資訊、變形、音訊與速度。<br>在媒體庫雙擊素材可在檢視器預覽，並設定來源的 In／Out。';
     body.append(dl, tip);
@@ -233,6 +246,7 @@
     r.io.textContent = p.inPoint == null && p.outPoint == null ? '未設定' : `${p.inPoint != null ? tc(p.inPoint, p.fps) : '開頭'} – ${p.outPoint != null ? tc(p.outPoint - 1, p.fps) : '結尾'}`;
     r.tracks.textContent = `影片 ${C.tracksOf(p, 'video').length}　音訊 ${C.tracksOf(p, 'audio').length}`;
     r.media.textContent = `${R.media.list().length} 個`;
+    if (insp.letterbox) insp.letterbox.value = p.letterbox || 'none';
   }
 
   // ---- 片段資訊 --------------------------------------------------------------------

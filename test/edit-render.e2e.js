@@ -629,6 +629,77 @@ function check(name, ok, detail) {
   check('倒播 2×：0.5 秒約倒退 30 格', pl.revDelta >= 18 && pl.revDelta <= 40 && pl.revRate === -2, pl);
   check('跨片段播放不閃黑', pl.crossed && pl.minBright > 20 && pl.samples > 20, pl);
 
+  // ---------------------------------------------------------------------------------
+  console.log('電影黑邊（compose＝預覽＝匯出）');
+  const lbProject = (w, h, letterbox, withTitle) => ({ w, h, letterbox, withTitle });
+  const lb = await page.evaluate(async cases => {
+    const R = QPTEdit.render, C = QPTEdit.core;
+    const mk = ({ w, h, letterbox, withTitle }) => {
+      const p = T.put(T.project({ width: w, height: h, letterbox }),
+        T.clip('s1', 'v1', { type: 'solid', mediaId: null, duration: 60, solidColor: '#ffffff', audio: null }));
+      if (withTitle) T.put(p, T.clip('t1', 'v2', { type: 'title', mediaId: null, duration: 60, audio: null,
+        title: { text: '字幕在黑邊上 TITLE', preset: 'static', font: 'sans-serif', size: 120, color: '#ffffff', align: 'center',
+          stroke: { color: '#000', width: 0 }, shadow: { color: 'rgba(0,0,0,0)', blur: 0, x: 0, y: 0 },
+          bg: { color: 'rgba(0,0,0,0)', padding: 24, radius: 8 }, lineHeight: 1.25, x: 0.5, y: 0.04 } }));
+      else T.put(p, T.clip('s2', 'v2', { type: 'solid', mediaId: null, duration: 60, solidColor: '#00ff00', audio: null }));   // V2 一般畫面也在黑邊下面
+      return p;
+    };
+    // 一列的平均亮度（0~255），x 取中間 80%
+    const rowMean = (g, w, y) => { const d = g.getImageData(Math.round(w * 0.1), y, Math.round(w * 0.8), 1).data; return T.mean(d); };
+    const rowWhite = (g, w, y0, y1) => { const d = g.getImageData(0, y0, w, y1 - y0).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] > 200 && d[i + 1] > 200 && d[i + 2] > 200) n++; return n; };
+    const out = [];
+    for (const cs of cases) {
+      const p = mk(cs), bar = C.letterboxBar(p);
+      const o = { cs, bar, problems: C.checkInvariants(p) };
+      // compose 畫在原尺寸
+      const cv = T.canvas(p.width, p.height), g = cv.getContext('2d');
+      await R.renderFrame(g, p, 10);
+      o.full = { top: rowMean(g, p.width, Math.max(0, bar - 3)), in: rowMean(g, p.width, bar + 3), mid: rowMean(g, p.width, p.height >> 1),
+        bottom: rowMean(g, p.width, Math.min(p.height - 1, p.height - bar + 2)), barWhite: bar ? rowWhite(g, p.width, 0, bar) : 0 };
+      // 預覽：播放器的縮小畫布（同一支 compose）
+      const pc = T.canvas(10, 10); document.body.appendChild(pc);
+      const player = R.createPlayer({ canvas: pc, getProject: () => p, maxSize: 320 });
+      player.seek(10);
+      await T.sleep(250);
+      const k = pc.height / p.height, pg = pc.getContext('2d'), pb = Math.round(bar * k);
+      o.preview = { size: [pc.width, pc.height], top: rowMean(pg, pc.width, Math.max(0, pb - 2)), in: rowMean(pg, pc.width, pb + 2), mid: rowMean(pg, pc.width, pc.height >> 1),
+        bottom: rowMean(pg, pc.width, Math.min(pc.height - 1, pc.height - pb + 1)) };
+      player.dispose(); pc.remove();
+      out.push(o);
+    }
+    return out;
+  }, [lbProject(1280, 720, '2.39', false), lbProject(1280, 720, '2.39', true), lbProject(1080, 1920, '2.39', false), lbProject(1280, 720, 'none', false), lbProject(1280, 720, '1.85', false)]);
+  const [lb169, lbTitle, lb916, lbNone, lb185] = lb;
+  const barOk = o => o.full.top < 5 && o.full.bottom < 5 && o.full.in > 60 && o.full.mid > 60 && o.preview.top < 10 && o.preview.bottom < 10 && o.preview.in > 60 && o.preview.mid > 60;   // 畫面是 V2 的綠色（平均 85）
+  check('16:9＋2.39：上下各 92px 黑邊（compose 原尺寸與預覽播放器都一樣），V2 的畫面也在黑邊下面', lb169.bar === 92 && barOk(lb169) && lb169.problems.length === 0, lb169);
+  check('9:16＋2.39：黑邊一樣以寬度為準（各 734px）', lb916.bar === 734 && barOk(lb916), lb916);
+  check('1.85：黑邊比較薄（720p 各 14px）', lb185.bar === 14 && barOk(lb185), lb185);
+  check('不加黑邊：上下邊緣就是畫面', lbNone.bar === 0 && lbNone.full.top > 60 && lbNone.full.bottom > 60 && lbNone.preview.top > 60 && lbNone.preview.bottom > 60, lbNone);
+  check('字幕蓋在黑邊上面（黑邊裡看得到白字）', lbTitle.full.barWhite > 200 && lb169.full.barWhite === 0, { title: lbTitle.full.barWhite, none: lb169.full.barWhite });
+
+  // 匯出：真的跑 exporter.run（edit-export.js 逐格 drawFrame → render.compose → 編碼），再用 ffmpeg 解第 5 格
+  await page.addScriptTag({ url: '/repo/edit-export.js' });
+  const ex = await page.evaluate(async () => {
+    const p = T.put(T.project({ width: 640, height: 360, letterbox: '2.39' }),
+      T.clip('s1', 'v1', { type: 'solid', mediaId: null, duration: 15, solidColor: '#ffffff', audio: null }));
+    try {
+      const r = await QPTEdit.exporter.run({ project: p, from: 0, to: 15, quality: 'small', container: 'webm' });
+      const b = new Uint8Array(await r.blob.arrayBuffer());
+      let s = '';
+      for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+      return { b64: btoa(s), codec: r.codecs && r.codecs.label, bar: QPTEdit.core.letterboxBar(p) };
+    } catch (e) { return { err: String(e && e.message || e) }; }
+  });
+  if (ex.err) check('匯出（webm）成功', false, ex.err);
+  else {
+    const file = path.join(os.tmpdir(), 'qc-letterbox-export.webm');
+    fs.writeFileSync(file, Buffer.from(ex.b64, 'base64'));
+    const raw = execFileSync('ffmpeg', ['-v', 'error', '-i', file, '-vf', "select='eq(n\\,5)'", '-vsync', '0', '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'gray', '-']);
+    const W = 640, row = y => { let s = 0; for (let x = 64; x < W - 64; x++) s += raw[y * W + x]; return s / (W - 128); };
+    const e = { codec: ex.codec, bar: ex.bar, bytes: raw.length, top: row(20), edgeIn: row(ex.bar + 6), mid: row(180), bottom: row(340) };
+    check('匯出檔案的畫面也有一樣的黑邊（ffmpeg 解出來：黑邊 < 20、畫面 > 200）', raw.length === 640 * 360 && e.bar === 46 && e.top < 20 && e.bottom < 20 && e.mid > 200 && e.edgeIn > 200, e);
+  }
+
   await browser.close();
   srv.close();
   console.log(`\n${pass} 通過，${fail} 失敗`);
