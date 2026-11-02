@@ -1140,7 +1140,7 @@ async function runViewport(browser, base, fix, [W, H]) {
     return { inRow: !!document.querySelector('.ed-mk-row .ed-mk'), inRuler: !!document.querySelector('.ed-ruler .ed-mk'), below: m.top >= r.bottom - 1, name: (document.querySelector('.ed-mk .ed-mk-name') || {}).textContent || '' };
   });
   ok(mkGeo.inRow && !mkGeo.inRuler && mkGeo.below, '標記畫在時間尺下方的「標記」列 ' + JSON.stringify(mkGeo));
-  // 4.50：拖時間尺時，播放頭吸附到剪接點（吸附開著；Alt 不吸）
+  // 4.50：拖時間尺時，播放頭吸附到剪接點（吸附開著；4.60 起按住 Shift 不吸，Alt 改成拖曳複製）
   {
     const ce = await proj(page, p => { const v1 = p.tracks.find(t => t.name === 'V1'); const cs = Object.values(p.clips).filter(c => c.trackId === v1.id).sort((a, b) => a.start - b.start); return cs[0].start + cs[0].duration; });
     const ry = await page.evaluate(() => { const r = document.querySelector('.ed-ruler').getBoundingClientRect(); return r.top + r.height / 2; });
@@ -1150,8 +1150,8 @@ async function runViewport(browser, base, fix, [W, H]) {
     if (!snapOn) await page.keyboard.press('n');
     await page.mouse.click(x0 + 8, ry); await settle(page);
     eq(await state(page, 'playhead'), ce, `點時間尺在剪接點旁 8px：播放頭吸到剪接點（${ce}）`);
-    await page.keyboard.down('Alt'); await page.mouse.click(x0 + 8, ry); await page.keyboard.up('Alt'); await settle(page);
-    ok(await state(page, 'playhead') !== ce, '按住 Alt：不吸附');
+    await page.keyboard.down('Shift'); await page.mouse.click(x0 + 8, ry); await page.keyboard.up('Shift'); await settle(page);
+    ok(await state(page, 'playhead') !== ce, '按住 Shift：不吸附');
     await page.keyboard.press('n');
     await page.mouse.click(x0 + 8, ry); await settle(page);
     ok(await state(page, 'playhead') !== ce, '吸附關掉：不吸附');
@@ -1870,12 +1870,13 @@ async function runLayoutTests(browser, base, [W, H]) {
     fade = await page.evaluate(() => { const c = document.getElementById('edToolbar').classList; return [c.contains('fade-l'), c.contains('fade-r')]; });
     eq(fade, [true, false], '捲到最右：只有左邊顯示漸層遮罩');
     const pos = await page.evaluate(() => {
-      const t = document.getElementById('edToolbar').getBoundingClientRect(), u = document.getElementById('edUndo').getBoundingClientRect(), r = document.getElementById('edRedo').getBoundingClientRect();
-      const others = [...document.querySelectorAll('#edToolbar button')].filter(b => b.id !== 'edUndo' && b.id !== 'edRedo').map(b => b.getBoundingClientRect().right);
+      // 4.60：復原／重做右邊多了「歷史紀錄」，三顆一組在最右側
+      const t = document.getElementById('edToolbar').getBoundingClientRect(), u = document.getElementById('edUndo').getBoundingClientRect(), r = document.getElementById('edHistory').getBoundingClientRect();
+      const others = [...document.querySelectorAll('#edToolbar button')].filter(b => !['edUndo', 'edRedo', 'edHistory'].includes(b.id)).map(b => b.getBoundingClientRect().right);
       return { undoL: u.left, redoR: r.right, tbL: t.left, tbR: t.right, maxOther: Math.max(...others), redoTop: r.top, undoTop: u.top, firstTop: document.getElementById('edToolSelect').getBoundingClientRect().top };
     });
-    ok(pos.redoR <= pos.tbR + 1 && pos.undoL >= pos.tbL, `捲到最右：復原／重做都在工具列範圍內（重做右緣 ${Math.round(pos.redoR)} ≤ ${Math.round(pos.tbR)}）`);
-    ok(pos.redoR > pos.maxOther && pos.undoL > pos.maxOther - 1 && pos.tbR - pos.redoR < 30, '復原／重做是這一排最右側的兩顆，貼在尾端');
+    ok(pos.redoR <= pos.tbR + 1 && pos.undoL >= pos.tbL, `捲到最右：復原／重做／歷史紀錄都在工具列範圍內（右緣 ${Math.round(pos.redoR)} ≤ ${Math.round(pos.tbR)}）`);
+    ok(pos.redoR > pos.maxOther && pos.undoL > pos.maxOther - 1 && pos.tbR - pos.redoR < 30, '復原／重做／歷史紀錄是這一排最右側的三顆，貼在尾端');
     eq([Math.round(pos.redoTop), Math.round(pos.undoTop)], [Math.round(pos.firstTop), Math.round(pos.firstTop)], '復原／重做和其他按鈕在同一排');
     await shot(page, `${tag}-L1-toolbar-scrolled-end`);
     // 鍵盤移到被捲出去的按鈕：瀏覽器會自動捲進來
@@ -2331,6 +2332,182 @@ async function runRetimeTests(browser, base, fix, [W, H]) {
   return problems;
 }
 
+// ---- 4.60：複製／貼上、再製、Alt 拖曳複製、貼上屬性、標記跳轉、時間碼輸入、歷史紀錄、軌道高度 --------------------------
+async function runClipboardTests(browser, base, fix, [W, H]) {
+  console.log(`\n==== 4.60 操作手感 ${W}x${H} ====`);
+  const problems = [];
+  const ctx = await browser.newContext({ viewport: { width: W, height: H } });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => problems.push('pageerror: ' + e.message));
+  page.on('console', m => { if (m.type() === 'error') problems.push('console.error: ' + m.text()); });
+  await page.goto(base);
+  await settle(page);
+  await page.setInputFiles('#edFile', [{ name: FILES.land, mimeType: 'video/webm', buffer: fs.readFileSync(path.join(fix, FILES.land)) }, { name: FILES.still, mimeType: 'image/png', buffer: fs.readFileSync(path.join(fix, FILES.still)) }]);
+  await page.waitForFunction(() => QPTEdit.render.media.list().length === 2 && QPTEdit.render.media.list().every(m => m.duration > 0 || m.kind === 'image'), null, { timeout: 30000 });
+  await settle(page);
+  // 影片 2 秒（連結聲音）在 [0,60)，圖片在 [60,120)
+  const [vid, aud, img] = await page.evaluate(() => {
+    const Q = QPTEdit, U = Q.uiParts, C = Q.core, p = Q.ui.state.project;
+    const L = Q.render.media.list(), v = L.find(m => m.kind === 'video'), im = L.find(m => m.kind === 'image');
+    const V = C.tracksOf(p, 'video')[0].id, A = C.tracksOf(p, 'audio')[0].id;
+    const r = U.op('放', q => C.editToTimeline(q, { mode: 'overwrite', mediaId: v.id, frame: 0, srcIn: 0, srcOut: 2, trackIds: { video: V, audio: A } }));
+    const r2 = U.op('放', q => C.editToTimeline(q, { mode: 'overwrite', mediaId: im.id, frame: 60, srcIn: 0, srcOut: 2, trackIds: { video: V, audio: null } }));
+    const ids = r.ids.slice().sort((a, b) => (p.clips[a].video ? -1 : 1));
+    Q.ui.zoomFit();
+    return [ids[0], ids[1], r2.ids[0]];
+  });
+  await settle(page);
+  const count = () => proj(page, p => Object.keys(p.clips).length);
+  const n0 = await count();
+
+  // Ctrl+C／Ctrl+V：貼在播放頭，影像＋聲音一起、新的連結群組；播放頭移到貼上的結尾
+  await page.evaluate(id => { QPTEdit.ui.selectClips([id]); QPTEdit.ui.seekTimeline(120); }, vid);   // 播放頭最多到結尾（120）
+  await page.keyboard.press('Control+c'); await settle(page);
+  ok((await statusText(page)).includes('已複製 2 個片段'), '複製：狀態列顯示已複製 2 個片段（連結的聲音一起）');
+  await page.keyboard.press('Control+v'); await settle(page);
+  eq(await count(), n0 + 2, 'Ctrl+V：多兩個片段');
+  let pasted = await proj(page, p => Object.values(p.clips).filter(c => c.start === 120).map(c => ({ kind: c.video ? 'v' : 'a', dur: c.duration, link: c.linkId })));
+  eq(pasted.length, 2, '貼上的影像與聲音都在 120 格（播放頭）');
+  ok(pasted[0].link && pasted[0].link === pasted[1].link, '貼上的影像與聲音互相連結');
+  eq(await state(page, 'playhead'), 180, '貼完播放頭移到貼上的結尾');
+  eq(await page.textContent('#edUndoLab'), '貼上', '復原標籤：貼上');
+  await page.keyboard.press('Control+z'); await settle(page);
+  eq(await count(), n0, 'Ctrl+Z：貼上整個還原');
+
+  // Ctrl+Shift+V：插入貼上，後面的片段往後推
+  await page.evaluate(() => QPTEdit.ui.seekTimeline(60));
+  await page.keyboard.press('Control+Shift+v'); await settle(page);
+  eq(await proj(page, (p, Q, id) => p.clips[id].start, img), 120, 'Ctrl+Shift+V 插入貼上：後面的圖片往後推 60 格');
+  await page.keyboard.press('Control+z'); await settle(page);
+
+  // Ctrl+D：再製一份接在後面
+  await page.evaluate(id => QPTEdit.ui.selectClips([id]), img);
+  await page.keyboard.press('Control+d'); await settle(page);
+  eq(await proj(page, p => Object.values(p.clips).filter(c => c.start === 120 && c.type === 'media').length), 1, 'Ctrl+D：圖片再製一份接在 120 格');
+  await page.keyboard.press('Control+z'); await settle(page);
+
+  // Alt＋拖曳：複製（原片段不動）
+  const b = await clipBox(page, img);
+  const x200 = await frameX(page, 200), x60 = await frameX(page, 60);
+  await drag(page, { x: b.x + b.w / 2, y: b.y + b.h / 2 }, { x: b.x + b.w / 2 + (x200 - x60), y: b.y + b.h / 2 }, { mods: ['Alt'] });
+  eq(await proj(page, (p, Q, id) => p.clips[id].start, img), 60, 'Alt＋拖曳：原本的圖片不動');
+  eq(await count(), n0 + 1, 'Alt＋拖曳：多一份副本');
+  eq(await page.textContent('#edUndoLab'), '複製片段', '復原標籤：複製片段');
+  const dupSel = await page.evaluate(id => [...QPTEdit.ui.state.selection].filter(x => x !== id).length, img);
+  ok(dupSel >= 1, '拖曳複製後選取的是副本');
+  ok(!(await page.evaluate(() => document.getElementById('editApp').classList.contains('dup-drag'))), '放開後拿掉複製游標');
+  await page.keyboard.press('Control+z'); await settle(page);
+  eq(await count(), n0, 'Ctrl+Z：副本拿掉');
+  // 沒按 Alt：一般移動
+  const b2 = await clipBox(page, img);
+  await drag(page, { x: b2.x + b2.w / 2, y: b2.y + b2.h / 2 }, { x: b2.x + b2.w / 2 + (x200 - x60), y: b2.y + b2.h / 2 });
+  eq(await count(), n0, '沒按 Alt：只是移動，片段數不變');
+  ok(await proj(page, (p, Q, id) => p.clips[id].start, img) > 60, '沒按 Alt：圖片被移走');
+  await page.keyboard.press('Control+z'); await settle(page);
+
+  // 右鍵選單有複製／剪下／再製／貼上屬性（拖曳時可能自動捲動過：先縮放到全部看得到）
+  await page.evaluate(() => QPTEdit.ui.zoomFit()); await settle(page);
+  const b3 = await clipBox(page, vid);
+  await page.mouse.click(b3.x + b3.w / 2, b3.y + b3.h / 2, { button: 'right' }); await settle(page);
+  const menu = await page.evaluate(() => [...document.querySelectorAll('.ed-menu button')].map(x => x.textContent));
+  for (const k of ['複製', '剪下', '再製', '貼上屬性']) ok(menu.some(m => m.startsWith(k)), `片段右鍵選單有「${k}」`);
+  await shot(page, '460-clip-menu');
+  await page.keyboard.press('Escape'); await settle(page);
+
+  // 貼上屬性：影片的濾鏡貼到圖片
+  await page.evaluate(id => { const Q = QPTEdit, C = Q.core; Q.uiParts.op('濾鏡', p => C.setClipProps(p, id, { video: { look: C.LOOKS.find(x => x !== 'none'), lookAmt: 70, transform: { posX: 40 } } })); Q.ui.selectClips([id]); }, vid);
+  await page.keyboard.press('Control+c'); await settle(page);
+  await page.evaluate(id => QPTEdit.ui.selectClips([id]), img);
+  await page.keyboard.press('Control+Alt+v'); await settle(page);
+  ok(await page.isVisible('#edPasteAttrs'), 'Ctrl+Alt+V：開出貼上屬性視窗');
+  const boxes = await page.evaluate(() => [...document.querySelectorAll('#edPasteAttrs input[type=checkbox]')].map(c => [c.value, c.checked]));
+  ok(boxes.some(([k]) => k === 'effects') && !boxes.some(([k]) => k === 'title'), '只列出來源有的屬性（影片沒有字幕外觀）');
+  await page.evaluate(() => { for (const c of document.querySelectorAll('#edPasteAttrs input[type=checkbox]')) c.checked = c.value === 'effects'; });
+  await shot(page, '460-paste-attrs');
+  await page.click('#edPasteAttrsOk'); await settle(page);
+  const look = await proj(page, (p, Q, ids) => [p.clips[ids[0]].video.look, p.clips[ids[1]].video.look, p.clips[ids[1]].video.lookAmt, p.clips[ids[1]].video.transform.posX], [vid, img]);
+  eq([look[1], look[2], look[3]], [look[0], 70, 0], '只貼效果：濾鏡過去了、位置沒動');
+  ok(!(await page.isVisible('#edPasteAttrs')), '貼上後視窗關閉');
+
+  // Shift＋↑↓：上一個／下一個標記
+  await page.evaluate(() => { const Q = QPTEdit; for (const f of [30, 90]) Q.uiParts.op('標記', p => Q.core.addMarker(p, { frame: f })); Q.ui.seekTimeline(0); Q.ui.selectClips([]); });
+  await page.keyboard.press('Shift+ArrowDown'); await settle(page);
+  eq(await state(page, 'playhead'), 30, 'Shift+↓：跳到下一個標記');
+  await page.keyboard.press('Shift+ArrowDown'); await settle(page);
+  eq(await state(page, 'playhead'), 90, 'Shift+↓：再跳下一個');
+  await page.keyboard.press('Shift+ArrowUp'); await settle(page);
+  eq(await state(page, 'playhead'), 30, 'Shift+↑：跳回上一個');
+  await page.keyboard.press('ArrowDown'); await settle(page);
+  eq(await state(page, 'playhead'), 60, '沒按 Shift 的 ↓ 還是跳剪輯點');
+
+  // 時間碼輸入
+  await page.click('#edTc'); await settle(page);
+  ok(await page.isVisible('#edTcInput'), '點時間碼：變成輸入框');
+  await page.fill('#edTcInput', '+15'); await shot(page, '460-tc-input');
+  await page.keyboard.press('Enter'); await settle(page);
+  eq(await state(page, 'playhead'), 75, '輸入 +15：往後 15 格');
+  ok(!(await page.isVisible('#edTcInput')) && await page.isVisible('#edTc'), 'Enter 後輸入框收起來');
+  await page.click('#edTc'); await page.fill('#edTcInput', '00:00:01:00'); await page.keyboard.press('Enter'); await settle(page);
+  eq(await state(page, 'playhead'), 30, '輸入 00:00:01:00：跳到 30 格');
+  await page.click('#edTc'); await page.fill('#edTcInput', '亂打'); await page.keyboard.press('Enter'); await settle(page);
+  eq(await state(page, 'playhead'), 30, '看不懂的輸入：播放頭不動');
+  ok((await statusText(page)).includes('看不懂'), '看不懂的輸入：狀態列提示格式');
+  await page.click('#edTc'); await page.fill('#edTcInput', '+5'); await page.keyboard.press('Escape'); await settle(page);
+  eq(await state(page, 'playhead'), 30, 'Esc：取消，不跳');
+
+  // 歷史紀錄：列出步驟，點第 2 筆＝復原 2 步
+  const marks0 = await proj(page, p => p.markers.length);
+  // 工具列先捲到最右（捲動會關掉選單；真人點按鈕不會捲動）
+  const openHist = async () => { await page.evaluate(() => { const tb = document.getElementById('edToolbar'); tb.scrollLeft = tb.scrollWidth; }); await settle(page); await page.click('#edHistory'); await settle(page); };
+  await openHist();
+  const hist = await page.evaluate(() => [...document.querySelectorAll('.ed-hist-menu button')].map(x => x.textContent));
+  ok(hist.some(x => x.includes('目前')), '歷史紀錄選單有「目前」');
+  ok(hist.filter(x => x.startsWith('↶')).length >= 3, '歷史紀錄列出可以復原的步驟');
+  await shot(page, '460-history');
+  await page.evaluate(() => [...document.querySelectorAll('.ed-hist-menu button')].filter(x => x.textContent.startsWith('↶'))[1].click());
+  await settle(page);
+  eq(await proj(page, p => p.markers.length), marks0 - 2, '點第 2 筆：一次復原 2 步（兩個標記都拿掉）');
+  await openHist();
+  ok((await page.evaluate(() => [...document.querySelectorAll('.ed-hist-menu button')].filter(x => x.textContent.startsWith('↻')).length)) === 2, '復原後選單上半列出 2 步可以重做');
+  await page.evaluate(() => [...document.querySelectorAll('.ed-hist-menu button')].filter(x => x.textContent.startsWith('↻')).pop().click());
+  await settle(page);
+  eq(await proj(page, p => p.markers.length), marks0 - 1, '點最近的重做項目：重做 1 步');
+
+  // 軌道高度：拖標頭下緣、雙擊恢復、記在 localStorage、右鍵一次設全部
+  const vId = await proj(page, (p, Q) => Q.core.tracksOf(p, 'video')[0].id);
+  const rowH = () => page.evaluate(id => document.querySelector(`.ed-track[data-track="${id}"]`).getBoundingClientRect().height, vId);
+  const h0 = await rowH();
+  const rz = await page.evaluate(id => { const r = document.querySelector(`.ed-th[data-track="${id}"] .ed-th-resize`).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }, vId);
+  await drag(page, rz, { x: rz.x, y: rz.y + 40 });
+  ok(Math.abs((await rowH()) - (h0 + 40)) <= 1, `拖標頭下緣：軌道變高 40px（${h0} → ${await rowH()}）`);
+  ok((await page.evaluate(() => localStorage.getItem('qc-track-h') || '')).includes(vId), '軌道高度記在 localStorage');
+  await shot(page, '460-track-height');
+  const rz2 = await page.evaluate(id => { const r = document.querySelector(`.ed-th[data-track="${id}"] .ed-th-resize`).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }, vId);
+  await page.mouse.dblclick(rz2.x, rz2.y); await settle(page);
+  eq(await rowH(), h0, '雙擊下緣：恢復標準高度');
+  const th = await page.evaluate(id => { const r = document.querySelector(`.ed-th[data-track="${id}"] .ed-th-name`).getBoundingClientRect(); return { x: r.left + 10, y: r.top + r.height / 2 }; }, vId);
+  await page.mouse.click(th.x, th.y, { button: 'right' }); await settle(page);
+  await page.evaluate(() => [...document.querySelectorAll('.ed-menu button')].find(x => x.textContent.includes('所有軌道高度：高')).click()); await settle(page);
+  ok(await rowH() > h0 * 1.5, '右鍵「所有軌道高度：高」：軌道變高');
+  const aH = await page.evaluate(() => [...document.querySelectorAll('.ed-track.audio')].map(r => r.getBoundingClientRect().height));
+  ok(aH.every(h => h > 50), '音訊軌也一起變高');
+
+  // Ctrl+X：剪下（留空隙）再貼上
+  const after = await proj(page, p => Object.keys(p.clips).length);
+  await page.evaluate(id => { QPTEdit.ui.selectClips([id]); QPTEdit.ui.seekTimeline(0); }, vid);
+  await page.keyboard.press('Control+x'); await settle(page);
+  eq(await proj(page, p => Object.keys(p.clips).length), after - 2, 'Ctrl+X：剪下（影像＋聲音拿掉）');
+  await page.keyboard.press('Control+v'); await settle(page);
+  eq(await proj(page, p => Object.keys(p.clips).length), after, 'Ctrl+V：剪下的片段貼回原位');
+  eq(await invariants(page), [], '4.60 操作後專案沒有問題');
+  // 重新整理：軌道高度還記得
+  await page.reload(); await settle(page);
+  await page.waitForFunction(() => document.querySelector('.ed-track.audio'), null, { timeout: 15000 });
+  ok((await page.evaluate(() => [...document.querySelectorAll('.ed-track.audio')].map(r => r.getBoundingClientRect().height))).every(h => h > 50), '重新整理後軌道高度還記得');
+  await ctx.close();
+  return problems;
+}
+
 (async () => {
   const fix = fixturesDir();
   const { server, base } = await serve();
@@ -2341,6 +2518,7 @@ async function runRetimeTests(browser, base, fix, [W, H]) {
     for (const vp of VIEWPORTS) all = all.concat(await runStageTests(browser, base, vp));
     all = all.concat(await runAnimBeatTests(browser, base, fix, VIEWPORTS[0]));
     all = all.concat(await runRetimeTests(browser, base, fix, VIEWPORTS[0]));
+    all = all.concat(await runClipboardTests(browser, base, fix, VIEWPORTS[0]));
     for (const vp of VIEWPORTS) all = all.concat(await runViewport(browser, base, fix, vp));
   } catch (e) { failed++; console.log('  FAIL 測試中斷：', e && e.stack || e); }
   ok(all.length === 0, '整段流程沒有 console error／頁面例外／CSP 違規' + (all.length ? '：' + all.join(' | ') : ''));

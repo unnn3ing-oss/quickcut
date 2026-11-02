@@ -122,7 +122,7 @@
   Q.ui = { state, get player() { return UI.player; }, say: (m, k) => say(m, k) };
 
   // ---- 偏好（localStorage）：讀寫都可能丟錯（無痕、被封鎖），一律包 try/catch，讀不到就用預設 ----------
-  const THEME_KEY = 'qc-theme', VERT_KEY = 'qc-vert', VERT_H_KEY = 'qc-vert-h', SAFE_KEY = 'qc-safe', COLS_KEY = 'qc-cols', MVIEW_KEY = 'qc-mview';
+  const THEME_KEY = 'qc-theme', VERT_KEY = 'qc-vert', VERT_H_KEY = 'qc-vert-h', SAFE_KEY = 'qc-safe', COLS_KEY = 'qc-cols', MVIEW_KEY = 'qc-mview', TRACK_H_KEY = 'qc-track-h';
   const lsGet = k => { try { return root.localStorage.getItem(k); } catch (_) { return null; } };
   const lsSet = (k, v) => { try { root.localStorage.setItem(k, v); } catch (_) { /* 存不了就算了，只是下次不記得 */ } };
   state.theme = lsGet(THEME_KEY) === 'light' ? 'light' : 'dark';
@@ -230,10 +230,10 @@
     if (r.bottom + 6 + h > vh - 8 && r.top - h - 6 > 8) UI.popEl.style.top = (r.top - h - 6) + 'px';
     return UI.popEl;
   }
-  // items：[{ label, run, disabled, sep, hint }]
-  function openMenu(x, y, items) {
+  // items：[{ label, run, disabled, sep, hint }]；cls：額外的 class（要在量尺寸、定位之前加上）
+  function openMenu(x, y, items, cls) {
     closePop(); closeMenu();
-    UI.menuEl = el('div', 'ed-menu');
+    UI.menuEl = el('div', 'ed-menu' + (cls ? ' ' + cls : ''));
     UI.menuEl.setAttribute('role', 'menu');
     for (const it of items) {
       if (it.sep) { UI.menuEl.appendChild(el('div', 'ed-menu-sep')); continue; }
@@ -255,9 +255,9 @@
 
   Object.assign(UI, {
     $, AUDIO_H, COLS_KEY, DRAG_PX, EDGE_PX, EQ_TYPES, HEAD_W, ICONS, KIND_NAME, MARKER_HEX, MARKER_NAME, MVIEW_KEY,
-    RULER_H, SAFE_KEY, SNAP_PX, SPEEDS, THEME_KEY, VERT_H_KEY, VERT_KEY, VIDEO_H, ZOOM_MIN, app, clamp, clipOf,
+    RULER_H, SAFE_KEY, SNAP_PX, SPEEDS, THEME_KEY, TRACK_H_KEY, VERT_H_KEY, VERT_KEY, VIDEO_H, ZOOM_MIN, app, clamp, clipOf,
     clipTitle, closeMenu, closePop, colors, doc, el, fmtNum, fmtSec, fps, icon, isSubClip, isTextTarget, lastSel,
-    lsSet, mediaOf, newProject, fitPop, openMenu, openPop, readColors, report, say, selIds, state, targetTrack, tc, trackOf,
+    lsGet, lsSet, mediaOf, newProject, fitPop, openMenu, openPop, readColors, report, say, selIds, state, targetTrack, tc, trackOf,
     videoTracksTopFirst,
   });
 })(typeof window !== 'undefined' ? window : globalThis);

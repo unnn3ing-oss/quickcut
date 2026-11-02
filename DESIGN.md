@@ -181,7 +181,7 @@
 - **修剪時間碼**：`startEdgeDrag`／`startRollDrag` 開始時設 `tl.edgeAt = { clipId, edge }`，`renderTimeline` 最後呼叫 `placeEdgeTc()` 依片段元素的位置重新擺 `.ed-edgetc`（覆蓋層每次重畫都會重建，所以狀態放在 `tl.edgeAt`、不放在元素上）；放開／取消時清掉。位置貼在邊緣（`start` 或 `start+duration`）；文字開頭顯示第一格 `start`，尾端顯示**最後一格** `start+duration−1`（同 Premiere 的 Out 點；片段範圍不含 end）。多選修剪只標抓住的那一段。［程式碼］［推論：使用者要求；拖的時候不用另外看狀態列或時間尺］
 - **點軌道標頭＝選取整條軌**（`selectTrack(id, add)`）：點 `.ed-th`（名稱或空白處；`.ed-thb` 按鈕與改名輸入框除外）會 `setTarget`（不另外顯示目的軌道訊息）＋選取 `clipsOnTrack` 的全部片段，primary 是時間最前面的那個，詳細內容就顯示它的調整項目；多選時 `applyProps` 本來就會套用到全部適用的片段，所以不用另寫整軌調整的邏輯。不展開連結（`expandLinked`），因為使用者點的是「這條軌」，選到別條軌的片段會讓詳細內容出現不相干的區段。Shift／Ctrl／⌘：整條都已選取就取消，不然加選。標頭在整條都被選取時加 `.sel`（`refreshSelectionUI` 更新，只換 class 不重畫，雙擊改名不受影響）。多選時詳細內容標題寫「已選取 N 個片段（顯示：…）」，因為「套用到全部」的提示原本只在「資訊」分頁看得到。鎖定的軌一樣能選（方便看設定），改數值時由 core 擋下並說明原因。［程式碼］
 - **標記獨立一列**（4.50）：時間尺下方多一列 `.ed-mk-row`（18px，左邊 `.ed-mk-corner` 寫「標記」），`.ed-ruler-row` 和它包在 sticky 的 `.ed-tl-head` 裡；`RULER_H` 改成整個頂端高度 44（26＋18），覆蓋層、軌道起點都用它。點標記列空白＝`startScrub`（`hitInfo` 把 `.ed-mklane` 當 ruler）。［程式碼］［推論：標記和時間碼、In／Out 旗子疊在 26px 的時間尺上很難點］
-- **播放頭吸附**（4.50）：`startScrub` 開始時取一次 `snapTargets(p, {})`（片段頭尾、標記、In／Out，不含播放頭本身），每次移動 `snap(f, targets, min(SNAP_PX / k, 3 秒))`，有吸到就 `showSnap`；Alt 不吸。［程式碼］［推論：使用者說的「±3 秒」解讀為上限，放大時仍用螢幕距離，否則很難停在剪接點附近］
+- **播放頭吸附**（4.50）：`startScrub` 開始時取一次 `snapTargets(p, {})`（片段頭尾、標記、In／Out，不含播放頭本身），每次移動 `snap(f, targets, min(SNAP_PX / k, 3 秒))`，有吸到就 `showSnap`；Shift 不吸（4.60 前是 Alt）。［程式碼］［推論：使用者說的「±3 秒」解讀為上限，放大時仍用螢幕距離，否則很難停在剪接點附近］
 - **時間軸空白處點一下只取消選取**：`onLaneDown` 沒拖動時只清空選取（有按 Shift／Ctrl 時保留），不再移動播放頭；軌道下方沒有軌道的空白也一樣（捲軸除外），而且也能從那裡開始框選。框選每次移動都用**當下**的 `tl.inner` 位置換算座標：拖到邊緣自動捲動時，起點跟著內容走（以前用按下時的位置，捲動後框會停在螢幕上、捲進來的片段選不到）。播放頭只在點／拖時間尺與紅色箭頭（`startScrub`）時移動。［程式碼］［推論：使用者要求；避免想取消選取時播放頭跟著跳走］
 - **字幕樣式**只 patch 外觀欄位，不動 `text`／`font`／`preset`／位置；`plain` 把所有外觀欄位設回 `BASE_TITLE` 的值，用來清掉別的樣式。套用（按鈕／雙擊／拖曳）都走 `applyTitlePatch`，只改選取中的字幕片段，沒有就顯示錯誤；整次一筆復原。從庫拖到時間軸時，`dropTarget` 用 `clipAt` 找游標下的片段，只有字幕片段會亮起可放。［程式碼］
 - **字幕樣式與底形狀（4.30）**：底形狀（`SHAPES`：burst 爆炸、bubble 對話框、tag 標籤條、lineBox 每行圓角底、sticker 貼紙）畫在 `paintBackdrop`，選了形狀就取代 bg 的圓角底；`titleLocalBox` 用形狀的範圍取代內距，所以選取框和 `clipQuad` 包得到泡泡尾巴、爆炸。集中線（`speedLines`）是整個畫面的，在 `drawTitle` 套用片段變形前畫，焦點是字幕中心變形後的位置。發光是陰影疊兩次。彩虹／日落漸層（`GRADIENTS`）是左到右多色；逐字畫時每個字各自一整條（已知限制）。`weight: 'light'` 時粗體字型改用系統 300 字重；字距 `spacing`（字級倍數）用 `ctx.letterSpacing`，會算進量測，不支援的瀏覽器就沒有字距。標籤條在 `drawTitle` 臨時靠左，不改設定。**每個樣式 patch 都重設所有新欄位**，否則切換會殘留；`group`（basic／variety／social，名稱在 `TITLE_STYLE_GROUPS`）不在 patch 裡。舊專案沒有這些欄位時 `normTitle` 補預設，畫面不變（317 組畫圖紀錄比對過）。［程式碼］
@@ -475,3 +475,38 @@
 - 可行：網頁可以做，但成本高。做法是匯入後（或按下「穩定」時）用 `<video>` 逐格 seek＋縮小畫面，算相鄰格的位移／旋轉（灰階金字塔＋區塊比對或特徵點光流，最好在 Web Worker 裡跑），累積成相機軌跡、平滑後求每格的補償變形，存成片段的「穩定軌跡」（每格 dx、dy、rot、裁切縮放），在 `baseMatrix` 前套用。［推論］
 - 成本：1 分鐘 30fps 影片要分析 1800 格，瀏覽器裡約 1～3 分鐘（視解析度與電腦）；軌跡資料約 1800×3 個數字，存進專案沒問題。要處理快門果凍、滾動快門、移動物體干擾等，品質很難到 DaVinci／手機內建防震的水準。［推論］
 - 建議：先做「簡易穩定」（只補平移＋旋轉、自動放大裁掉黑邊、強度可調），獨立一個版本（預估是主要功能 → 至少十位數升版）。`edit-stab.js` 已預留位置。［推論］
+
+## 13. 4.60：操作手感（複製貼上、拖曳複製、貼上屬性、標記跳轉、時間碼輸入、歷史紀錄、軌道高度）
+
+### 剪貼簿是純資料
+- `core.copyClips(p, ids, {linked})` 回傳快照：片段副本（`start` 改成相對最早片段）、原本的軌道（id、種類、同種類第幾條）、兩側（有的那側）都在裡面的轉場、片段用到的 LUT 資料。之後改原片段不影響剪貼簿。［程式碼］
+- `core.pasteClips(p, board, frame, {mode, shift})`：先找軌道（同 id 且同種類 → 同種類第幾條），`shift` 讓主要種類換軌（拖曳複製用）；覆蓋＝每段 `clearRange`、插入＝`insertSpace(總長)`。重新發片段 id、連結群組 id（`L`）、片段標記 id（`k`）、轉場 id（`x`）；LUT 貼到別的專案時資料一樣就沿用、沒有就加。fps 不同直接拒絕（格數會錯）。整次一個 `tx`，失敗不改專案。［程式碼］
+- 剪貼簿放在 `UI.clipboard`（記憶體），不寫 localStorage：素材不在剪貼簿裡，跨分頁貼上多半找不到媒體。［推論］
+- 片段放回**原本的軌道**，不跟著目的軌道走：影像／聲音的相對位置一定對得上，行為好預測；要換軌就貼完再拖。［推論：DaVinci 依自動選取軌道、Premiere 依目標軌道，各有規則，原軌最單純］
+
+### Ctrl／⌘＋V 和媒體庫的「貼上檔案」共用
+- 媒體庫原本靠 `paste` 事件貼上檔案，keydown 擋掉 Ctrl＋V 就收不到。所以 keydown **不 preventDefault**，只記下 `UI.pendingPaste = { mode }`（Shift＝插入），由 `edit-ui-media.js` 的 paste 監聽決定：有檔案就匯入，沒有就 `pasteClipboard(mode)`；瀏覽器沒送 paste 事件時 150ms 計時器補貼。［程式碼］
+- 貼上屬性用 `e.code === 'KeyV'` 判斷：Mac 的 ⌥＋V 會讓 `e.key` 變成「√」。［程式碼］
+
+### Alt＝拖曳複製，Shift＝暫時不吸附
+- 使用者選擇和 DaVinci／Premiere 一致：Alt＋拖曳複製；原本 Alt 的「這次不吸附」（片段拖曳、修剪、滾動、滑移／滑動、拖時間尺）全部改成 Shift。拖曳中按 Shift 沒有其他意義（Shift 點選加選只在按下那一刻判斷）。預覽上拖控制框的「Alt 不吸中線」沒改（那邊沒有衝突）。［使用者決定］
+- `startMoveDrag` 每次移動都看 `ev.altKey`：有就 `core.duplicateClips`（＝copyClips＋pasteClips 到「移動後」的位置），沒有就 `moveClips`；`live.run` 每次都回到拖曳前再套用，所以拖曳中按放 Alt 可以切換（要動一下滑鼠才會重算）。放開後選取副本。`.dup-drag` 讓游標變成 copy。［程式碼］
+
+### 貼上屬性
+- `core.pasteAttributes(p, board, ids, parts)`，parts：`effects`（`video` 裡 transform／crop／fit 以外的欄位整組取代，所以來源沒有的效果會被清掉）、`transform`（transform、crop、fit，連同 `video.transform.*`／`video.crop.*` 的關鍵影格，`pruneKeyframes` 修到片段長度內）、`audio`（整組，淡入淡出夾在片段長度內）、`title`（整組，保留目標的 `text`；選字變色的標記在 text 裡，所以也保留）。每種屬性取剪貼簿裡第一個有它的片段；種類不同的目標略過，全部略過才算失敗。［程式碼］
+- 對話框只列來源有的項目，勾選記在 `qc-paste-attrs`。［程式碼］
+
+### 標記跳轉、時間碼輸入
+- Shift＋↑↓ 跳 `p.markers`（時間軸標記，含節拍標記）；片段標記不算。［程式碼］
+- `core.parseTimecode(text, fps, current)` 是純函式（有單元測試）：先 NFKC（全形數字、全形冒號）；冒號／點分隔從右邊對齊成「時:分:秒:格」；純數字每兩位一組從右邊對齊（同 DaVinci）；`s／m／h／f` 單位；`+／-` 開頭＝相對目前位置，**純數字＝格數**（`+100` 是 100 格；DaVinci 會把它當時間碼 00:00:01:00）。超出範圍夾到 0～結尾。［程式碼］［推論：相對位移多半是「往後幾格」，用格數最直覺］
+
+### 歷史紀錄
+- `history.list()` 回傳兩個標籤陣列（復原：新到舊；重做：近到遠），`undoSteps(n)`／`redoSteps(n)` 一次多步，每步都是原本的 undo／redo，所以快照與事件和一般復原一樣。選單最多列 40 筆（堆疊上限本來就是 100）。［程式碼］
+- 工具列 `#edHistory` 放在重做右邊；選單靠按鈕右緣往左展開。`openMenu` 多一個 `cls` 參數，在量尺寸前加 class（不然 `min-width` 沒算進去，會超出畫面）。整頁 scroll（捕捉階段）會關掉選單，e2e 要先把工具列捲到底再點。［程式碼］
+
+### 軌道高度
+- 只是檢視設定：`qc-track-h`（{ 軌道 id: 高度 px }），不進專案、不進復原。範圍影片 32～200、音訊 28～200；等於標準就刪掉那筆。拖標頭下緣（`.ed-th-resize`，在標頭內最下面 6px，不能超出：下一條軌的標頭會蓋住）；雙擊恢復；標頭右鍵「所有軌道高度：矮 0.7／標準／高 1.6／特高 2.4 倍」。軌道 id 是專案內編號，開別的專案時同編號的軌道會沿用高度（接受）。［程式碼］［推論］
+
+### 測試
+- 單元：`test/edit-core.test.js` 的 copyClips／pasteClips（連結、覆蓋／插入、快照、轉場、標記 id、各種失敗）、duplicateClips、pasteAttributes、history.list、parseTimecode。
+- 瀏覽器：`test/edit-ui.e2e.js` 的 `runClipboardTests`（Ctrl+C／V／Shift+V／D／X、Alt 拖曳與一般拖曳、右鍵選單、貼上屬性對話框、Shift＋↑↓、時間碼輸入、歷史紀錄、軌道高度與重新整理後保留）；原本「Alt 不吸附」的時間尺測試改成 Shift，工具列最右側改成「復原／重做／歷史紀錄」三顆。［程式碼］

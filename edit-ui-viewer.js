@@ -91,6 +91,10 @@
     jkl.append(mk('edJ', null, '倒播（J，連按加速）', () => shuttle(-1), 'J'), mk('edK', null, '停止（K）', () => shuttle(0), 'K'), mk('edL', null, '播放（L，連按加速）', () => shuttle(1), 'L'));
     const time = el('div', 'ed-time');
     const cur = el('span', 'ed-tc'); cur.id = 'edTc'; cur.textContent = '00:00:00:00';
+    cur.tabIndex = 0; cur.setAttribute('role', 'button');
+    cur.title = '點一下輸入時間跳過去：01:05:12、10512（＝00:01:05:12）、12.5s；+30／-15 往後／往前幾格，+2s 往後 2 秒';
+    cur.addEventListener('click', () => editTimecode(cur));
+    cur.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); editTimecode(cur); } });
     const dur = el('span', 'ed-tcdur'); dur.id = 'edTcDur'; dur.textContent = '/ 00:00:00:00';
     time.append(cur, dur);
     const vm = mk('edSubMark', null, '字幕標記（V）：在播放頭加一段字幕，右側詳細內容會多一行可以輸入文字', () => UI.markSubtitle(), 'V');
@@ -630,6 +634,33 @@
   function seekView(f) {
     if (state.mode === 'timeline') seekTimeline(f); else if (UI.player) UI.player.seek(Math.max(0, f));
   }
+  // 時間碼輸入（4.60）：點時間碼換成輸入框，Enter 跳過去，Esc／點別處取消
+  function editTimecode(span) {
+    if (!span || span.hidden) return;
+    const vp = viewProject(), cur = state.mode === 'timeline' ? state.playhead : state.srcFrame;
+    const inp = el('input', 'ed-tc-input'); inp.type = 'text'; inp.id = 'edTcInput'; inp.value = tc(cur, vp.fps);
+    inp.setAttribute('aria-label', '跳到時間（時:分:秒:格，或 +／- 格數）'); inp.spellcheck = false; inp.autocomplete = 'off';
+    span.hidden = true; span.after(inp);
+    inp.focus(); inp.select();
+    let done = false;
+    const fin = ok => {
+      if (done) return; done = true;
+      const text = inp.value;
+      inp.remove(); span.hidden = false;
+      if (!ok) return;
+      const f = C.parseTimecode(text, vp.fps, cur);
+      if (f == null) { say(`看不懂「${text}」：可以打 01:05:12、10512、12.5s、+30 或 -2s`, 'error'); return; }
+      const max = viewDuration();
+      seekView(clamp(f, 0, Math.max(0, max)));
+      if (f > max) say('超過結尾，已移到最後一格');
+      else if (f < 0) say('已移到開頭');
+    };
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); fin(true); span.focus(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); fin(false); span.focus(); }
+    });
+    inp.addEventListener('blur', () => fin(false));
+  }
   function editPoints() {
     const p = viewProject(), s = new Set([0]);
     if (state.mode === 'timeline') for (const c of Object.values(p.clips)) { s.add(c.start); s.add(c.start + c.duration); }
@@ -643,7 +674,7 @@
   }
 
   Object.assign(UI, {
-    applyTheme, applyVertical, buildViewer, clearSourceIO, closeSource, fitVertical, jumpEdit, onPlayerFrame,
+    applyTheme, applyVertical, buildViewer, clearSourceIO, editTimecode, closeSource, fitVertical, jumpEdit, onPlayerFrame,
     openSource, renderViewerChrome, scheduleStage, seekTimeline, seekView, setMode, setSourceIO, shuttle, step,
     syncAspect, syncThemeBtn, themeRepaint, togglePlay, updatePlayButton, viewDuration, viewProject, wireColSplitters,
   });

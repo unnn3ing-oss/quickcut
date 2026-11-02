@@ -121,6 +121,108 @@
     return r;
   }
 
+  // ---- 複製／剪下／貼上（4.60）----------------------------------------------------------
+  // 剪貼簿只放在記憶體（UI.clipboard，core.copyClips 的純資料快照）；重新整理就清掉。
+  const ATTR_LABEL = { effects: '影像效果（濾鏡、色彩、LUT、模糊背景、貼圖動態）', transform: '變形、裁切、縮放方式（含關鍵影格）', audio: '聲音（增益、Pan、淡入淡出、EQ）', title: '字幕外觀（文字內容不變）' };
+  function needTimeline() {
+    if (state.mode === 'timeline') return true;
+    say('切回時間軸再複製／貼上', 'error'); return false;
+  }
+  function copySelection(cut) {
+    if (!needTimeline()) return false;
+    const ids = selIds();
+    if (!ids.length) { say(`先選取要${cut ? '剪下' : '複製'}的片段`, 'error'); return false; }
+    const board = C.copyClips(state.project, ids, { linked: state.linkedSelection });
+    if (!board) return false;
+    UI.clipboard = board;
+    if (cut) {
+      const r = op('剪下', p => C.lift(p, ids, { linked: state.linkedSelection }));
+      if (!(r && r.ok)) return false;
+      state.selection = new Set(); UI.refreshSelectionUI();
+    }
+    say(`已${cut ? '剪下' : '複製'} ${board.clips.length} 個片段（${MOD}V 貼在播放頭）`, 'ok');
+    return true;
+  }
+  function selectPasted(r) { selectClips(r.ids); }
+  // mode：'overwrite'（預設，蓋掉播放頭那裡的內容）或 'insert'（後面的片段往後推）。貼完播放頭移到貼上的結尾，連按就會一段接一段
+  //   at：貼在哪一格（右鍵選單用游標位置；省略＝播放頭）
+  function pasteClipboard(mode, at) {
+    if (!needTimeline()) return;
+    if (!UI.clipboard) { say(`剪貼簿是空的：先選片段按 ${MOD}C 複製`, 'error'); return; }
+    const f = at == null ? state.playhead : at;
+    const r = op(mode === 'insert' ? '插入貼上' : '貼上', p => C.pasteClips(p, UI.clipboard, f, { mode }));
+    if (r && r.ok) { selectPasted(r); seekTimeline(r.end); say(`已貼上 ${r.ids.length} 個片段`, 'ok'); }
+  }
+  // 再製一份（Ctrl／⌘＋D）：接在選取範圍的後面（覆蓋那裡原本的內容）
+  function duplicateSelection() {
+    if (!needTimeline()) return;
+    const ids = selIds();
+    if (!ids.length) { say('先選取要再製的片段', 'error'); return; }
+    const board = C.copyClips(state.project, ids, { linked: state.linkedSelection });
+    const start = Math.min(...board.clips.map(e => state.project.clips[e.clip.id].start));
+    const r = op('再製片段', p => C.pasteClips(p, board, start + board.duration));
+    if (r && r.ok) { selectPasted(r); say(`已再製 ${r.ids.length} 個片段`, 'ok'); }
+  }
+  // 快捷鍵開的小視窗放在選取的片段旁邊（看不到就放在時間軸上方）
+  function selAnchor() {
+    const id = state.primary && state.selection.has(state.primary) ? state.primary : selIds()[0];
+    const tlEl = $('edTimeline');
+    const n = id && tlEl && tlEl.querySelector(`.ed-clip[data-clip="${id}"]`);
+    return n || tlEl || $('edUndo');
+  }
+  // 貼上屬性（Ctrl／⌘＋Alt＋V）：勾選要貼哪些，記住上次的選擇
+  const ATTR_KEY = 'qc-paste-attrs';
+  function lastAttrParts() {
+    try { const v = JSON.parse(localStorage.getItem(ATTR_KEY)); if (Array.isArray(v)) return v.filter(x => C.ATTR_PARTS.includes(x)); } catch (e) { /* 沒有就用預設 */ }
+    return ['effects', 'audio', 'title'];
+  }
+  function openPasteAttrsPop(anchor) {
+    if (!needTimeline()) return;
+    const board = UI.clipboard;
+    if (!board) { say(`剪貼簿是空的：先選一個片段按 ${MOD}C 複製`, 'error'); return; }
+    const ids = selIds();
+    if (!ids.length) { say('先選取要套用屬性的片段', 'error'); return; }
+    const src = board.clips.map(e => e.clip);
+    const has = { effects: src.some(c => c.video), transform: src.some(c => c.video), audio: src.some(c => c.audio), title: src.some(c => c.type === 'title') };
+    const prev = lastAttrParts();
+    const box = el('div', 'ed-form');
+    box.id = 'edPasteAttrs';
+    const first = src[0];
+    box.append(el('div', 'ed-form-h', `貼上屬性：從「${first.name || clipTitle(first)}」套到 ${ids.length} 個片段`));
+    const checks = {};
+    for (const k of C.ATTR_PARTS) {
+      if (!has[k]) continue;
+      const lab = el('label', 'ed-chk');
+      const cb = el('input'); cb.type = 'checkbox'; cb.value = k; cb.checked = prev.includes(k);
+      checks[k] = cb;
+      lab.append(cb, el('span', null, ATTR_LABEL[k]));
+      box.appendChild(lab);
+    }
+    box.appendChild(el('div', 'ed-hint', '只會套到種類相同的片段（例如聲音只套到有聲音的片段）。一次 Ctrl＋Z 就能還原。'));
+    const act = el('div', 'ed-form-act');
+    const ok = el('button', 'ed-btn small primary', '貼上'); ok.type = 'button'; ok.id = 'edPasteAttrsOk';
+    ok.addEventListener('click', () => {
+      const parts = Object.values(checks).filter(cb => cb.checked).map(cb => cb.value);
+      try { localStorage.setItem(ATTR_KEY, JSON.stringify(parts)); } catch (e) { /* 存不了就算了 */ }
+      const r = op('貼上屬性', p => C.pasteAttributes(p, board, selIds(), parts));
+      if (r && r.ok) { closePop(); say(`已把屬性貼到 ${r.count} 個片段`, 'ok'); }
+    });
+    act.appendChild(ok);
+    box.appendChild(act);
+    openPop(anchor, box, 'pasteattrs');
+    ok.focus();
+  }
+
+  // ---- 時間軸標記：上一個／下一個（4.60，Shift＋↑↓）-----------------------------------------
+  function jumpMarker(dir) {
+    if (state.mode !== 'timeline') { say('切回時間軸才能跳標記', 'error'); return; }
+    const f = state.playhead, list = [...new Set((state.project.markers || []).map(m => m.frame))].sort((a, b) => a - b);
+    if (!list.length) { say('時間軸上還沒有標記（按 M 加）', 'error'); return; }
+    const t = dir < 0 ? [...list].reverse().find(x => x < f) : list.find(x => x > f);
+    if (t == null) { say(dir < 0 ? '前面沒有標記了' : '後面沒有標記了'); return; }
+    seekTimeline(t);
+  }
+
   // ---- In／Out -----------------------------------------------------------------------
   function markIn() {
     if (state.mode === 'source') { setSourceIO('in'); return; }
@@ -760,9 +862,32 @@
 
     grp('hist',
       btn('edUndo', '復原', MOD + 'Z', '復原', undo),
-      btn('edRedo', '重做', MOD + '⇧Z', '重做', redo));
+      btn('edRedo', '重做', MOD + '⇧Z', '重做', redo),
+      btn('edHistory', '歷史紀錄', '', '歷史紀錄：列出所有步驟，點一下直接回到那一步', b => openHistoryMenu(b)));
     for (const id of ['edUndo', 'edRedo']) { const s = el('span', 'ed-ulab'); s.id = id + 'Lab'; $(id).appendChild(s); }
     wireToolbarScroll(tb);
+  }
+  // 歷史紀錄（4.60）：上半是可以重做的步驟（灰色），中間是「目前」，下半是可以復原的步驟（最新的在上）。
+  //   點復原清單的第 i 項＝連續復原到「做那一步之前」；點重做清單的項目＝重做到做完那一步。最多列 40 筆
+  const HIST_SHOW = 40;
+  function openHistoryMenu(btn) {
+    const h = state.history, l = h.list();
+    if (!l.undo.length && !l.redo.length) { say('還沒有任何步驟'); return; }
+    const items = [];
+    const redoShow = l.redo.slice(0, HIST_SHOW).map((label, i) => ({ label: `↻ ${label}`, hint: `重做 ${i + 1} 步`, run: () => histJump(0, i + 1) }));
+    items.push(...redoShow.reverse());
+    items.push({ label: '● 目前', disabled: true });
+    l.undo.slice(0, HIST_SHOW).forEach((label, i) => items.push({ label: `↶ ${label}`, hint: `復原 ${i + 1} 步`, run: () => histJump(i + 1, 0) }));
+    if (l.undo.length > HIST_SHOW) items.push({ label: `…還有 ${l.undo.length - HIST_SHOW} 步`, disabled: true });
+    const r = btn.getBoundingClientRect();
+    UI.openMenu(r.right, r.bottom + 4, items, 'ed-hist-menu');     // 按鈕在工具列最右邊：選單往左靠（超出畫面時 placeFloating 會夾回來）
+    if (UI.menuEl) UI.menuEl.style.left = Math.max(8, r.right - UI.menuEl.offsetWidth) + 'px';
+  }
+  function histJump(nUndo, nRedo) {
+    const h = state.history;
+    if (h.busy) return;
+    const k = nUndo ? h.undoSteps(nUndo) : h.redoSteps(nRedo);
+    if (k) { sanitizeSelection(); say(nUndo ? `已復原 ${k} 步` : `已重做 ${k} 步`, 'ok'); }
   }
   // 工具列只有一排、超出就左右捲動：滑鼠滾輪（直向）在工具列上轉成橫向捲動；觸控板橫向滑動與拖曳細捲軸由瀏覽器處理；
   // 左右邊緣的漸層遮罩（.fade-l／.fade-r）依捲動位置顯示
@@ -826,14 +951,28 @@
     if (mod && shift && lk === 'l') { done(); if (fresh) toggleLink(); return; }
     if (mod && !shift && lk === 'r') { done(); if (fresh) openSpeedPop($('edSpeed')); return; }
     if (mod && !shift && lk === 'a') { done(); selectClips(Object.keys(state.project.clips)); return; }
+    // 複製／剪下／貼上（4.60）：用 e.code 認 V，Mac 的 ⌥＋V 會打出別的字
+    if (mod && !alt && !shift && lk === 'c') { if (selIds().length) { done(); if (fresh) copySelection(false); } return; }   // 沒選片段：交給瀏覽器（複製文字）
+    if (mod && !alt && !shift && lk === 'x') { if (selIds().length) { done(); if (fresh) copySelection(true); } return; }
+    if (mod && e.code === 'KeyV' && alt) { done(); if (fresh) openPasteAttrsPop(selAnchor()); return; }
+    // Ctrl／⌘＋V 不擋：讓瀏覽器照常送出 paste 事件（媒體庫靠它貼上檔案）。paste 事件裡沒有檔案才貼片段（edit-ui-media.js），
+    //   沒等到 paste 事件（少數情況瀏覽器不送）就由這裡的計時器補貼
+    if (mod && e.code === 'KeyV') {
+      if (!fresh) { done(); return; }
+      if (UI.pendingPaste) clearTimeout(UI.pendingPaste.timer);
+      const mode = shift ? 'insert' : 'overwrite';
+      UI.pendingPaste = { mode, timer: setTimeout(() => { UI.pendingPaste = null; if (UI.clipboard) pasteClipboard(mode); }, 150) };
+      return;
+    }
+    if (mod && !shift && lk === 'd') { done(); if (fresh) duplicateSelection(); return; }
     if (mod || (alt && lk !== 'x')) return;                         // 其他組合鍵交給瀏覽器
 
     switch (key) {
       case ' ': done(); if (fresh) togglePlay(); return;
       case 'ArrowLeft': done(); step(shift ? -fps() : -1); return;
       case 'ArrowRight': done(); step(shift ? fps() : 1); return;
-      case 'ArrowUp': done(); if (fresh) jumpEdit(-1); return;
-      case 'ArrowDown': done(); if (fresh) jumpEdit(1); return;
+      case 'ArrowUp': done(); if (fresh) { if (shift) jumpMarker(-1); else jumpEdit(-1); } return;
+      case 'ArrowDown': done(); if (fresh) { if (shift) jumpMarker(1); else jumpEdit(1); } return;
       case 'Home': done(); seekView(0); return;
       case 'End': done(); seekView(viewDuration()); return;
       case 'Delete': done(); if (fresh) deleteSelection(shift); return;
@@ -875,7 +1014,7 @@
   }
 
   Object.assign(UI, {
-    MOD, TRANS_SIDE_TEXT, addMarkerHere, openBeatPop, addTitle, addTransitionAt, addTransitionToSelection, applyTextFx,
+    MOD, TRANS_SIDE_TEXT, addMarkerHere, copySelection, duplicateSelection, jumpMarker, openPasteAttrsPop, pasteClipboard, openBeatPop, addTitle, addTransitionAt, addTransitionToSelection, applyTextFx,
     applyTitleProps, applyTitleStyle, bladeAtPlayhead, buildToolbar, clearInOut, clickSelect, closeGaps, deleteSelection, doEdit, exportSrt,
     flushPop, importSrt, isSrtFile, linkSelection, markClipRange, markIn, markOut, markSubtitle, onKeyDown, onKeyUp,
     op, openFlagPop, openFreezePop, openMarkerPop, openSpeedPop, redo, sanitizeSelection, selectClips,
