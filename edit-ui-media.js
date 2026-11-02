@@ -488,7 +488,14 @@
       if (isTextTarget(e.target)) return;
       e.stopImmediatePropagation();
       const files = e.clipboardData ? [...e.clipboardData.items].filter(i => i.kind === 'file').map(i => i.getAsFile()).filter(Boolean) : [];
-      if (!files.length) return;
+      const pend = UI.pendingPaste;
+      if (pend) { clearTimeout(pend.timer); UI.pendingPaste = null; }
+      if (!files.length) {
+        // 4.60：沒有檔案＝貼上時間軸片段（Ctrl／⌘＋V 在 edit-ui-actions.js 記下是覆蓋還是插入）
+        if (UI.clipboard && UI.pasteClipboard) { e.preventDefault(); UI.pasteClipboard(pend ? pend.mode : 'overwrite'); }
+        else if (pend) UI.pasteClipboard('overwrite');      // 剪貼簿是空的：顯示「先複製」的提示
+        return;
+      }
       e.preventDefault();
       importFiles(files);
     }, true);

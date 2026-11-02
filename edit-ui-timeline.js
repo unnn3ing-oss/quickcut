@@ -13,7 +13,8 @@
     clamp, clickSelect, clipOf, clipTitle, closeMenu, closePop, colors, deleteSelection, doc, el, ensureMediaInfo,
     flushPop, fmtNum, fps, icon, linkSelection, markClipRange, mediaOf, op, openFlagPop, openFreezePop, openMarkerPop,
     openMenu, openSpeedPop, renderMedia, renderViewerChrome, say, scheduleStage, seekTimeline, selIds, selectClips,
-    selectTransition, state, syncAspect, targetTrack, tc, trackOf, updateSubMark, updateToolbar, videoTracksTopFirst } = UI;
+    selectTransition, state, syncAspect, targetTrack, tc, trackOf, updateSubMark, updateToolbar, videoTracksTopFirst,
+    TRACK_H_KEY, lsGet, lsSet } = UI;
   let C = null, R = null, F = null;
   UI.binders.push(() => { C = Q.core; R = Q.render; F = Q.fx; });
 
@@ -198,7 +199,7 @@
     const aplan = C.audioTransitionPlan ? C.audioTransitionPlan(p) : {};     // 影片轉場推出的聲音淡化（畫在音訊軌上）
     let totalH = RULER_H;
     for (const t of order) {
-      const h = t.kind === 'video' ? VIDEO_H : AUDIO_H;
+      const h = trackH(t);
       totalH += h;
       const row = el('div', 'ed-track ' + t.kind + (t.locked ? ' locked' : '') + (t.muted ? ' muted' : '') + (t.hidden ? ' hidden' : ''));
       row.style.height = h + 'px';
@@ -266,10 +267,14 @@
       btns.appendChild(tg('mute', 'M', t.muted ? '取消靜音' : '靜音', t.muted, { muted: !t.muted }));
       btns.appendChild(tg('solo', 'S', t.solo ? '取消獨奏' : '獨奏（只聽這條）', t.solo, { solo: !t.solo }));
     }
-    th.append(nm, btns);
+    const rz = el('div', 'ed-th-resize'); rz.title = '拖曳調整軌道高度；雙擊恢復標準'; rz.setAttribute('aria-hidden', 'true');
+    rz.addEventListener('pointerdown', ev => { if (ev.button === 0) startTrackResize(ev, t); });
+    rz.addEventListener('dblclick', ev => { ev.stopPropagation(); setTrackH(t.id, null); });
+    rz.addEventListener('click', ev => ev.stopPropagation());
+    th.append(nm, btns, rz);
     // 點標頭（名稱或空白處；鎖定／眼睛／M／S 按鈕與改名輸入框除外）：選取整條軌
     th.addEventListener('click', e => {
-      if (e.target.closest('.ed-thb, .ed-th-input')) return;
+      if (e.target.closest('.ed-thb, .ed-th-input, .ed-th-resize')) return;
       selectTrack(t.id, e.shiftKey || e.ctrlKey || e.metaKey);
     });
     th.addEventListener('contextmenu', e => {
@@ -278,6 +283,8 @@
         { label: '選取這條軌的所有片段', run: () => selectTrack(t.id, false) },
         { label: '設為目的軌道', run: () => setTarget(t.kind, t.id) },
         { label: '重新命名', run: () => renameTrack(t.id, $('edTimeline').querySelector(`.ed-th[data-track="${t.id}"] .ed-th-name`)) },
+        { sep: true },
+        ...TRACK_H_PRESETS.map(([name, m]) => ({ label: `所有軌道高度：${name}`, run: () => setAllTrackH(m) })),
         { sep: true },
         { label: '刪除這條軌道', run: () => deleteTrack(t.id) },
       ]);
@@ -573,6 +580,40 @@
     updateSubMark();
   }
 
+  // ---- 軌道高度（4.60）：只是檢視設定，不進專案、不進復原；每條軌各自記在 localStorage（key＝軌道 id） --------------
+  const TRACK_H_RANGE = { video: [32, 200], audio: [28, 200] };
+  const TRACK_H_PRESETS = [['矮', 0.7], ['標準', 1], ['高', 1.6], ['特高', 2.4]];
+  let trackHs = {};
+  try { const v = JSON.parse(lsGet(TRACK_H_KEY) || '{}'); if (v && typeof v === 'object') trackHs = v; } catch (_) { trackHs = {}; }
+  const defaultTrackH = kind => (kind === 'video' ? VIDEO_H : AUDIO_H);
+  function trackH(t) {
+    const v = Number(trackHs[t.id]), [a, b] = TRACK_H_RANGE[t.kind] || [28, 200];
+    return isFinite(v) && v > 0 ? clamp(Math.round(v), a, b) : defaultTrackH(t.kind);
+  }
+  function setTrackH(id, h, save = true) {
+    const t = trackOf(id);
+    if (!t) return;
+    const [a, b] = TRACK_H_RANGE[t.kind];
+    if (h == null || Math.round(h) === defaultTrackH(t.kind)) delete trackHs[id]; else trackHs[id] = clamp(Math.round(h), a, b);
+    if (save) lsSet(TRACK_H_KEY, JSON.stringify(trackHs));
+    scheduleRender('tl');
+  }
+  // 所有軌道一次設成某個倍數（1＝標準，全部清掉）
+  function setAllTrackH(mult) {
+    for (const t of state.project.tracks) setTrackH(t.id, mult === 1 ? null : defaultTrackH(t.kind) * mult, false);
+    lsSet(TRACK_H_KEY, JSON.stringify(trackHs));
+  }
+  // 拖標頭下緣調高度；雙擊下緣恢復標準
+  function startTrackResize(e, t) {
+    e.preventDefault(); e.stopPropagation();
+    const h0 = trackH(t);
+    beginDrag(e, {
+      move(ev, dx, dy) { setTrackH(t.id, h0 + dy, false); },
+      up(ev, moved) { if (moved) lsSet(TRACK_H_KEY, JSON.stringify(trackHs)); },
+      cancel() { setTrackH(t.id, h0); },
+    });
+  }
+
   // =====================================================================================
   // 時間軸：滑鼠操作
   // =====================================================================================
@@ -769,12 +810,12 @@
   }
 
   // 拖時間尺：吸附打開時，靠近剪接點（片段頭尾）、標記、In／Out 會吸過去（4.50）。
-  //   吸附距離＝和片段吸附一樣的螢幕距離（SNAP_PX），但最多 3 秒；Alt＝這次不吸附。
+  //   吸附距離＝和片段吸附一樣的螢幕距離（SNAP_PX），但最多 3 秒；Shift＝這次不吸附（4.60 起 Alt 是拖曳複製）。
   function startScrub(e) {
     const targets = C.snapTargets(state.project, {});
     const to = ev => {
       let f = Math.max(0, Math.round(xToFrame(ev.clientX)));
-      if (state.snapping && !ev.altKey) {
+      if (state.snapping && !ev.shiftKey) {
         const tol = Math.min(SNAP_PX / tl.k, 3 * fps());
         const s = C.snap(f, targets, tol);
         showSnap(s !== f || targets.includes(f) ? s : null);
@@ -835,18 +876,28 @@
     for (const id of group) { const c = p.clips[id]; edges.push(c.start, C.clipEnd(c)); }
     const targets = C.snapTargets(p, { playhead: state.playhead, exclude: group });
     const lanes = laneRects(), kindList = C.tracksOf(p, t0.kind), baseIdx = kindList.findIndex(t => t.id === t0.id);
+    let dupRes = null;
     beginDrag(e, {
       autoscroll: true,
       move(ev, dx) {
-        const d = snapDelta(Math.round(dx / tl.k), edges, targets, ev.altKey);
+        const d = snapDelta(Math.round(dx / tl.k), edges, targets, ev.shiftKey);
         let dt = 0;
         const lane = lanes.find(l => ev.clientY >= l.top && ev.clientY < l.bottom);
         if (lane && lane.kind === t0.kind) dt = kindList.findIndex(t => t.id === lane.id) - baseIdx;
-        const r = live.run('移動片段', q => C.moveClips(q, ids, d, dt, { linked: state.linkedSelection }));
-        if (!r.ok) say(r.reason, 'error');
+        // Alt＝拖曳複製（4.60，同 DaVinci／Premiere）：原片段不動，在放開的位置放一份副本；拖曳中按放 Alt 可以切換
+        const dup = !!ev.altKey;
+        app.classList.toggle('dup-drag', dup);
+        const r = live.run(dup ? '複製片段' : '移動片段', q => (dup ? C.duplicateClips(q, ids, d, dt, { linked: state.linkedSelection }) : C.moveClips(q, ids, d, dt, { linked: state.linkedSelection })));
+        dupRes = dup && r.ok ? r : null;
+        if (!r.ok && !(dup && d === 0 && dt === 0)) say(r.reason, 'error');
       },
-      up(ev, moved) { if (moved) live.end(); },
-      cancel() { live.abort(); },
+      up(ev, moved) {
+        app.classList.remove('dup-drag');
+        if (!moved) return;
+        live.end();
+        if (dupRes) { selectClips(ids.map(i => dupRes.map[i]).filter(Boolean)); say(`已複製 ${dupRes.ids.length} 個片段`, 'ok'); }
+      },
+      cancel() { app.classList.remove('dup-drag'); live.abort(); },
     });
   }
 
@@ -860,7 +911,7 @@
     beginDrag(e, {
       autoscroll: true,
       move(ev, dx) {
-        const d = snapDelta(Math.round(dx / tl.k), [f0], targets, ev.altKey);
+        const d = snapDelta(Math.round(dx / tl.k), [f0], targets, ev.shiftKey);
         const r = live.run(label, q => (kind === 'ripple' ? C.rippleTrim(q, target, edge, d, { linked: state.linkedSelection }) : C.trimEdge(q, target, edge, d, { linked: state.linkedSelection })));
         if (!r.ok) say(r.reason, 'error');
         else if (r.applied != null && r.applied !== d) say('已經到極限了（來源沒有更多畫面，或碰到旁邊的片段）');
@@ -878,7 +929,7 @@
     beginDrag(e, {
       autoscroll: true,
       move(ev, dx) {
-        const d = snapDelta(Math.round(dx / tl.k), [f0], targets, ev.altKey);
+        const d = snapDelta(Math.round(dx / tl.k), [f0], targets, ev.shiftKey);
         const r = live.run('滾動修剪', q => C.roll(q, plan.leftId, plan.rightId, d, { linked: state.linkedSelection }));
         if (!r.ok) say(r.reason, 'error');
         else if (r.applied != null && r.applied !== d) say('已經到極限了（來源沒有更多畫面）');
@@ -896,7 +947,7 @@
       autoscroll: true,
       move(ev, dx) {
         let d = Math.round(dx / tl.k);
-        if (kind === 'slide') d = snapDelta(d, [c0.start, C.clipEnd(c0)], targets, ev.altKey);
+        if (kind === 'slide') d = snapDelta(d, [c0.start, C.clipEnd(c0)], targets, ev.shiftKey);
         const r = live.run(label, q => (kind === 'slip' ? C.slip(q, clipId, d, { linked: state.linkedSelection }) : C.slide(q, clipId, d, { linked: state.linkedSelection })));
         if (!r.ok) say(r.reason, 'error');
         else if (r.applied != null && r.applied !== d) say('已經到極限了');
@@ -999,6 +1050,11 @@
       if (!state.selection.has(h.clipId)) clickSelect(h.clipId, false);
       const ids = selIds(), anchor = { x: e.clientX, y: e.clientY };
       openMenu(e.clientX, e.clientY, [
+        { label: '複製', hint: MOD + 'C', run: () => UI.copySelection(false) },
+        { label: '剪下', hint: MOD + 'X', run: () => UI.copySelection(true) },
+        { label: '再製（接在後面）', hint: MOD + 'D', run: UI.duplicateSelection },
+        { label: '貼上屬性…', hint: (MOD === '⌘' ? '⌘⌥' : 'Ctrl+Alt+') + 'V', disabled: !UI.clipboard, run: () => UI.openPasteAttrsPop(anchor) },
+        { sep: true },
         { label: '在播放頭切開', hint: MOD + 'B', run: bladeAtPlayhead },
         { label: '刪除（留下空隙）', hint: 'Del', run: () => deleteSelection(false) },
         { label: '波紋刪除', hint: '⇧Del', run: () => deleteSelection(true) },
@@ -1019,6 +1075,9 @@
       openMenu(e.clientX, e.clientY, [
         { label: '刪除空隙', disabled: !gap, run: () => op('刪除空隙', q => C.deleteGap(q, h.trackId, f), '已刪除空隙') },
         { label: '清除這條軌的所有空隙', run: () => UI.closeGaps(h.trackId) },
+        { label: '貼在這裡', hint: MOD + 'V', disabled: !UI.clipboard, run: () => UI.pasteClipboard('overwrite', f) },
+        { label: '插入貼上（後面往後推）', hint: (MOD === '⌘' ? '⌘⇧' : 'Ctrl+Shift+') + 'V', disabled: !UI.clipboard, run: () => UI.pasteClipboard('insert', f) },
+        { sep: true },
         { label: '在這裡設播放頭', run: () => seekTimeline(f) },
       ]);
     }

@@ -2283,3 +2283,146 @@ t('addLut／removeLut：存進專案（序列化、復原）、同內容沿用�
   assert.equal(core.lutData(p, a.id), null);
   assert.equal(core.removeLut(p, 'nope').ok, false);
 });
+
+// ---- 4.60 複製／貼上、拖曳複製、貼上屬性、歷史紀錄 ----------------------------------
+test('copyClips＋pasteClips：連結的影像＋聲音一起貼在播放頭、換新 id 與新連結群組', () => {
+  const p = setup();
+  const [v, a] = put(p, 'mv', 0, 0, 2);            // 0~60 格，V1＋A1 連結
+  const board = core.copyClips(p, [v]);
+  assert.strictEqual(board.clips.length, 2);
+  assert.strictEqual(board.duration, 60);
+  const r = core.pasteClips(p, board, 90);
+  assert.ok(r.ok, r.reason);
+  assert.strictEqual(r.ids.length, 2);
+  const [nv, na] = r.ids.map(id => C(p, id));
+  assert.deepStrictEqual(span(nv), [90, 150]);
+  assert.deepStrictEqual(span(na), [90, 150]);
+  assert.strictEqual(nv.trackId, V(p)); assert.strictEqual(na.trackId, A(p));
+  assert.ok(nv.linkId && nv.linkId === na.linkId && nv.linkId !== C(p, v).linkId, '貼上的是新的一組連結');
+  assert.notStrictEqual(nv.id, v);
+  assert.deepStrictEqual(span(C(p, v)), [0, 60], '原片段不動');
+  assertInvariants(p, { linkSync: true });
+});
+
+test('pasteClips：覆蓋會蓋掉那裡的內容；插入會把後面推開；剪貼簿是快照（之後改原片段不影響）', () => {
+  const p = setup();
+  const [v] = put(p, 'mv', 0, 0, 1, [V(p)]);          // 0~30
+  const [w] = put(p, 'mv', 30, 0, 2, [V(p)]);         // 30~90
+  const board = core.copyClips(p, [v]);
+  assert.ok(core.setClipProps(p, v, { video: { transform: { opacity: 0.2 } } }).ok);
+  const p2 = core.clone(p);
+  const r = core.pasteClips(p, board, 45);
+  assert.ok(r.ok, r.reason);
+  assert.strictEqual(C(p, r.ids[0]).video.transform.opacity, 1, '貼的是複製當下的設定');
+  assert.deepStrictEqual(span(C(p, w)), [30, 45], '覆蓋：後面那段被截短');
+  const r2 = core.pasteClips(p2, board, 30, { mode: 'insert' });
+  assert.ok(r2.ok, r2.reason);
+  assert.deepStrictEqual(span(C(p2, r2.ids[0])), [30, 60]);
+  assert.deepStrictEqual(span(C(p2, w)), [60, 120], '插入：後面往後推');
+  assertInvariants(p); assertInvariants(p2);
+});
+
+test('pasteClips：轉場兩側都有複製到才一起貼；片段內標記換新 id', () => {
+  const p = setup();
+  const [a] = put(p, 'mv', 0, 0, 1, [V(p)]);
+  const [b] = put(p, 'mv', 30, 2, 3, [V(p)]);
+  assert.ok(core.addTransition(p, { leftClipId: a, duration: 10 }).ok);
+  assert.ok(core.addClipMarker(p, a, { offset: 5 }).ok);
+  const r = core.pasteClips(p, core.copyClips(p, [a, b]), 100);
+  assert.ok(r.ok, r.reason);
+  const trs = Object.values(p.transitions);
+  assert.strictEqual(trs.length, 2);
+  assert.ok(trs.some(t => t.leftClipId === r.map[a] && t.rightClipId === r.map[b]));
+  assert.notStrictEqual(C(p, r.map[a]).markers[0].id, C(p, a).markers[0].id);
+  const r2 = core.pasteClips(p, core.copyClips(p, [a]), 200);
+  assert.ok(r2.ok);
+  assert.strictEqual(Object.values(p.transitions).length, 2, '只複製一側：轉場不跟著貼');
+  assertInvariants(p);
+});
+
+test('pasteClips 失敗：剪貼簿空的、鎖定軌、fps 不同、素材不在這個專案、開頭之前（專案不變）', () => {
+  const p = setup();
+  const [v] = put(p, 'mv', 0, 0, 1, [V(p)]);
+  const board = core.copyClips(p, [v]);
+  unchanged(p, () => core.pasteClips(p, null, 0), /剪貼簿是空的/);
+  unchanged(p, () => core.pasteClips(p, board, -5), /開頭之前/);
+  unchanged(p, () => core.pasteClips(p, Object.assign({}, board, { fps: 25 }), 0), /fps/);
+  const other = setup(); other.mediaInfo = {};
+  unchanged(other, () => core.pasteClips(other, board, 0), /媒體庫/);
+  lock(p, V(p));
+  unchanged(p, () => core.pasteClips(p, board, 100), /鎖定/);
+});
+
+test('duplicateClips（Alt＋拖曳）：原片段不動、副本放在拖到的位置與軌道', () => {
+  const p = setup();
+  const [v, a] = put(p, 'mv', 0, 0, 1);
+  const r = core.duplicateClips(p, [v], 40, 1);
+  assert.ok(r.ok, r.reason);
+  const nv = C(p, r.map[v]), na = C(p, r.map[a]);
+  assert.deepStrictEqual(span(nv), [40, 70]);
+  assert.strictEqual(nv.trackId, V(p, 1), '影像換到 V2');
+  assert.strictEqual(na.trackId, A(p, 0), '換軌只換主要種類，聲音留在 A1');
+  assert.deepStrictEqual(span(C(p, v)), [0, 30]);
+  unchanged(p, () => core.duplicateClips(p, [v], 0, 0), /別的位置/);
+  unchanged(p, () => core.duplicateClips(p, [v], 10, 5), /沒有那條軌道/);
+  assertInvariants(p, { linkSync: true });
+});
+
+test('pasteAttributes：效果／變形／聲音／字幕外觀分開貼，字幕文字不變', () => {
+  const p = setup();
+  const [v, a] = put(p, 'mv', 0, 0, 2);
+  const [w, b] = put(p, 'mv', 100, 0, 1);
+  assert.ok(core.setClipProps(p, v, { video: { look: LOOK(), lookAmt: 70, transform: { posX: 50 } } }).ok);
+  assert.ok(core.setClipProps(p, a, { audio: { gainDb: -6, fadeIn: 25, fadeOut: 20 } }).ok);
+  const board = core.copyClips(p, [v]);
+  let r = core.pasteAttributes(p, board, [w], ['effects']);
+  assert.ok(r.ok, r.reason);
+  assert.strictEqual(C(p, w).video.look, LOOK()); assert.strictEqual(C(p, w).video.lookAmt, 70);
+  assert.strictEqual(C(p, w).video.transform.posX, 0, '只貼效果：變形不動');
+  r = core.pasteAttributes(p, board, [w], ['transform']);
+  assert.ok(r.ok); assert.strictEqual(C(p, w).video.transform.posX, 50);
+  r = core.pasteAttributes(p, board, [b], ['audio']);
+  assert.ok(r.ok); assert.strictEqual(C(p, b).audio.gainDb, -6);
+  assert.ok(C(p, b).audio.fadeIn + C(p, b).audio.fadeOut <= C(p, b).duration, '淡入淡出夾在片段長度內');
+  // 字幕
+  const t1 = core.addClip(p, { type: 'title', trackId: V(p, 1), start: 0, duration: 30, title: { text: '甲', color: '#ff0000', size: 120 } });
+  const t2 = core.addClip(p, { type: 'title', trackId: V(p, 1), start: 40, duration: 30, title: { text: '乙' } });
+  r = core.pasteAttributes(p, core.copyClips(p, [t1.id]), [t2.id], ['title']);
+  assert.ok(r.ok, r.reason);
+  assert.strictEqual(C(p, t2.id).title.color, '#ff0000'); assert.strictEqual(C(p, t2.id).title.size, 120);
+  assert.strictEqual(C(p, t2.id).title.text, '乙');
+  unchanged(p, () => core.pasteAttributes(p, core.copyClips(p, [t1.id]), [b], ['title']), /種類不同/);
+  assertInvariants(p);
+});
+function LOOK() { return core.LOOKS.find(x => x !== 'none') || core.LOOKS[1]; }
+
+test('history.list／undoSteps／redoSteps：列出步驟名稱、一次跳多步', () => {
+  const p = setup();
+  const h = core.createHistory(() => p, () => {});
+  h.run('一', q => core.addMarker(q, { frame: 1 }));
+  h.run('二', q => core.addMarker(q, { frame: 2 }));
+  h.run('三', q => core.addMarker(q, { frame: 3 }));
+  assert.deepStrictEqual(h.list(), { undo: ['三', '二', '一'], redo: [] });
+  assert.strictEqual(h.undoSteps(2), 2);
+  assert.strictEqual(p.markers.length, 1);
+  assert.deepStrictEqual(h.list(), { undo: ['一'], redo: ['二', '三'] });
+  assert.strictEqual(h.redoSteps(5), 2, '做不到就停');
+  assert.strictEqual(p.markers.length, 3);
+});
+
+test('parseTimecode：時間碼、純數字、單位、相對位移', () => {
+  const P = (t, cur) => core.parseTimecode(t, 30, cur);
+  assert.strictEqual(P('00:00:01:00'), 30);
+  assert.strictEqual(P('05:12'), 5 * 30 + 12);
+  assert.strictEqual(P('1.05.12'), (65) * 30 + 12);
+  assert.strictEqual(P('10512'), (65) * 30 + 12, '兩位一組從右邊對齊');
+  assert.strictEqual(P('100'), 30);
+  assert.strictEqual(P('12.5s'), 375);
+  assert.strictEqual(P('2m'), 3600);
+  assert.strictEqual(P('+30', 100), 130);
+  assert.strictEqual(P('-15', 100), 85);
+  assert.strictEqual(P('+2s', 10), 70);
+  assert.strictEqual(P('-00:01:00', 100), 70);
+  assert.strictEqual(P('０１：００'), 30);
+  for (const bad of ['', 'abc', '+', '1:2:3:4:5', '1a']) assert.strictEqual(P(bad), null, bad);
+});

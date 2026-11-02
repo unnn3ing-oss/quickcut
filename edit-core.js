@@ -1328,6 +1328,180 @@
     return tx(p, q => { for (const c of all) q.clips[c.id].linkId = null; return { ids: all.map(c => c.id) }; });
   });
 
+  // ---- 時間碼輸入（4.60，檢視器的時間碼點一下可以打字跳轉）---------------------------------
+  // 回傳影格（不夾上限），看不懂回 null。支援：
+  //   「01:05:12」「1.05.12」：從右邊對齊（格:秒:分:時），例如 05:12＝5 秒 12 格
+  //   「10512」純數字：每兩位一組從右邊對齊（同 DaVinci），＝00:01:05:12
+  //   「12.5s」「2m」「1h」：秒／分／時
+  //   「+30」「-15」：從 current 往後／往前幾格；「+2s」「-1.5s」「+00:10」也可以
+  function parseTimecode(text, fps, current = 0) {
+    fps = Math.max(1, Math.round(Number(fps)) || 30);
+    let s = String(text == null ? '' : text).normalize('NFKC').trim().replace(/[：；;]/g, ':').replace(/\s+/g, '');
+    if (!s) return null;
+    let sign = 0;
+    if (s[0] === '+' || s[0] === '-') { sign = s[0] === '+' ? 1 : -1; s = s.slice(1); }
+    if (!s) return null;
+    let f;
+    const unit = s.match(/^(\d+(?:\.\d+)?)(h|m|s|f)$/i);
+    if (unit) {
+      const v = parseFloat(unit[1]), u = unit[2].toLowerCase();
+      f = Math.round(u === 'f' ? v : v * fps * (u === 'h' ? 3600 : u === 'm' ? 60 : 1));
+    } else if (/^\d+$/.test(s) && sign) f = parseInt(s, 10);
+    else {
+      let parts;
+      if (/^\d+([:.]\d+)+$/.test(s)) parts = s.split(/[:.]/).map(Number);
+      else if (/^\d+$/.test(s)) { parts = []; for (let i = s.length; i > 0; i -= 2) parts.unshift(Number(s.slice(Math.max(0, i - 2), i))); }
+      else return null;
+      if (parts.length > 4) return null;
+      while (parts.length < 4) parts.unshift(0);
+      const [h, m, sec, fr] = parts;
+      f = ((h * 60 + m) * 60 + sec) * fps + fr;
+    }
+    if (!isFinite(f)) return null;
+    return sign ? Math.round(Number(current) || 0) + sign * f : f;
+  }
+
+  // ---- 複製／貼上（4.60）-----------------------------------------------------------
+  // 剪貼簿是純資料（不綁專案物件）：片段副本的 start 改成「相對最早片段」的位移，記住原本的軌道（id、種類、同種類第幾條），
+  // 以及兩側（有的那側）都在剪貼簿裡的轉場。貼上時重新發 id，連結群組也換成新的群組。
+  function copyClips(p, ids, opts = {}) {
+    const set = expandLinked(p, arr(ids).filter(id => p.clips[id]), opts.linked !== false);
+    if (!set.length) return null;
+    const clips = set.map(id => p.clips[id]).sort((a, b) => a.start - b.start);
+    const base = Math.min(...clips.map(c => c.start)), end = Math.max(...clips.map(clipEnd));
+    const inSet = new Set(set);
+    return {
+      fps: p.fps, duration: end - base,
+      clips: clips.map(c => {
+        const t = getTrack(p, c.trackId);
+        return { clip: copy(Object.assign({}, c, { start: c.start - base })), kind: t.kind, trackIndex: tracksOf(p, t.kind).indexOf(t) };
+      }),
+      transitions: Object.values(p.transitions)
+        .filter(tr => (tr.leftClipId || tr.rightClipId) && [tr.leftClipId, tr.rightClipId].every(id => !id || inSet.has(id)))
+        .map(copy),
+      luts: Object.fromEntries(clips.map(c => c.video && c.video.lut).filter(id => id && p.luts && p.luts[id]).map(id => [id, copy(p.luts[id])])),
+    };
+  }
+  // LUT 跟著片段走：貼到別的專案時，沒有同一份 LUT 就加進去（資料一樣就沿用）
+  function pasteLut(q, board, id) {
+    if (!id) return id;
+    const rec = board.luts && board.luts[id];
+    if (q.luts && q.luts[id] && (!rec || q.luts[id].data === rec.data)) return id;
+    if (!rec) return null;
+    if (!q.luts) q.luts = {};
+    const same = Object.entries(q.luts).find(([, r]) => r.data === rec.data);
+    if (same) return same[0];
+    const nid = newId(q, 'lut'); q.luts[nid] = copy(rec);
+    return nid;
+  }
+
+  // 貼上：剪貼簿最早的片段放在 frame。opts.mode＝'insert'（後面的片段往後推）或預設的覆蓋；
+  //   opts.shift＝{ kind, d }：那個種類的片段往下（d>0）／往上換 d 條軌（拖曳複製換軌用）。
+  //   回傳 ids（新片段，依剪貼簿順序）與 map（原 id → 新 id）。
+  const pasteClips = guard((p, board, frame, opts = {}) => {
+    if (!board || !Array.isArray(board.clips) || !board.clips.length) return fail('剪貼簿是空的，先選片段再複製（Ctrl／⌘＋C）');
+    if (board.fps && board.fps !== p.fps) return fail(`剪貼簿的片段來自 ${board.fps} fps 的專案，這個專案是 ${p.fps} fps，不能貼上`);
+    const at = Math.round(Number(frame));
+    if (!isFinite(at) || at < 0) return fail('不能貼在時間軸開頭之前');
+    const shift = opts.shift || null;
+    const dest = board.clips.map(e => {
+      let t = getTrack(p, e.clip.trackId);
+      if (!t || t.kind !== e.kind) t = tracksOf(p, e.kind)[e.trackIndex] || null;
+      if (t && shift && shift.d && t.kind === shift.kind) { const list = tracksOf(p, t.kind); t = list[list.indexOf(t) + shift.d] || null; }
+      return t;
+    });
+    if (dest.some(t => !t)) return fail(shift && shift.d ? '沒有那條軌道可以放' : '找不到對應的軌道可以貼上');
+    const locked = dest.find(t => t.locked);
+    if (locked) return fail(`「${locked.name}」軌已鎖定，不能貼上`);
+    for (const e of board.clips) if (e.clip.type === 'media' && !(p.mediaInfo && p.mediaInfo[e.clip.mediaId])) return fail('剪貼簿裡的素材不在這個專案的媒體庫，不能貼上');
+    return tx(p, q => {
+      if (opts.mode === 'insert') insertSpace(q, at, board.duration);
+      else board.clips.forEach((e, i) => clearRange(q, dest[i].id, at + e.clip.start, at + e.clip.start + e.clip.duration));
+      const map = {}, links = {};
+      board.clips.forEach((e, i) => {
+        const c = copy(e.clip);
+        c.id = newId(q, 'c'); c.trackId = dest[i].id; c.start = at + e.clip.start;
+        if (c.linkId) c.linkId = links[c.linkId] || (links[c.linkId] = newId(q, 'L'));
+        c.markers = (c.markers || []).map(m => Object.assign({}, m, { id: newId(q, 'k') }));
+        if (c.video && c.video.lut) { const id = pasteLut(q, board, c.video.lut); if (id) c.video.lut = id; else delete c.video.lut; }
+        q.clips[c.id] = c; map[e.clip.id] = c.id;
+      });
+      for (const tr of board.transitions || []) {
+        const L = tr.leftClipId ? map[tr.leftClipId] : null, R = tr.rightClipId ? map[tr.rightClipId] : null;
+        if (!L && !R) continue;
+        const id = newId(q, 'x');
+        q.transitions[id] = Object.assign(copy(tr), { id, leftClipId: L, rightClipId: R, trackId: q.clips[L || R].trackId });
+      }
+      return { ids: board.clips.map(e => map[e.clip.id]), map, start: at, end: at + board.duration };
+    });
+  });
+
+  // 拖曳複製（Alt＋拖曳）：原片段不動，在「移動 dFrames 格、換 dTracks 條軌」的位置放一份副本（覆蓋那裡原本的內容）
+  const duplicateClips = guard((p, ids, dFrames, dTracks = 0, opts = {}) => {
+    const sel = needClips(p, ids);
+    const board = copyClips(p, sel.map(c => c.id), opts);
+    const kind = getTrack(p, sel[0].trackId).kind;
+    const minStart = Math.min(...board.clips.map(e => p.clips[e.clip.id].start));
+    const applied = Math.max(Math.round(Number(dFrames) || 0), -minStart);
+    dTracks = Math.round(Number(dTracks) || 0);
+    if (applied === 0 && dTracks === 0) return fail('拖到別的位置才會複製');
+    const r = pasteClips(p, board, minStart + applied, { shift: { kind, d: dTracks } });
+    return r.ok ? Object.assign(r, { applied, dTracks }) : r;
+  });
+
+  // 貼上屬性：把剪貼簿第一個同種類片段的設定套到 ids。parts（可多選）：
+  //   effects＝影像效果（濾鏡、色彩還原、LUT、模糊背景、合成、貼圖動態…，變形／裁切／縮放方式以外的 video 欄位）
+  //   transform＝變形、裁切、縮放方式（含這些參數的關鍵影格）
+  //   audio＝聲音（增益、Pan、淡入淡出、EQ）
+  //   title＝字幕外觀（文字內容不動）
+  const ATTR_PARTS = ['effects', 'transform', 'audio', 'title'];
+  const TF_KEYS = ['transform', 'crop', 'fit'];
+  const pasteAttributes = guard((p, board, ids, parts = ATTR_PARTS) => {
+    if (!board || !Array.isArray(board.clips) || !board.clips.length) return fail('剪貼簿是空的，先複製一個片段（Ctrl／⌘＋C）');
+    parts = arr(parts).filter(x => ATTR_PARTS.includes(x));
+    if (!parts.length) return fail('沒有選要貼上哪些屬性');
+    const clips = needClips(p, ids);
+    needUnlocked(p, clips);
+    const src = board.clips.map(e => e.clip);
+    const vSrc = src.find(c => c.video), aSrc = src.find(c => c.audio), tSrc = src.find(c => c.type === 'title');
+    return tx(p, q => {
+      let n = 0;
+      for (const c0 of clips) {
+        const c = q.clips[c0.id];
+        let hit = false;
+        if (c.video && vSrc && vSrc.id !== c.id) {
+          if (parts.includes('effects')) {
+            const keep = Object.fromEntries(TF_KEYS.map(k => [k, c.video[k]]));
+            const fx = copy(vSrc.video); for (const k of TF_KEYS) delete fx[k];
+            c.video = Object.assign(fx, keep);
+            if (c.video.lut) { const id = pasteLut(q, board, c.video.lut); if (id) c.video.lut = id; else delete c.video.lut; }
+            hit = true;
+          }
+          if (parts.includes('transform')) {
+            for (const k of TF_KEYS) if (vSrc.video[k] !== undefined) c.video[k] = copy(vSrc.video[k]);
+            for (const path of Object.keys(c.keyframes || {})) if (/^video\.(transform|crop)\./.test(path)) delete c.keyframes[path];
+            for (const [path, a] of Object.entries(vSrc.keyframes || {})) if (/^video\.(transform|crop)\./.test(path)) { if (!c.keyframes) c.keyframes = {}; c.keyframes[path] = copy(a); }
+            pruneKeyframes(c);
+            hit = true;
+          }
+        }
+        if (c.audio && aSrc && aSrc.id !== c.id && parts.includes('audio')) {
+          c.audio = copy(aSrc.audio);
+          const half = Math.floor(c.duration / 2);
+          if (c.audio.fadeIn + c.audio.fadeOut > c.duration) { c.audio.fadeIn = Math.min(c.audio.fadeIn, half); c.audio.fadeOut = Math.min(c.audio.fadeOut, c.duration - c.audio.fadeIn); }
+          hit = true;
+        }
+        if (c.type === 'title' && tSrc && tSrc.id !== c.id && parts.includes('title')) {
+          c.title = Object.assign(copy(tSrc.title), { text: c.title.text });
+          hit = true;
+        }
+        if (hit) { sanitize(c); n++; }
+      }
+      if (!n) bail('選取的片段和複製的片段種類不同，沒有可以貼上的屬性');
+      return { count: n };
+    });
+  });
+
   // ---- 標記、旗標 ------------------------------------------------------------------
   function cleanMarker(m, base) {
     const out = Object.assign({}, base);
@@ -2303,6 +2477,11 @@
       get canRedo() { return redoS.length > 0; },
       get undoLabel() { return undoS.length ? undoS[undoS.length - 1].label : ''; },
       get redoLabel() { return redoS.length ? redoS[redoS.length - 1].label : ''; },
+      // 歷史紀錄（4.60）：可以復原的步驟（最新的在前）、可以重做的步驟（最近的在前），只給名稱
+      list() { return { undo: undoS.map(e => e.label).reverse(), redo: redoS.map(e => e.label).reverse() }; },
+      // 一次復原／重做 n 步（歷史紀錄下拉選單用）；中途做不到就停，回傳實際做了幾步
+      undoSteps(n) { let k = 0; while (k < n && this.undo()) k++; return k; },
+      redoSteps(n) { let k = 0; while (k < n && this.redo()) k++; return k; },
       clear() { undoS = []; redoS = []; pending = null; },
     };
   }
@@ -2323,6 +2502,7 @@
     // 編輯
     moveClips, trimEdge, blade, rippleTrim, rippleDelete, deleteGap, closeAllGaps, lift, roll, slip, slide,
     setInOut, clearInOut, editToTimeline, addClip, link, unlink,
+    copyClips, pasteClips, duplicateClips, pasteAttributes, ATTR_PARTS, parseTimecode,
     addMarker, updateMarker, removeMarker, addClipMarker, updateClipMarker, removeClipMarker, setFlags,
     parseCube, lutLookup, lutData, addLut, removeLut, LUT_MAX_SIZE,
     autoEdit, AUTO_STYLES, setSpeed, setRetime, clearRetime, RETIME_PRESETS, retimeCurve, retimeFactor, srcOffset, freezeFrame, addTransition, updateTransition, removeTransition, setClipProps, setFitAll, aspectMismatch,

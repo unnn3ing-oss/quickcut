@@ -787,3 +787,15 @@ html[data-ed-theme="dark"] .ed-uimode { background: rgba(255, 255, 255, 0.08); }
 .ed-auto-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .ed-auto-status { margin-right: auto; font-size: 13px; color: var(--ed-muted); }
 @media (max-width: 760px) { .ed-auto-steps { grid-template-columns: 1fr; } }
+
+/* ---- 4.60：軌道高度、拖曳複製 ---------------------------------------------------- */
+.ed-th-resize { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; cursor: ns-resize; z-index: 2; }
+.ed-th-resize:hover { background: linear-gradient(transparent 3px, var(--accent) 3px); }
+.ed-app.dup-drag, .ed-app.dup-drag * { cursor: copy !important; }
+/* 時間碼點一下可以輸入（4.60） */
+.ed-tc { cursor: text; border-radius: 4px; padding: 1px 3px; }
+.ed-tc:hover, .ed-tc:focus-visible { background: var(--ed-region); outline: none; }
+.ed-tc-input { width: 9.5em; font: 600 18px/1.1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--accent);
+  background: var(--field-bg); border: 1px solid var(--accent); border-radius: 4px; padding: 1px 4px; }
+/* 歷史紀錄選單（4.60）：步驟多時捲動 */
+.ed-menu.ed-hist-menu { max-height: min(70vh, 560px); overflow-y: auto; min-width: 240px; }
