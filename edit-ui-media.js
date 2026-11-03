@@ -1,7 +1,7 @@
 // =====================================================================================
 // 剪輯介面：媒體庫
 // 從 edit-ui.js 拆出來的一段（共用的狀態、小工具與拆檔方式見 edit-ui.js 檔頭）。
-// 左側面板：媒體（匯入、清單、拖到時間軸）、特效（轉場／字體特效）、字幕（樣式、SRT、V 標記）。
+// 左側面板：媒體（匯入、清單、拖到時間軸）、特效（畫面：轉場、濾鏡、貼圖動態）、字幕（清單、SRT、V 標記、過場、樣式、進場／持續／出場動畫）。
 // =====================================================================================
 (function (root) {
   'use strict';
@@ -52,10 +52,10 @@
       vseg.appendChild(b);
     }
     mbar.append(cnt, el('span', 'ed-spacer'), vseg);
-    const foot = el('div', 'ed-mfoot', '單擊選取　雙擊在檢視器預覽（可設來源 In／Out）　拖到時間軸放入');
+    const foot = el('div', 'ed-mfoot', '雙擊預覽　拖到時間軸放入');
     pm.append(drop, msgs, relink, mbar, list, foot);
 
-    // 特效：轉場特效（加在剪接點）＋字體特效（加在字幕片段）。兩組都在同一個捲動面板裡
+    // 4.80 分類：「特效」只放畫面相關（轉場、濾鏡、貼圖動態），「字幕」放所有字幕相關（清單、過場、樣式、進場／持續／出場動畫）
     const pt = el('div', 'ed-panel scroll'); pt.dataset.panel = 'trans'; pt.hidden = true;
     const tl = el('div', 'ed-glist static'); tl.id = 'edTransList';
     const ta = el('div', 'ed-pfoot');
@@ -66,14 +66,10 @@
     tb.title = '把選取的轉場加到所選片段的結尾（和下一個片段之間；沒有下一個片段時是淡出）';
     tb.addEventListener('click', () => UI.addTransitionToSelection(lib.trans, 'end'));
     const tbs = el('div', 'ed-btnrow'); tbs.append(tbIn, tb);
-    ta.append(tbs, el('span', 'ed-hint', '先選一個片段，按「加到開頭」或「加到結尾」；或把轉場拖到剪接點、片段的開頭或結尾。'));
-    const xl = el('div', 'ed-glist static'); xl.id = 'edTextFxList';
-    const xa = el('div', 'ed-pfoot');
-    const xb = el('button', 'ed-btn primary'); xb.type = 'button'; xb.id = 'edTextFxApply'; xb.textContent = '套用到選取的字幕';
-    xb.title = '把選取的字體特效套用到時間軸上選取的字幕片段';
-    xb.addEventListener('click', () => UI.applyTextFx(lib.textFx));
-    xa.append(xb, el('span', 'ed-hint', '字幕出現時的動畫。選取字幕片段後按「套用」，或把特效拖到時間軸的字幕片段上；長度在詳細內容調整。'));
-    pt.append(groupHead('轉場特效'), tl, ta, groupHead('字體特效'), xl, xa);
+    ta.append(tbs, el('span', 'ed-hint', '也可以把轉場拖到剪接點。'));
+    const lk = clipFxGroup('look', 'edLookList', '套用到選取的片段', null);
+    const sk = clipFxGroup('sticker', 'edStickerList', '套用到選取的片段', null);
+    pt.append(groupHead('轉場特效'), tl, ta, groupHead('濾鏡'), ...lk, groupHead('貼圖動態'), ...sk);
 
     const pg = el('div', 'ed-panel scroll'); pg.dataset.panel = 'title'; pg.hidden = true;
     const gl = el('div', 'ed-glist static'); gl.id = 'edTitleList';
@@ -81,13 +77,21 @@
     const gb = el('button', 'ed-btn primary'); gb.type = 'button'; gb.id = 'edTitleAdd'; gb.textContent = '在播放頭新增';
     gb.title = '在播放頭的位置新增選取樣式的字幕（放在最上層沒被佔用的影片軌）';
     gb.addEventListener('click', () => UI.addTitle(lib.title));
-    ga.append(gb, el('span', 'ed-hint', '字幕放在影片軌上，新增後在右側詳細內容改文字、字型、顏色。也可以把過場拖到時間軸。'));
+    ga.append(gb);
     const sl = el('div', 'ed-glist static'); sl.id = 'edTStyleList';
     const sa = el('div', 'ed-pfoot');
     const sb = el('button', 'ed-btn primary'); sb.type = 'button'; sb.id = 'edTStyleApply'; sb.textContent = '套用到選取的字幕';
     sb.title = '把選取的字幕樣式套用到時間軸上選取的字幕片段';
     sb.addEventListener('click', () => UI.applyTitleStyle(lib.tstyle));
-    sa.append(sb, el('span', 'ed-hint', '顏色、描邊、外框、立體一次換好（不動文字與位置）。新增字幕也會用選取的樣式；可以把樣式拖到時間軸的字幕片段上。'));
+    sa.append(sb);
+    const xl = el('div', 'ed-glist static'); xl.id = 'edTextFxList';
+    const xa = el('div', 'ed-pfoot');
+    const xb = el('button', 'ed-btn primary'); xb.type = 'button'; xb.id = 'edTextFxApply'; xb.textContent = '套用到選取的字幕';
+    xb.title = '把選取的進場動畫套用到時間軸上選取的字幕片段';
+    xb.addEventListener('click', () => UI.applyTextFx(lib.textFx));
+    xa.append(xb);
+    const lp = clipFxGroup('tloop', 'edTextLoopList', '套用到選取的字幕', null);
+    const ou = clipFxGroup('tout', 'edTextOutList', '套用到選取的字幕', null);
     const ca = el('div', 'ed-pfoot');
     const cb = el('button', 'ed-btn'); cb.type = 'button'; cb.id = 'edSrtImport'; cb.textContent = '匯入 SRT';
     cb.title = '匯入 SRT 字幕檔：每一段變成「字幕」軌上的一個字幕片段';
@@ -100,13 +104,106 @@
     const cm = el('button', 'ed-btn'); cm.type = 'button'; cm.textContent = '在播放頭標記（V）';
     cm.title = '在播放頭加一段字幕（快捷鍵 V），之後在右側詳細內容的「字幕清單」輸入文字';
     cm.addEventListener('click', () => UI.markSubtitle());
-    ca.append(cb, ce, cm, ci, el('span', 'ed-hint', '匯入／匯出 SRT，或邊播放邊按 V 標記每一句的開始時間，再到右側「字幕清單」一行一行輸入文字。每段預設 10 秒，碰到下一段就提早結束。'));
-    pg.append(groupHead('字幕清單'), ca, groupHead('字幕過場'), gl, ga, groupHead('字幕樣式'), sl, sa);
+    ca.append(cb, ce, cm, ci, el('span', 'ed-hint', '邊播放邊按 V 標記每句開頭，再到右側「清單」輸入文字。'));
+    pg.append(groupHead('字幕清單'), ca, groupHead('字幕過場'), gl, ga, groupHead('字幕樣式'), sl, sa,
+      groupHead('進場動畫'), xl, xa, groupHead('持續動畫'), ...lp, groupHead('出場動畫'), ...ou);
 
     host.append(pm, pt, pg);
     setMediaView(state.mediaView, true);
     buildGallery();
     setLibTab('media');
+  }
+
+  // ---- 4.80：套在片段上的效果圖庫（濾鏡、貼圖動態、持續動畫、出場動畫）-------------------------------
+  // 每一種：清單、縮圖、套用方式、可以拖到哪種片段。時間軸拖放（edit-ui-timeline.js）也查這張表。
+  //   進場動畫（textfx）、字幕樣式（tstyle）沿用原本的圖庫，只把拖放的檢查一起放進來。
+  const isTitleC = c => !!c && c.type === 'title';
+  const CLIP_FX = {
+    textfx: { accepts: isTitleC, bad: '字體特效要拖到時間軸的字幕片段上', apply: (k, ids) => UI.applyTextFx(k, ids) },
+    tstyle: { accepts: isTitleC, bad: '字幕樣式要拖到時間軸的字幕片段上', apply: (k, ids) => UI.applyTitleStyle(k, ids) },
+    look: { accepts: c => !!c && c.type === 'media' && !!c.video, bad: '濾鏡要拖到時間軸的影片或圖片片段上', apply: (k, ids) => UI.applyLook(k, ids),
+      items: () => (F.LOOK_OPTIONS || []).map(([k, n]) => [k, n]), paint: (cv, k) => paintLookThumb(cv, k), sel: 'look', def: 'warm' },
+    sticker: { accepts: c => !!c && !!c.video, bad: '貼圖動態要拖到時間軸有畫面的片段上', apply: (k, ids) => UI.applySticker(k, ids),
+      items: () => Object.entries(F.STICKER_FX || {}).map(([k, d]) => [k, d.name]), paint: (cv, k, f) => paintStickerThumb(cv, k, f), play: true, sel: 'sticker', def: 'shake' },
+    tloop: { accepts: isTitleC, bad: '持續動畫要拖到時間軸的字幕片段上', apply: (k, ids) => UI.applyTextLoop(k, ids),
+      items: () => Object.entries(F.TEXT_LOOP || {}).filter(([, d]) => !d.hidden).map(([k, d]) => [k, d.name]), paint: (cv, k, f) => paintLoopThumb(cv, k, f), play: true, sel: 'tloop', def: 'wave' },
+    tout: { accepts: isTitleC, bad: '出場動畫要拖到時間軸的字幕片段上', apply: (k, ids) => UI.applyTextOut(k, ids),
+      items: () => Object.entries(F.TEXT_OUT || {}).filter(([, d]) => !d.hidden).map(([k, d]) => [k, d.name]), paint: (cv, k, f) => paintOutThumb(cv, k, f), play: true, sel: 'tout', def: 'fade' },
+  };
+  // 建一組圖庫的外框（清單＋套用按鈕＋說明）；內容在 buildGallery 依 CLIP_FX 填
+  function clipFxGroup(kind, listId, btnText, hint) {
+    const list = el('div', 'ed-glist static'); list.id = listId; list.dataset.fx = kind;
+    const foot = el('div', 'ed-pfoot');
+    const b = el('button', 'ed-btn primary', btnText); b.type = 'button'; b.dataset.fxApply = kind;
+    b.addEventListener('click', () => { const d = CLIP_FX[kind]; d.apply(lib[d.sel] || d.def); });
+    foot.append(b);
+    if (hint) foot.append(el('span', 'ed-hint', hint));
+    return [list, foot];
+  }
+  function fillClipFx(kind) {
+    const d = CLIP_FX[kind], list = $(`edMedia`).querySelector(`.ed-glist[data-fx="${kind}"]`);
+    if (!list) return;
+    list.textContent = '';
+    if (!lib[d.sel]) lib[d.sel] = d.def;
+    for (const [key, name] of d.items()) {
+      const it = el('div', 'ed-gitem'); it.dataset.fxKey = key; it.tabIndex = 0;
+      it.title = `${name}：拖到時間軸的片段上，或選取片段後按「套用」` + (d.play ? '（滑鼠移上來會播放）' : '');
+      const cv = el('canvas'); cv.width = 192; cv.height = 108;
+      it.append(cv, el('span', 'ed-gname', name));
+      list.appendChild(it);
+      d.paint(cv, key, null);
+      if (d.play) wireThumbPlay(it, cv, f => d.paint(cv, key, f));
+      const pick = () => { lib[d.sel] = key; markGallery(); };
+      it.addEventListener('pointerdown', e => libPointerDown(e, { kind, id: key }, name, pick));
+      it.addEventListener('dblclick', () => { pick(); d.apply(key); });
+      it.addEventListener('keydown', e => { if (e.key === 'Enter') { pick(); d.apply(key); } });
+    }
+  }
+  // 濾鏡縮圖：畫一張示意風景（天空、太陽、山、人物），再用 fx 的 lookSource 真的套一次濾鏡
+  let lookBase = null;
+  function paintLookThumb(cv, key) {
+    const g = cv.getContext('2d'), W = cv.width, H = cv.height;
+    if (!lookBase || lookBase.width !== W) {
+      lookBase = doc.createElement('canvas'); lookBase.width = W; lookBase.height = H;
+      const b = lookBase.getContext('2d');
+      const sky = b.createLinearGradient(0, 0, 0, H); sky.addColorStop(0, '#6fb6ff'); sky.addColorStop(0.6, '#ffd9a0'); sky.addColorStop(1, '#f39a5b');
+      b.fillStyle = sky; b.fillRect(0, 0, W, H);
+      b.fillStyle = '#fff3c4'; b.beginPath(); b.arc(W * 0.72, H * 0.42, H * 0.13, 0, Math.PI * 2); b.fill();
+      b.fillStyle = '#3f7d4e'; b.beginPath(); b.moveTo(0, H); b.lineTo(0, H * 0.7); b.lineTo(W * 0.3, H * 0.5); b.lineTo(W * 0.55, H * 0.72); b.lineTo(W * 0.8, H * 0.58); b.lineTo(W, H * 0.7); b.lineTo(W, H); b.fill();
+      b.fillStyle = '#c0392b'; b.fillRect(W * 0.24, H * 0.62, W * 0.06, H * 0.26);
+      b.fillStyle = '#f1c27d'; b.beginPath(); b.arc(W * 0.27, H * 0.57, H * 0.06, 0, Math.PI * 2); b.fill();
+    }
+    g.clearRect(0, 0, W, H);
+    let src = lookBase;
+    try { if (F.lookSource) src = F.lookSource({ video: { look: key, lookAmt: 100 } }, lookBase, W, H) || lookBase; } catch (_) { /* 畫不出來就顯示原圖 */ }
+    g.drawImage(src, 0, 0, W, H);
+  }
+  // 貼圖動態縮圖：一顆星星照 stickerState 動（f＝null 時停在不動的樣子；進場彈出停在一半）
+  function paintStickerThumb(cv, key, f) {
+    const g = cv.getContext('2d'), W = cv.width, H = cv.height;
+    const gr = g.createLinearGradient(0, 0, W, H); gr.addColorStop(0, '#5b6b86'); gr.addColorStop(1, '#2a3550');
+    g.fillStyle = gr; g.fillRect(0, 0, W, H);
+    const t = f == null ? (key === 'pop' ? 0.12 : 0.3) : f / 30;
+    let s = null;
+    try { s = F.stickerState ? F.stickerState(key, t, 1) : null; } catch (_) { s = null; }
+    const k = H / 1080;
+    g.save();
+    g.translate(W / 2 + (s ? s.dx * k : 0), H / 2 + (s ? s.dy * k : 0));
+    if (s) { g.rotate((s.rot || 0) * Math.PI / 180); g.scale(s.s || 1, s.s || 1); }
+    const R = H * 0.3, r = R * 0.45;
+    g.beginPath();
+    for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r : R; g.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+    g.closePath(); g.fillStyle = '#ffd23f'; g.fill(); g.lineWidth = 3; g.strokeStyle = '#1b2233'; g.stroke();
+    g.restore();
+  }
+  // 持續動畫縮圖：f＝null 停在第 10 格；出場動畫縮圖：停在出場進行到一半，播放時重複播出場那一段
+  function paintLoopThumb(cv, key, f) {
+    const t = Object.assign(F.makeTitle('static', '持續動畫'), { size: 240, textLoop: key, stroke: { color: '#1b2233', width: 6 } });
+    paintSampleTitle(cv, t, f == null ? 10 : f);
+  }
+  function paintOutThumb(cv, key, f) {
+    const t = Object.assign(F.makeTitle('static', '出場動畫'), { size: 240, textOut: key, textOutDur: 0.5, stroke: { color: '#1b2233', width: 6 } });
+    paintSampleTitle(cv, t, f == null ? 52 : 45 + Math.floor(f / 3));
   }
 
   function setLibTab(k) {
@@ -166,11 +263,13 @@
       it.addEventListener('dblclick', () => { lib.tstyle = key; markGallery(); UI.applyTitleStyle(key); });
       it.addEventListener('keydown', e => { if (e.key === 'Enter') { lib.tstyle = key; markGallery(); UI.applyTitleStyle(key); } });
     }
+    for (const k of Object.keys(CLIP_FX)) if (CLIP_FX[k].items) fillClipFx(k);
     markGallery();
     if (F.ready) F.ready().then(() => {
       for (const it of gl.children) paintTitleThumb(it.querySelector('canvas'), it.dataset.title);
       for (const it of xl.children) paintTextFxThumb(it.querySelector('canvas'), it.dataset.textfx, null);
       for (const it of sl.children) paintStyleThumb(it.querySelector('canvas'), it.dataset.tstyle);
+      for (const k of ['tloop', 'tout']) { const l = doc.querySelector(`#edMedia .ed-glist[data-fx="${k}"]`); if (l) for (const it of l.children) CLIP_FX[k].paint(it.querySelector('canvas'), it.dataset.fxKey, null); }
     }).catch(() => {});
   }
   function markGallery() {
@@ -178,6 +277,7 @@
     for (const it of $('edTitleList').children) it.classList.toggle('sel', it.dataset.title === lib.title);
     for (const it of $('edTextFxList').children) it.classList.toggle('sel', it.dataset.textfx === lib.textFx);
     for (const it of $('edTStyleList').children) it.classList.toggle('sel', it.dataset.tstyle === lib.tstyle);
+    for (const k of Object.keys(CLIP_FX)) { const l = CLIP_FX[k].items && doc.querySelector(`#edMedia .ed-glist[data-fx="${k}"]`); if (l) for (const it of l.children) it.classList.toggle('sel', it.dataset.fxKey === lib[CLIP_FX[k].sel]); }
   }
   const groupHead = t => el('div', 'ed-ghead', t);
   // 縮圖背景＋畫一個字幕片段（用 fx 真的畫，和成品一致）
@@ -502,6 +602,6 @@
   }
 
   Object.assign(UI, {
-    buildMediaPanel, ensureMediaInfo, importFiles, lib, paintMediaThumb, markMediaSel, mediaInfoOf, renderMedia, showMsgs, wireFileDrop,
+    CLIP_FX, buildMediaPanel, ensureMediaInfo, importFiles, lib, paintMediaThumb, markMediaSel, mediaInfoOf, renderMedia, showMsgs, wireFileDrop,
   });
 })(typeof window !== 'undefined' ? window : globalThis);

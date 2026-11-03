@@ -1862,6 +1862,8 @@
 .ed-fx input[type=color]{width:34px;height:24px;padding:0;border:1px solid var(--ed-border,var(--border,rgba(0,74,173,.2)));border-radius:6px;background:none;flex:none}
 .ed-fx-range{flex:1 1 auto;width:auto;min-width:60px;height:18px;margin:0;accent-color:var(--ed-accent,var(--accent,#004aad));cursor:pointer}
 .ed-fx input.ed-fx-numbox{flex:0 0 66px;width:66px}
+.ed-fx input.ed-fx-numbox:not(:focus){cursor:ns-resize}
+.ed-fx-range:focus-visible{outline:2px solid var(--ed-accent,var(--accent,#004aad));outline-offset:2px}
 .ed-fx-unit{flex:none;color:var(--ed-muted,var(--muted,#6b7890));font-size:11px;min-width:12px}
 .ed-fx-alpha{width:64px!important;flex:none}
 .ed-fx-chk{display:flex;align-items:center;gap:6px;margin:0;font-size:12px;font-weight:500;cursor:pointer}
@@ -1912,6 +1914,136 @@
   const KF_PRESET_OPTIONS = [['zoomIn', '慢慢放大', '從頭到尾慢慢放大（推近）'], ['zoomOut', '慢慢縮小', '從頭到尾慢慢縮小（拉遠）'],
     ['panLeft', '向左平移', '畫面慢慢往左移（稍微放大避免黑邊）'], ['panRight', '向右平移', '畫面慢慢往右移（稍微放大避免黑邊）']];
 
+  // ---- 數值控制項（4.80）：標籤拖曳＋拉桿＋數值框，詳細內容所有數值共用 ------------------------------
+  //   標籤：左右拖曳（Shift ×10、Alt ×0.1），雙擊重設。
+  //   拉桿：點一下跳到那裡；按住拖曳時按 Shift 或 Alt＝細調（1/10 速度）；←→ 鍵一格、Shift ×10、Alt ×0.1；雙擊重設。
+  //   數值框：直接輸入；沒在輸入時按住上下拖曳調整（往上加、Shift ×10、Alt ×0.1），沒拖動就變成輸入；↑↓ 鍵加減。
+  //   o：{ label, lab（標籤元素，可省略）, unit, scale, dec, min, max（模型值）, dpp（每 px 幾個模型值）, def（模型值）,
+  //        slider: [lo, hi]（顯示值，可省略：範圍有限時用 min～max）, sliderStep（顯示值）, get()（模型值）, set(v, live) }
+  //   回傳 { parts（拉桿、數值框、單位）, input, range, refresh() }
+  function numControl(o) {
+    const d = root.document;
+    const scale = o.scale || 1, dec = o.dec == null ? 2 : o.dec;
+    const lo = o.min == null ? -Infinity : o.min, hi = o.max == null ? Infinity : o.max;
+    const q = v => { const p = Math.pow(10, dec) * scale; return Math.round(clamp(v, lo, hi) * p) / p; };   // 夾範圍並對齊顯示精度
+    const cur = () => num(o.get(), o.def == null ? 0 : o.def);
+    const dpp = o.dpp || (Number.isFinite(hi - lo) ? (hi - lo) / 400 : Math.pow(10, -dec) / scale);
+    const sl = o.slider === false ? null : o.slider || (Number.isFinite(hi - lo) ? [lo * scale, hi * scale] : null);   // slider:false＝不要拉桿
+    const kstep = (o.sliderStep || o.inputStep || Math.pow(10, -dec)) / scale;      // 鍵盤一格（模型值）
+    const mult = ev => (ev.shiftKey ? 10 : ev.altKey ? 0.1 : 1);
+    const inp = el('input'); inp.type = 'number'; inp.step = o.inputStep || fmtNum(Math.pow(10, -dec), dec);
+    inp.className = 'ed-fx-numbox'; inp.setAttribute('aria-label', o.label);
+    inp.title = `${o.label}：直接輸入數值；按住上下拖曳調整（Shift 加速、Alt 微調）；↑↓ 鍵加減`;
+    const unit = el('span', 'ed-fx-unit', o.unit || '');
+    let rng = null, busy = false;            // busy：拖曳中，外部重畫不要蓋掉顯示
+    const show = v => { inp.value = fmtNum(v * scale, dec); if (rng) rng.value = String(clamp(v * scale, sl[0], sl[1])); };
+    const commit = (v, live) => { show(v); o.set(v, live); };
+    // 按住拖曳的共用流程：用 window 監聽，外部中途重畫也不會中斷
+    function track(cursor, onMove, onEnd) {
+      busy = true;
+      d.body.style.cursor = cursor;
+      const move = ev => onMove(ev);
+      const up = ev => {
+        root.removeEventListener('pointermove', move); root.removeEventListener('pointerup', up); root.removeEventListener('pointercancel', up);
+        d.body.style.cursor = ''; busy = false;
+        onEnd(ev);
+      };
+      root.addEventListener('pointermove', move); root.addEventListener('pointerup', up); root.addEventListener('pointercancel', up);
+    }
+    const reset = () => { if (o.def != null) commit(o.def, false); };
+    const keyStep = (e, ok) => {
+      const k = e.key;
+      const dir = ok.up.includes(k) ? 1 : ok.down.includes(k) ? -1 : 0;
+      if (!dir) return;
+      e.preventDefault();
+      commit(q(cur() + dir * kstep * mult(e)), false);
+    };
+    if (sl) {
+      rng = el('input', 'ed-fx-range'); rng.type = 'range';
+      rng.min = sl[0]; rng.max = sl[1]; rng.step = 'any';
+      rng.setAttribute('aria-label', o.label + '（拉桿）');
+      rng.title = `${o.label}：拖曳調整，按住 Shift 或 Alt 拖曳＝細調；←→ 鍵微調；雙擊重設`;
+      rng.addEventListener('pointerdown', e => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        try { rng.focus({ preventScroll: true }); } catch (_) { /* 不能聚焦就算了 */ }
+        const r = rng.getBoundingClientRect(), pad = 8, w = Math.max(1, r.width - pad * 2), span = sl[1] - sl[0];
+        const thumbX = r.left + pad + clamp((cur() * scale - sl[0]) / span, 0, 1) * w;
+        // 點在圓鈕上：從目前值開始拖；點在其他地方：先跳過去
+        let acc = Math.abs(e.clientX - thumbX) <= 10 ? cur() : (sl[0] + clamp((e.clientX - r.left - pad) / w, 0, 1) * span) / scale;
+        let val = q(acc), lastX = e.clientX, moved = false;
+        if (val !== cur()) { commit(val, true); moved = true; }
+        track('grabbing', ev => {
+          const dx = ev.clientX - lastX; lastX = ev.clientX;
+          if (!dx) return;
+          const fine = ev.shiftKey || ev.altKey ? 0.1 : 1;
+          acc = clamp(acc + dx / w * span / scale * fine, sl[0] / scale, sl[1] / scale);
+          val = q(acc);
+          moved = true;
+          commit(val, true);
+        }, () => { if (moved) o.set(val, false); });
+      });
+      rng.addEventListener('keydown', e => keyStep(e, { up: ['ArrowRight', 'ArrowUp'], down: ['ArrowLeft', 'ArrowDown'] }));
+      rng.addEventListener('input', () => commit(q(parseFloat(rng.value) / scale), false));   // 其他輸入方式（輔助工具）
+      rng.addEventListener('dblclick', reset);
+    }
+    inp.addEventListener('change', () => {
+      const v = parseFloat(inp.value);
+      if (!isFinite(v)) { show(cur()); return; }
+      commit(q(v / scale), false);
+    });
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { inp.blur(); return; }
+      keyStep(e, { up: ['ArrowUp'], down: ['ArrowDown'] });
+    });
+    // 數值框：沒在輸入時按住上下拖曳；只是點一下（沒拖動）就進入輸入
+    inp.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || e.pointerType === 'touch' || d.activeElement === inp) return;
+      e.preventDefault();
+      const y0 = e.clientY;
+      let lastY = y0, acc = cur(), val = acc, moved = false;
+      track('ns-resize', ev => {
+        if (!moved && Math.abs(ev.clientY - y0) < 3) return;
+        const dy = lastY - ev.clientY; lastY = ev.clientY;
+        moved = true;
+        acc = clamp(acc + dy * dpp * mult(ev), lo, hi);
+        val = q(acc);
+        commit(val, true);
+      }, () => {
+        if (moved) o.set(val, false);
+        else { inp.focus(); inp.select(); }
+      });
+    });
+    // 標籤：左右拖曳、雙擊重設
+    if (o.lab) {
+      const l = o.lab;
+      l.classList.add('ed-fx-drag');
+      l.title = `${o.label}：在標籤上左右拖曳調整（Shift 加速、Alt 微調），雙擊重設`;
+      l.addEventListener('pointerdown', e => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const x0 = e.clientX;
+        let lastX = x0, acc = cur(), val = acc, moved = false;
+        track('ew-resize', ev => {
+          if (!moved && Math.abs(ev.clientX - x0) < 2) return;
+          const dx = ev.clientX - lastX; lastX = ev.clientX;
+          moved = true;
+          acc = clamp(acc + dx * dpp * mult(ev), lo, hi);
+          val = q(acc);
+          commit(val, true);
+        }, () => { if (moved) o.set(val, false); });
+      });
+      l.addEventListener('dblclick', reset);
+    }
+    const refresh = () => {
+      if (busy) return;
+      const v = cur();
+      if (d.activeElement !== inp) inp.value = fmtNum(v * scale, dec);
+      if (rng) rng.value = String(clamp(v * scale, sl[0], sl[1]));
+    };
+    return { parts: rng ? [rng, inp, unit] : [inp, unit], input: inp, range: rng, refresh };
+  }
+
   // 每個欄位：{ el, refresh() }；st 是這個區段的共用狀態 { subject, commit, ctx }
   function makeRow(st, def) {
     const row = el('div', 'ed-fx-row');
@@ -1927,6 +2059,7 @@
       row.style.gridTemplateColumns = '1fr';
       const b = el('button', 'ed-fx-btn', def.label);
       b.type = 'button';
+      if (def.id) b.dataset.act = def.id;           // 給測試、外部找按鈕用
       // kfReset：重設時順便清掉這一類參數的關鍵影格（例如 'video.transform.'），交給詳細內容一次做完（一筆復原）
       b.addEventListener('click', () => {
         const x = st.ctx;
@@ -1940,19 +2073,11 @@
       row.className = 'ed-fx-hint'; row.textContent = def.label;
     } else if (def.type === 'num') {
       const scale = def.scale || 1, dec = def.dec == null ? 2 : def.dec;
-      const l = lab(def.label); l.classList.add('ed-fx-drag');
-      const inp = el('input'); inp.type = 'number'; inp.step = def.inputStep || fmtNum(Math.pow(10, -dec), dec);
-      const unit = el('span', 'ed-fx-unit', def.unit || '');
-      // slider: [lo, hi]（顯示值）→ 前面加拉桿；數值框留在後面可直接輸入，可以超出拉桿範圍（到 min／max）
-      let rng = null;
-      if (def.slider) {
-        rng = el('input', 'ed-fx-range'); rng.type = 'range';
-        rng.min = def.slider[0]; rng.max = def.slider[1]; rng.step = def.sliderStep || fmtNum(Math.pow(10, -dec), dec);
-        rng.setAttribute('aria-label', def.label);
-        inp.classList.add('ed-fx-numbox');
-        ctl.append(rng);
-      }
-      ctl.append(inp, unit);
+      const l = lab(def.label);
+      const nc = numControl({ label: def.label, lab: l, unit: def.unit, scale, dec, min: def.min, max: def.max, dpp: def.dpp, def: def.def,
+        slider: def.slider, sliderStep: def.sliderStep, inputStep: def.inputStep,
+        get: () => get(), set: (v, live) => emit(def.patch(v, st.subject), live) });
+      ctl.append(...nc.parts);
       // 關鍵影格菱形：空心＝這個參數沒有動畫、半實心＝有動畫但這格沒有、實心＝這格有關鍵影格
       let kfBtn = null;
       if (def.kf) {
@@ -1961,12 +2086,8 @@
         kfBtn.addEventListener('click', () => { const x = st.ctx; if (x && x.kf) x.kf.toggle(kfPaths(def, st.subject), st.subject); });
         ctl.append(kfBtn);
       }
-      const lo = def.min == null ? -Infinity : def.min, hi = def.max == null ? Infinity : def.max;
-      const q = v => { const p = Math.pow(10, dec) * scale; return Math.round(clamp(v, lo, hi) * p) / p; };   // 夾範圍並對齊顯示精度
-      const cur = () => num(get(), def.def == null ? 0 : def.def);
       refresh = () => {
-        if (root.document.activeElement !== inp) inp.value = fmtNum(cur() * scale, dec);
-        if (rng && root.document.activeElement !== rng) rng.value = String(cur() * scale);
+        nc.refresh();
         if (kfBtn) {
           const x = st.ctx || {}, ps = kfPaths(def, st.subject), c = st.subject;
           const anim = ps.some(q => c.keyframes && Array.isArray(c.keyframes[q]) && c.keyframes[q].length);
@@ -1977,50 +2098,6 @@
           row.classList.toggle('kf-anim', anim);
         }
       };
-      if (rng) {
-        const fromRng = () => q(parseFloat(rng.value) / scale);
-        rng.addEventListener('input', () => { const v = fromRng(); inp.value = fmtNum(v * scale, dec); emit(def.patch(v, st.subject), true); });
-        rng.addEventListener('change', () => { const v = fromRng(); emit(def.patch(v, st.subject), false); rng.blur(); });
-        rng.addEventListener('dblclick', () => { if (def.def == null) return; rng.value = String(def.def * scale); inp.value = fmtNum(def.def * scale, dec); emit(def.patch(def.def, st.subject), false); });
-      }
-      inp.addEventListener('change', () => {
-        const v = parseFloat(inp.value);
-        if (!isFinite(v)) { inp.value = fmtNum(cur() * scale, dec); return; }
-        const nv = q(v / scale);
-        inp.value = fmtNum(nv * scale, dec);
-        emit(def.patch(nv, st.subject), false);
-      });
-      // 在標籤上左右拖曳（Shift 加速 ×10、Alt 微調 ×0.1），雙擊標籤重設。用 window 監聽，外部中途重畫也不會中斷。
-      const dpp = def.dpp || (Number.isFinite(hi - lo) ? (hi - lo) / 400 : Math.pow(10, -dec));
-      l.addEventListener('pointerdown', e => {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        const x0 = e.clientX, v0 = cur();
-        let moved = false, last = v0;
-        const move = ev => {
-          const dx = ev.clientX - x0;
-          if (!moved && Math.abs(dx) < 2) return;
-          moved = true;
-          const mult = ev.shiftKey ? 10 : ev.altKey ? 0.1 : 1;
-          last = q(v0 + dx * dpp * mult);
-          inp.value = fmtNum(last * scale, dec);
-          if (rng) rng.value = String(last * scale);
-          emit(def.patch(last, st.subject), true);
-        };
-        const up = () => {
-          root.removeEventListener('pointermove', move); root.removeEventListener('pointerup', up); root.removeEventListener('pointercancel', up);
-          root.document.body.style.cursor = '';
-          if (moved) emit(def.patch(last, st.subject), false);
-        };
-        root.document.body.style.cursor = 'ew-resize';
-        root.addEventListener('pointermove', move); root.addEventListener('pointerup', up); root.addEventListener('pointercancel', up);
-      });
-      l.addEventListener('dblclick', () => {
-        if (def.def == null) return;
-        inp.value = fmtNum(def.def * scale, dec);
-        if (rng) rng.value = String(def.def * scale);
-        emit(def.patch(def.def, st.subject), false);
-      });
       row.append(l, ctl);
     } else if (def.type === 'kfbar') {
       // 關鍵影格工具列：上一個／下一個、這格的走法、清除；沒有動畫時只顯示一鍵動畫
@@ -2264,20 +2341,18 @@
             patch: (v, c) => tfPatch(v ? { zoomLinked: true, zoomY: tf(c, 'zoomX') } : { zoomLinked: false }) },
           { type: 'num', label: '位置 X', kf: ['posX'], get: (c, x) => tf(c, 'posX', x), def: 0, min: -20000, max: 20000, dpp: 1, dec: 1, unit: 'px', slider: [-2000, 2000], sliderStep: 1, patch: v => tfPatch({ posX: v }) },
           { type: 'num', label: '位置 Y', kf: ['posY'], get: (c, x) => tf(c, 'posY', x), def: 0, min: -20000, max: 20000, dpp: 1, dec: 1, unit: 'px', slider: [-2000, 2000], sliderStep: 1, patch: v => tfPatch({ posY: v }) },
-          { type: 'num', label: '旋轉', kf: ['rotation'], get: (c, x) => tf(c, 'rotation', x), def: 0, min: -3600, max: 3600, dpp: 0.5, dec: 1, unit: '°', patch: v => tfPatch({ rotation: v }) },
-          { type: 'num', label: '錨點 X', kf: ['anchorX'], get: (c, x) => tf(c, 'anchorX', x), def: 0, min: -20000, max: 20000, dpp: 1, dec: 1, unit: 'px', patch: v => tfPatch({ anchorX: v }) },
-          { type: 'num', label: '錨點 Y', kf: ['anchorY'], get: (c, x) => tf(c, 'anchorY', x), def: 0, min: -20000, max: 20000, dpp: 1, dec: 1, unit: 'px', patch: v => tfPatch({ anchorY: v }) },
+          { type: 'num', label: '旋轉', kf: ['rotation'], get: (c, x) => tf(c, 'rotation', x), def: 0, min: -3600, max: 3600, dpp: 0.5, dec: 1, unit: '°', slider: [-180, 180], sliderStep: 1, patch: v => tfPatch({ rotation: v }) },
+          { type: 'num', label: '錨點 X', kf: ['anchorX'], get: (c, x) => tf(c, 'anchorX', x), def: 0, min: -20000, max: 20000, dpp: 1, dec: 1, unit: 'px', slider: [-1000, 1000], sliderStep: 1, patch: v => tfPatch({ anchorX: v }) },
+          { type: 'num', label: '錨點 Y', kf: ['anchorY'], get: (c, x) => tf(c, 'anchorY', x), def: 0, min: -20000, max: 20000, dpp: 1, dec: 1, unit: 'px', slider: [-1000, 1000], sliderStep: 1, patch: v => tfPatch({ anchorY: v }) },
           { type: 'num', label: '不透明度', kf: ['opacity'], get: (c, x) => tf(c, 'opacity', x), def: 1, min: 0, max: 1, scale: 100, dpp: 0.004, dec: 0, unit: '%', patch: v => tfPatch({ opacity: v }) },
           { type: 'check', label: '水平翻轉', get: (c, x) => !!tf(c, 'flipH', x), patch: v => tfPatch({ flipH: v }) },
           { type: 'check', label: '垂直翻轉', get: (c, x) => !!tf(c, 'flipV', x), patch: v => tfPatch({ flipV: v }) },
           { type: 'select', label: '畫面符合', options: FIT_OPTIONS, get: c => (c.video && c.video.fit) || 'fit', patch: v => ({ video: { fit: v } }) },
           { type: 'num', label: '背景模糊', show: c => !!c.video && c.video.fit === 'blur', get: c => num(c.video && c.video.bgBlur, BG_BLUR_DEFAULT), def: BG_BLUR_DEFAULT, min: 0, max: 100, dpp: 0.5, dec: 0, unit: '%', slider: [0, 100], sliderStep: 1, patch: v => ({ video: { bgBlur: v } }) },
-          { type: 'select', label: '濾鏡', show: c => c.type === 'media', options: LOOK_OPTIONS, get: c => (c.video && c.video.look) || 'none', patch: v => ({ video: { look: v } }) },
-          { type: 'num', label: '濾鏡強度', show: c => c.type === 'media' && !!c.video && !!c.video.look && c.video.look !== 'none', get: c => num(c.video && c.video.lookAmt, 100), def: 100, min: 0, max: 100, dpp: 0.5, dec: 0, unit: '%', slider: [0, 100], sliderStep: 1, patch: v => ({ video: { lookAmt: v } }) },
           { type: 'select', label: '貼圖動態', options: STICKER_OPTIONS, get: c => (c.video && c.video.sticker) || 'none', patch: v => ({ video: { sticker: v } }) },
           { type: 'num', label: '貼圖動態強度', show: c => !!c.video && !!c.video.sticker && c.video.sticker !== 'none', get: c => num(c.video && c.video.stickerAmt, 100), def: 100, min: 0, max: 100, dpp: 0.5, dec: 0, unit: '%', slider: [0, 100], sliderStep: 1, patch: v => ({ video: { stickerAmt: v } }) },
           { type: 'btn', label: '重設變形', kfReset: 'video.transform.', patch: () => ({ video: { transform: defaultTransform(), fit: 'fit' } }) },
-          { type: 'hint', label: '提示：按數值右邊的 ◇ 就能做動畫：移動播放頭、改數值，會自動在播放頭加關鍵影格。縮放、位置可拖拉桿或直接輸入數值；也可以在預覽畫面上直接拖曳、拉角落縮放、拉上方圓點旋轉。在左側標籤上左右拖曳可微調（Shift 加速、Alt 微調），雙擊標籤或拉桿重設。' },
+          { type: 'hint', label: '按 ◇ 在播放頭加關鍵影格做動畫。' },
         ], ctx);
       },
     },
@@ -2292,6 +2367,10 @@
         const ccPatch = o => ({ video: { cc: o } });
         const ccNum = (label, k, o = {}) => Object.assign({ type: 'num', label, get: c => cv(c, k), def: 0, min: -100, max: 100, dpp: 0.5, dec: 0, slider: [-100, 100], sliderStep: 1, patch: v => ccPatch({ [k]: v }) }, o);
         buildSection(host, 'color:' + clip.id + ':' + Object.keys(luts).join(','), clip, commit, [
+          // 4.80：濾鏡從「變形」搬過來，色彩相關的設定都在這一頁
+          { type: 'head', label: '濾鏡' },
+          { type: 'select', label: '種類', options: LOOK_OPTIONS, get: c => (c.video && c.video.look) || 'none', patch: v => ({ video: { look: v } }) },
+          { type: 'num', label: '濾鏡強度', show: c => !!c.video && !!c.video.look && c.video.look !== 'none', get: c => num(c.video && c.video.lookAmt, 100), def: 100, min: 0, max: 100, dpp: 0.5, dec: 0, unit: '%', slider: [0, 100], sliderStep: 1, patch: v => ({ video: { lookAmt: v } }) },
           // 4.70 調色：在色彩還原之後、LUT 之前（見 ccPixel）
           { type: 'head', label: '調色' },
           ccNum('曝光', 'exposure', { def: 0, min: -3, max: 3, dpp: 0.01, dec: 2, unit: 'EV', slider: [-3, 3], sliderStep: 0.05 }),
@@ -2302,20 +2381,26 @@
           ccNum('色調', 'tint'),
           ccNum('飽和度', 'sat'),
           ccNum('自然飽和', 'vib'),
-          { type: 'hint', label: '色溫往右偏暖（黃）、往左偏冷（藍）；色調往右偏洋紅、往左偏綠。自然飽和只加強原本較淡的顏色，膚色比較不會過頭。雙擊標籤或拉桿歸零。' },
           { type: 'head', label: '色輪' },
           { type: 'wheels', wheels: [{ key: 'lift', label: '暗部' }, { key: 'gamma', label: '中間調' }, { key: 'gain', label: '亮部' }],
             get: c => (c.video && c.video.cc) || {}, patch: (k, p) => ccPatch({ [k]: p }) },
-          { type: 'hint', label: '把點往某個顏色拖，那個亮度範圍就偏向那個顏色（例：暗部偏青、亮部偏橘＝電影感）。雙擊色輪或按「歸零」回中心。' },
+          { type: 'hint', label: '往某個顏色拖，該亮度範圍就偏向那個顏色；雙擊歸零。' },
           { type: 'check', label: '略過調色（比對原圖）', get: c => !!(c.video && c.video.cc && c.video.cc.off), patch: v => ccPatch({ off: v }) },
           { type: 'btn', label: '重設調色', patch: () => ({ video: { cc: null } }) },
           { type: 'head', label: '色彩還原與 LUT' },
           { type: 'num', label: '色彩還原', get: c => num(c.video && c.video.restore, 0), def: 0, min: 0, max: 100, dpp: 0.5, dec: 0, unit: '%', slider: [0, 100], sliderStep: 1, patch: v => ({ video: { restore: v } }) },
-          { type: 'hint', label: '色彩還原：自動拉開色階、校正偏色（白平衡），適合手機或舊影片顏色灰灰、偏黃偏藍的畫面。' },
+          { type: 'hint', label: '自動校正灰濛、偏色的畫面。' },
           { type: 'select', label: 'LUT', options: opts, get: c => (c.video && c.video.lut && luts[c.video.lut] ? c.video.lut : ''), patch: v => ({ video: { lut: v || null } }) },
           { type: 'num', label: 'LUT 強度', show: c => !!(c.video && c.video.lut && luts[c.video.lut]), get: c => num(c.video && c.video.lutAmt, 100), def: 100, min: 0, max: 100, dpp: 0.5, dec: 0, unit: '%', slider: [0, 100], sliderStep: 1, patch: v => ({ video: { lutAmt: v } }) },
           { type: 'btn', label: '載入 LUT 檔（.cube）…', run: c => ctx && ctx.loadLut && ctx.loadLut(c) },
           { type: 'btn', label: '從專案移除這個 LUT', show: c => !!(c.video && c.video.lut && luts[c.video.lut]), run: c => ctx && ctx.removeLut && ctx.removeLut(c.video.lut) },
+          // 4.80：調色複製與批量套用（濾鏡、調色、色彩還原、LUT 一整組；變形、裁切不動）
+          { type: 'head', label: '複製與批量套用' },
+          { type: 'btn', label: '複製調色', id: 'copy', run: c => ctx && ctx.grade && ctx.grade.copy(c) },
+          { type: 'btn', label: '貼上調色到選取的片段', id: 'paste', show: () => !!(ctx && ctx.grade && ctx.grade.has()), run: c => ctx.grade.paste(c) },
+          { type: 'btn', label: '套用到同一個素材的所有片段', id: 'media', run: c => ctx && ctx.grade && ctx.grade.apply(c, 'media') },
+          { type: 'btn', label: '套用到時間軸上所有影片／圖片', id: 'all', run: c => ctx && ctx.grade && ctx.grade.apply(c, 'all') },
+          { type: 'hint', label: '含濾鏡、調色、色輪、色彩還原、LUT；鎖定的軌道不改。' },
         ], ctx);
       },
     },
@@ -2342,10 +2427,10 @@
           { type: 'chars', label: '選字變色（點字或拖過去，再點一次取消）', get: c => { const a = parseAccent(tt(c, 'text')); return { text: a.text, mask: a.mask, color: tt(c, 'accent') }; },
             patch: (mask, c) => T({ text: buildAccent(parseAccent(tt(c, 'text')).text, mask) }) },
           { type: 'color', label: '變色顏色', get: c => tt(c, 'accent'), patch: v => T({ accent: v }) },
-          { type: 'hint', label: '也可以直接在文字裡用 *星號* 包住要變色的字，例如：進行*瘋狂*的編輯' },
+          { type: 'hint', label: '也可以用 *星號* 包住要變色的字' },
           { type: 'head', label: '字型與位置' },
           { type: 'select', label: '字型', options: Object.keys(FONTS).map(k => [k, FONTS[k].name]), get: c => tt(c, 'font'), patch: v => { loadFont(v); return T({ font: v }); } },
-          { type: 'num', label: '字級', get: c => tt(c, 'size'), def: 80, min: 8, max: 600, dpp: 0.5, dec: 0, unit: 'px', patch: v => T({ size: v }) },
+          { type: 'num', label: '字級', get: c => tt(c, 'size'), def: 80, min: 8, max: 600, dpp: 0.5, dec: 0, unit: 'px', slider: [8, 300], sliderStep: 1, patch: v => T({ size: v }) },
           { type: 'select', label: '對齊', options: ALIGN_OPTIONS, get: c => tt(c, 'align'), show: c => tt(c, 'preset') !== 'lowerThird' && tt(c, 'preset') !== 'crawl', patch: v => T({ align: v }) },
           { type: 'num', label: '行距', get: c => tt(c, 'lineHeight'), def: 1.25, min: 0.8, max: 3, dpp: 0.01, dec: 2, show: isPreset('static', 'lowerThird', 'scroll', 'typewriter', 'fadeUp'), patch: v => T({ lineHeight: v }) },
           { type: 'num', label: '水平位置', get: c => tt(c, 'x'), def: 0.5, min: -0.5, max: 1.5, scale: 100, dpp: 0.002, dec: 1, unit: '%', slider: [0, 100], sliderStep: 0.5, show: c => tt(c, 'preset') !== 'crawl', patch: v => T({ x: v }) },
@@ -2364,7 +2449,7 @@
           { type: 'color', label: '描邊顏色', get: c => ttSub(c, 'stroke', 'color'), patch: v => T({ stroke: { color: v } }) },
           { type: 'num', label: '描邊粗細', get: c => ttSub(c, 'stroke', 'width'), def: 0, min: 0, max: 60, dpp: 0.1, dec: 1, unit: 'px', patch: v => T({ stroke: { width: v } }) },
           { type: 'head', label: '外框（色框）' },
-          { type: 'hint', label: '在描邊外面再加一圈圈色框，最多 4 層（1 在最內側）。', show: c => outlineCount(c) === 0 },
+          { type: 'hint', label: '描邊外再加色框，最多 4 層。', show: c => outlineCount(c) === 0 },
           ...[0, 1, 2, 3].flatMap(i => [
             { type: 'color', label: `外框 ${i + 1}`, show: c => outlineAt(c, i).on, get: c => outlineAt(c, i).color, patch: (v, c) => T({ outlines: setOutline(c, i, { color: v }) }) },
             { type: 'num', label: `外框 ${i + 1} 粗細`, show: c => outlineAt(c, i).on, get: c => outlineAt(c, i).width, def: 6, min: 0, max: 60, dpp: 0.1, dec: 1, unit: 'px',
@@ -2382,7 +2467,7 @@
           { type: 'head', label: '立體' },
           { type: 'num', label: '立體深度', get: c => ttSub(c, 'extrude', 'depth'), def: 0, min: 0, max: 80, dpp: 0.1, dec: 0, unit: 'px', slider: [0, 40], sliderStep: 1, patch: v => T({ extrude: { depth: v } }) },
           { type: 'color', label: '立體顏色', show: c => ttSub(c, 'extrude', 'depth') > 0, get: c => ttSub(c, 'extrude', 'color'), patch: v => T({ extrude: { color: v } }) },
-          { type: 'num', label: '立體方向', show: c => ttSub(c, 'extrude', 'depth') > 0, get: c => ttSub(c, 'extrude', 'angle'), def: 45, min: -180, max: 360, dpp: 0.5, dec: 0, unit: '°', patch: v => T({ extrude: { angle: v } }) },
+          { type: 'num', label: '立體方向', show: c => ttSub(c, 'extrude', 'depth') > 0, get: c => ttSub(c, 'extrude', 'angle'), def: 45, min: -180, max: 360, dpp: 0.5, dec: 0, unit: '°', slider: [-180, 180], sliderStep: 1, patch: v => T({ extrude: { angle: v } }) },
           { type: 'head', label: '陰影' },
           { type: 'color', label: '陰影顏色', alpha: true, get: c => ttSub(c, 'shadow', 'color'), patch: v => T({ shadow: { color: v } }) },
           { type: 'num', label: '模糊', get: c => ttSub(c, 'shadow', 'blur'), def: 8, min: 0, max: 100, dpp: 0.2, dec: 0, unit: 'px', patch: v => T({ shadow: { blur: v } }) },
@@ -2396,7 +2481,7 @@
           { type: 'color', label: '集中線顏色', alpha: true, show: c => !!ttSub(c, 'speedLines', 'on'), get: c => ttSub(c, 'speedLines', 'color'), patch: v => T({ speedLines: { color: v } }) },
           { type: 'head', label: '底形狀' },
           { type: 'select', label: '形狀', options: Object.keys(SHAPES).map(k => [k, SHAPES[k].name]), get: c => ttSub(c, 'shape', 'kind'), patch: v => T({ shape: { kind: v } }) },
-          { type: 'hint', label: '選了形狀就用形狀取代下面的背景色；「下三分之一條」「跑馬燈」的過場不畫形狀。', show: c => ttSub(c, 'shape', 'kind') !== 'none' },
+          { type: 'hint', label: '形狀會取代背景色；下三分之一條、跑馬燈不畫形狀。', show: c => ttSub(c, 'shape', 'kind') !== 'none' },
           { type: 'color', label: '形狀顏色', show: shapeHas('color'), get: c => ttSub(c, 'shape', 'color'), patch: v => T({ shape: { color: v } }) },
           { type: 'color', label: '第二色', show: shapeHas('color2'), get: c => ttSub(c, 'shape', 'color2'), patch: v => T({ shape: { color2: v } }) },
           { type: 'color', label: '框線顏色', show: shapeHas('border'), get: c => ttSub(c, 'shape', 'border'), patch: v => T({ shape: { border: v } }) },
@@ -2438,7 +2523,7 @@
       render(host, tr, commit) {
         buildSection(host, 'transition:' + tr.id, tr, commit, [
           { type: 'select', label: '類型', options: Object.keys(TRANSITIONS).map(k => [k, TRANSITIONS[k].name]), get: s => s.type, patch: v => ({ type: v }) },
-          { type: 'num', label: '長度', get: s => s.duration, def: 15, min: 1, max: 600, dpp: 0.25, dec: 0, unit: '格', patch: v => ({ duration: Math.round(v) }) },
+          { type: 'num', label: '長度', get: s => s.duration, def: 15, min: 1, max: 600, dpp: 0.25, dec: 0, unit: '格', slider: [1, 120], sliderStep: 1, patch: v => ({ duration: Math.round(v) }) },
           { type: 'select', label: '對齊', options: [['center', '置中於剪接點'], ['start', '從剪接點開始'], ['end', '在剪接點結束']], get: s => s.align || 'center', show: s => !!(s.leftClipId && s.rightClipId), patch: v => ({ align: v }) },
           { type: 'color', label: '顏色', get: s => s.color || '#000000', show: s => !!trInfo(s).color, patch: v => ({ color: v }) },
           { type: 'select', label: '方向', options: DIR_OPTIONS, get: s => s.direction || 'left', show: s => trInfo(s).dirs === 'four', patch: v => ({ direction: v }) },
@@ -2454,10 +2539,10 @@
     DEFAULT_TRANSFORM, DEFAULT_CROP, defaultTransform, defaultCrop, defaultVideo,
     fitRect, clipMatrix, applyMatrix, cropRect, getParam, FIT_OPTIONS, BG_BLUR_DEFAULT,
     drawClipVisual, drawSolid, drawTitle, titleBounds, clipQuad, LOOKS, LOOK_OPTIONS, restoreFromStats, gradePixels, gradeSource, ccParams, ccPixel, CC_KEYS, CC_WHEEL_KEYS,
-    TRANSITIONS, ease, TITLE_PRESETS, TITLE_STYLES, TITLE_STYLE_GROUPS, SHAPES, GRADIENTS, TEXT_FX, TEXT_LOOP, TEXT_OUT, BG_TAILS, STICKER_FX, STICKER_OPTIONS, stickerState, textOutState,
+    TRANSITIONS, ease, TITLE_PRESETS, TITLE_STYLES, TITLE_STYLE_GROUPS, SHAPES, GRADIENTS, TEXT_FX, TEXT_LOOP, TEXT_OUT, BG_TAILS, STICKER_FX, STICKER_OPTIONS, stickerState, textOutState, lookSource,
     fxPlan, fxAt, makeTitle, normTitle, parseAccent, buildAccent, parseSrt, formatSrt, fitCues, planSubtitleMark, wrapText, parseColor, formatColor,
     ready, get fontLoaded() { return defaultFontLoaded(); }, FONTS, loadFont, onFontLoad, fontIsLoaded,
-    inspector: { sections: SECTIONS },
+    inspector: { sections: SECTIONS }, numControl,
     ensureStyle,                 // 插入詳細內容樣式（.ed-fx-*）；UI 自己的區段也用這套外觀，啟動時先呼叫一次
     _setCanvasFactory(fn) { canvasFactory = fn; Object.keys(pool).forEach(k => delete pool[k]); },
   };

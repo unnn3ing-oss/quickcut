@@ -9,7 +9,7 @@
   const UI = Q && Q.uiParts;
   if (!UI) return;                     // 頁面上沒有剪輯介面
   const { $, AUDIO_H, DRAG_PX, EDGE_PX, HEAD_W, ICONS, MARKER_HEX, MARKER_NAME, MOD, RULER_H, SNAP_PX, TRANS_SIDE_TEXT,
-    VIDEO_H, ZOOM_MIN, addMarkerHere, addTitle, addTransitionAt, app, applyTextFx, applyTitleStyle, bladeAtPlayhead,
+    VIDEO_H, ZOOM_MIN, addMarkerHere, addTitle, addTransitionAt, app, bladeAtPlayhead,
     clamp, clickSelect, clipOf, clipTitle, closeMenu, closePop, colors, deleteSelection, doc, el, ensureMediaInfo,
     flushPop, fmtNum, fps, icon, linkSelection, markClipRange, mediaOf, op, openFlagPop, openFreezePop, openMarkerPop,
     openMenu, openSpeedPop, renderMedia, renderViewerChrome, say, scheduleStage, seekTimeline, selIds, selectClips,
@@ -1106,9 +1106,10 @@
       }
       return { lane, tid, kind, f: best ? best.f : f, clipId: best && best.clipId, edge: best && best.edge, leftId: best && best.edge === 'end' ? best.clipId : null };
     }
-    if (payload.kind === 'textfx' || payload.kind === 'tstyle') {   // 字體特效／字幕樣式：放在游標下的片段上
+    const cfx = UI.CLIP_FX && UI.CLIP_FX[payload.kind];
+    if (cfx) {   // 套在片段上的效果（字體特效、字幕樣式、濾鏡、貼圖動態、持續／出場動畫）：放在游標下的片段上
       const c = C.clipAt(p, tid, f);
-      return { lane, tid, kind, f, clipId: c ? c.id : null, isTitle: !!(c && c.type === 'title') };
+      return { lane, tid, kind, f, clipId: c ? c.id : null, fits: !!(c && cfx.accepts(c)) };
     }
     if (state.snapping) f = C.snap(f, C.snapTargets(p, { playhead: state.playhead }), SNAP_PX / tl.k);
     return { lane, tid, kind, f };
@@ -1123,7 +1124,7 @@
     let ok = true;
     if (payload.kind === 'transition') ok = !!t.clipId && t.kind === 'video';
     else if (payload.kind === 'title') ok = t.kind === 'video';
-    else if (payload.kind === 'textfx' || payload.kind === 'tstyle') ok = t.isTitle;
+    else if (UI.CLIP_FX && UI.CLIP_FX[payload.kind]) ok = t.fits;
     else if (m) ok = t.kind === 'video' ? m.kind !== 'audio' : (m.kind === 'audio' || !!m.hasAudio);
     t.lane.classList.add(ok ? 'drop-ok' : 'drop-bad');
     tl.dropLine.hidden = false;
@@ -1139,10 +1140,11 @@
     } else if (payload.kind === 'title') {
       if (t.kind !== 'video') { say('字幕只能放在影片軌上', 'error'); return; }
       addTitle(payload.id, t.tid, t.f);
-    } else if (payload.kind === 'textfx' || payload.kind === 'tstyle') {
-      if (!t.isTitle) { say(payload.kind === 'textfx' ? '字體特效要拖到時間軸的字幕片段上' : '字幕樣式要拖到時間軸的字幕片段上', 'error'); return; }
+    } else if (UI.CLIP_FX && UI.CLIP_FX[payload.kind]) {
+      const cfx = UI.CLIP_FX[payload.kind];
+      if (!t.fits) { say(cfx.bad, 'error'); return; }
       selectClips([t.clipId]);
-      if (payload.kind === 'textfx') applyTextFx(payload.id, [t.clipId]); else applyTitleStyle(payload.id, [t.clipId]);
+      cfx.apply(payload.id, [t.clipId]);
     } else dropMedia(payload.id, t);
   }
   function dropMedia(id, t) {
