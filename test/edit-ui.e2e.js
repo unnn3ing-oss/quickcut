@@ -1174,6 +1174,69 @@ async function runViewport(browser, base, fix, [W, H]) {
     ok(/LUT/.test(bad || ''), '壞掉的 .cube：說明原因 ' + bad);
     await page.keyboard.press('Control+z'); await settle(page);
     eq(await proj(page, p => Object.keys(p.luts).length), 0, '復原：LUT 跟著拿掉');
+
+    // 4.70 調色：拉桿、色輪、略過、重設（都是一筆復原），預覽畫面跟著變
+    const sec = '.ed-sec[data-sec="fx-color"]';
+    const heads = await page.evaluate(s => [...document.querySelectorAll(s + ' .ed-fx-head')].map(h => h.textContent), sec);
+    ok(['調色', '色輪', '色彩還原與 LUT'].every(h => heads.includes(h)), '色彩分頁分成「調色／色輪／色彩還原與 LUT」 ' + heads);
+    const avgPx = () => page.evaluate(() => { const c = document.getElementById('edCanvas'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let s = 0; for (let i = 0; i < d.length; i += 16) s += d[i] + d[i + 1] + d[i + 2]; return s / (d.length / 16) / 3; });
+    await page.evaluate(id => { const c = QPTEdit.ui.state.project.clips[id]; QPTEdit.ui.seekTimeline(c.start + Math.floor(c.duration / 2)); }, v1c);
+    await settle(page); await sleep(300); await settle(page);
+    const before = await avgPx();
+    const rowInp = label => page.locator(`${sec} .ed-fx-row`).filter({ has: page.locator('.ed-fx-lab', { hasText: new RegExp('^' + label + '$') }) }).locator('input[type=number]');
+    await rowInp('曝光').fill('-1'); await rowInp('曝光').press('Enter'); await settle(page); await sleep(150); await settle(page);
+    eq(await proj(page, (p, Q, id) => p.clips[id].video.cc && p.clips[id].video.cc.exposure, v1c), -1, '曝光輸入 -1：存成 cc.exposure＝-1');
+    const after = await avgPx();
+    ok(after < before * 0.8, `曝光 -1（測試素材是飽和色條，往上調看不出來）：預覽變暗（${before.toFixed(1)} → ${after.toFixed(1)}）`);
+    await rowInp('色溫').fill('60'); await rowInp('色溫').press('Enter'); await settle(page);
+    eq(await proj(page, (p, Q, id) => p.clips[id].video.cc.temp, v1c), 60, '色溫 60');
+    // 色輪：亮部往右拖到邊緣附近（偏紅）
+    const pad = await page.evaluate(s => { const n = document.querySelectorAll(s + ' .ed-fx-wpad')[2]; n.scrollIntoView({ block: 'center' }); const r = n.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width }; }, sec);
+    ok(pad.w >= 60, '色輪夠大好拖（' + pad.w + 'px）');
+    await drag(page, { x: pad.x, y: pad.y }, { x: pad.x + pad.w * 0.4, y: pad.y });
+    const gain = await proj(page, (p, Q, id) => p.clips[id].video.cc.gain, v1c);
+    ok(gain && gain.x > 0.6 && Math.abs(gain.y) < 0.1, '亮部色輪往右拖：gain.x≈0.8 ' + JSON.stringify(gain));
+    eq(await page.textContent('#edUndoLab').then(s => !!s), true, '拖色輪有一筆復原');
+    const val = await page.evaluate(s => document.querySelectorAll(s + ' .ed-fx-wval')[2].textContent, sec);
+    ok(/^0°・\d+%$/.test(val), '色輪下方顯示角度・強度 ' + val);
+    await shot(page, '470-grade');
+    await page.dblclick(`${sec} .ed-fx-wpad >> nth=2`); await settle(page);
+    eq(await proj(page, (p, Q, id) => p.clips[id].video.cc.gain, v1c), { x: 0, y: 0 }, '雙擊色輪：歸零');
+    // 略過：預覽回到原本亮度
+    await page.locator(`${sec} label.ed-fx-chk`, { hasText: '略過調色' }).locator('input').check(); await settle(page); await sleep(150); await settle(page);
+    ok(Math.abs(await avgPx() - before) < 4, '勾「略過調色」：預覽回到原圖亮度');
+    await page.locator(`${sec} button.ed-fx-btn`, { hasText: '重設調色' }).click(); await settle(page);
+    eq(await proj(page, (p, Q, id) => p.clips[id].video.cc, v1c), null, '重設調色：cc 清掉');
+    await page.keyboard.press('Control+z'); await settle(page);
+    eq(await proj(page, (p, Q, id) => p.clips[id].video.cc.temp, v1c), 60, 'Ctrl+Z：重設前的調色回來');
+    await page.locator(`${sec} button.ed-fx-btn`, { hasText: '重設調色' }).click(); await settle(page);
+
+    // 4.70 方案 2：色彩分頁有自己的示波器（B）；B 顯示時預覽右下角（A）收起來，離開色彩分頁 A 再出現
+    const vis = s => page.evaluate(s => { const n = document.querySelector(s); return !!n && !n.hidden && n.offsetParent !== null; }, s);
+    const drawn = s => page.evaluate(s => { const n = document.querySelector(s); return n ? n.dataset.drawn || '' : ''; }, s);
+    await page.evaluate(() => { const b = document.querySelector('.ed-insp-body'); if (b) b.scrollTop = 0; }); await settle(page);
+    ok(await vis('#edScopeColorCanvas'), '色彩分頁最上面有示波器（B）');
+    await page.selectOption('#edScope', 'wave'); await settle(page); await sleep(200); await settle(page);
+    ok(!(await vis('#edScopePanel')), 'A 選了波形、但色彩分頁的 B 開著：A 先收起來');
+    await page.selectOption('#edScopeColor', 'vector'); await settle(page); await sleep(200); await settle(page);
+    eq(await drawn('#edScopeColorCanvas'), 'vector', 'B 切到向量：畫出向量圖');
+    await shot(page, '470-scope-color-tab');
+    // 往下捲到色輪：B 被捲出畫面 → A 回來；捲回上面 → A 再收起來
+    await page.evaluate(() => { const b = document.querySelector('.ed-insp-body'); b.scrollTop = b.scrollHeight; }); await sleep(250); await settle(page);
+    const scrolledAway = await page.evaluate(() => { const c = document.getElementById('edScopeColorCanvas').getBoundingClientRect(), b = document.querySelector('.ed-insp-body').getBoundingClientRect(); return c.bottom < b.top + c.height / 2; });
+    if (scrolledAway) ok(await vis('#edScopePanel'), '詳細內容捲到下面、B 看不到：A 回到預覽右下角');
+    else ok(true, '（這個視窗高度下 B 捲不出去，略過）');
+    await page.evaluate(() => { document.querySelector('.ed-insp-body').scrollTop = 0; }); await sleep(250); await settle(page);
+    ok(!(await vis('#edScopePanel')), '捲回上面看到 B：A 又收起來');
+    await page.click('#edInspTabs [data-itab="xform"]'); await settle(page); await sleep(200); await settle(page);
+    ok(await vis('#edScopePanel'), '離開色彩分頁：A 再出現');
+    eq(await drawn('#edScopePanel'), 'wave', 'A 畫的是自己的波形');
+    await page.click('#edInspTabs [data-itab="color"]'); await settle(page);
+    await page.selectOption('#edScopeColor', 'off'); await settle(page); await sleep(200); await settle(page);
+    ok(!(await vis('#edScopeColorCanvas')), 'B 選「關閉」：色彩分頁的示波器畫布收起來');
+    ok(await vis('#edScopePanel'), 'B 選「關閉」：色彩分頁開著 A 也照常顯示');
+    eq(await page.evaluate(() => [localStorage.getItem('qc-scope'), localStorage.getItem('qc-scope-color')]), ['wave', 'off'], 'A、B 的選擇分開記住');
+    await page.selectOption('#edScopeColor', 'hist'); await page.selectOption('#edScope', 'off'); await settle(page);
     await page.click('#edInspTabs [data-itab="xform"]'); await settle(page);
   }
   // 旗標
@@ -1717,6 +1780,9 @@ async function runStageTests(browser, base, [W, H]) {
   await page.selectOption('#edAspect', '9:16'); await settle(page);
   ok(await page.isVisible('.ed-safe'), '切回 9:16：記得安全框是開的');
   await page.reload(); await settle(page);
+  // 重新載入前若已過了自動暫存的 1.5 秒，會跳「還原上次的剪輯？」：選「開新專案」（和沒跳時一樣是空專案），不然會擋住後面的點擊
+  await sleep(300);
+  if (await page.isVisible('#confirmOverlay.open')) { await page.click('#confirmCancelBtn'); await settle(page); }
   await page.selectOption('#edAspect', '9:16'); await settle(page);
   ok(await page.isVisible('.ed-safe'), '重新載入後仍記得安全框開關');
 
@@ -2508,6 +2574,72 @@ async function runClipboardTests(browser, base, fix, [W, H]) {
   return problems;
 }
 
+async function runScopeTests(browser, base, fix, [W, H]) {
+  console.log(`\n==== 4.70 示波器與預覽品質 ${W}x${H} ====`);
+  const problems = [];
+  const ctx = await browser.newContext({ viewport: { width: W, height: H } });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => problems.push('pageerror: ' + e.message));
+  page.on('console', m => { if (m.type() === 'error') problems.push('console.error: ' + m.text()); });
+  await page.goto(base);
+  await settle(page);
+  await page.setInputFiles('#edFile', [{ name: FILES.land, mimeType: 'video/webm', buffer: fs.readFileSync(path.join(fix, FILES.land)) }]);
+  await page.waitForFunction(() => QPTEdit.render.media.list().length === 1 && QPTEdit.render.media.list()[0].duration > 0, null, { timeout: 30000 });
+  await settle(page);
+  await page.evaluate(() => {
+    const Q = QPTEdit, U = Q.uiParts, C = Q.core, p = Q.ui.state.project;
+    const v = Q.render.media.list()[0];
+    const V = C.tracksOf(p, 'video')[0].id, A = C.tracksOf(p, 'audio')[0].id;
+    U.op('放', q => C.editToTimeline(q, { mode: 'overwrite', mediaId: v.id, frame: 0, srcIn: 0, srcOut: 2, trackIds: { video: V, audio: A } }));
+    Q.ui.seekTimeline(10);
+  });
+  await settle(page);
+  const panel = () => page.evaluate(() => {
+    const c = document.getElementById('edScopePanel');
+    if (!c || c.hidden || !c.offsetWidth) return null;
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let bright = 0; for (let i = 0; i < d.length; i += 4) if (d[i] > 100 || d[i + 1] > 100 || d[i + 2] > 100) bright++;
+    return { w: c.offsetWidth, h: c.offsetHeight, bright, drawn: c.dataset.drawn };
+  });
+  eq(await panel(), null, '預設：示波器關閉、沒有面板');
+  for (const [v, name] of [['hist', '直方圖'], ['wave', '波形'], ['vector', '向量']]) {
+    await page.selectOption('#edScope', v);
+    await page.waitForFunction(m => { const c = document.getElementById('edScopePanel'); return c && !c.hidden && c.dataset.drawn === m; }, v, { timeout: 5000 });
+    const r = await panel();
+    ok(r && Math.abs(r.w - 256) <= 2 && Math.abs(r.h - 150) <= 2, `${name}：面板出現（約 256×150，實際 ${r && r.w}×${r && r.h}）`);
+    ok(r && r.bright > 50, `${name}：面板畫布有內容（亮點 ${r && r.bright}）`);
+    await shot(page, '470-' + name);
+  }
+  // 選擇記在 localStorage，重新整理後還在
+  await page.reload(); await settle(page);
+  await page.waitForFunction(() => QPTEdit.ui && document.getElementById('edScope'), null, { timeout: 15000 });
+  eq(await page.inputValue('#edScope'), 'vector', '重新整理後示波器選擇還記得');
+  await page.selectOption('#edScope', 'off'); await settle(page);
+  eq(await panel(), null, '關閉後面板消失');
+  // 預覽品質
+  const cw = () => page.evaluate(() => document.getElementById('edCanvas').width);
+  const tagShown = () => page.evaluate(() => { const t = document.getElementById('edPQTag'); return t && !t.hidden && t.offsetWidth > 0 ? t.textContent : ''; });
+  const full = await cw();
+  eq(await tagShown(), '', '預覽品質完整：沒有標籤');
+  await page.selectOption('#edPQ', '0.5'); await settle(page);
+  await page.waitForFunction(f => document.getElementById('edCanvas').width < f * 0.6, full, { timeout: 5000 });
+  const half = await cw();
+  ok(Math.abs(half - full / 2) <= 2, `預覽品質 1/2：畫布寬 ${half}（完整 ${full}）`);
+  ok((await tagShown()).includes('1/2'), '1/2：顯示「預覽 1/2」標籤');
+  await shot(page, '470-預覽1_2');
+  const dim = await page.evaluate(() => [QPTEdit.ui.state.project.width, QPTEdit.ui.state.project.height]);
+  ok(dim[0] >= half, '預覽降畫質：專案輸出尺寸不變（' + dim.join('×') + '）');
+  await page.reload(); await settle(page);
+  await page.waitForFunction(() => document.getElementById('edPQ'), null, { timeout: 15000 });
+  eq(await page.inputValue('#edPQ'), '0.5', '重新整理後預覽品質還記得');
+  await page.selectOption('#edPQ', '1'); await settle(page);
+  await page.waitForFunction(f => document.getElementById('edCanvas').width >= f - 1, full, { timeout: 5000 });
+  ok(await cw() >= full - 1, '切回完整：畫布寬度恢復');
+  eq(await tagShown(), '', '切回完整：標籤消失');
+  await ctx.close();
+  return problems;
+}
+
 (async () => {
   const fix = fixturesDir();
   const { server, base } = await serve();
@@ -2519,6 +2651,7 @@ async function runClipboardTests(browser, base, fix, [W, H]) {
     all = all.concat(await runAnimBeatTests(browser, base, fix, VIEWPORTS[0]));
     all = all.concat(await runRetimeTests(browser, base, fix, VIEWPORTS[0]));
     all = all.concat(await runClipboardTests(browser, base, fix, VIEWPORTS[0]));
+    all = all.concat(await runScopeTests(browser, base, fix, VIEWPORTS[0]));
     for (const vp of VIEWPORTS) all = all.concat(await runViewport(browser, base, fix, vp));
   } catch (e) { failed++; console.log('  FAIL 測試中斷：', e && e.stack || e); }
   ok(all.length === 0, '整段流程沒有 console error／頁面例外／CSP 違規' + (all.length ? '：' + all.join(' | ') : ''));

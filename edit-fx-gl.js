@@ -361,10 +361,27 @@ vec4 tr(){
   //   用自己的 WebGL 畫布（和轉場分開：轉場畫 A／B 兩層時會呼叫到調色，共用畫布會互相蓋掉）。
   //   LUT 存成 2D 貼圖：寬 size²、高 size，第 b 片放在 x = b·size 起；r、g 用貼圖的線性內插，b 自己在兩片之間 mix。
   // ---------------------------------------------------------------------------------
-  const GRADE_FRAG = `precision mediump float;
+  const GRADE_FRAG = `precision highp float;
 varying vec2 vUv;
 uniform sampler2D uSrc; uniform sampler2D uLut;
 uniform vec3 uMul; uniform vec3 uAdd; uniform float uAmt; uniform float uSize;
+uniform float uCC; uniform float uExp; uniform vec3 uWB; uniform float uCon; uniform float uSh; uniform float uHi;
+uniform vec3 uLift; uniform vec3 uGamma; uniform vec3 uGain; uniform float uSat; uniform float uVib;
+const vec3 Y709 = vec3(0.2126, 0.7152, 0.0722);
+// 4.70 調色：和 edit-fx.js 的 ccPixel 同一套算式（改一邊要改另一邊）
+vec3 cc(vec3 c) {
+  c = c * uExp * uWB;
+  c = (c - 0.5) * uCon + 0.5;
+  float L = clamp(dot(c, Y709), 0.0, 1.0);
+  c += uSh * (1.0 - L) * (1.0 - L) + uHi * L * L;
+  L = clamp(dot(c, Y709), 0.0, 1.0);
+  float wS = (1.0 - L) * (1.0 - L), wH = L * L, wM = max(0.0, 1.0 - wS - wH);
+  c += wS * uLift + wM * uGamma + wH * uGain;
+  L = dot(c, Y709);
+  float chroma = clamp(max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)), 0.0, 1.0);
+  float f = max(0.0, uSat * (1.0 + uVib * (1.0 - chroma)));
+  return clamp(L + (c - L) * f, 0.0, 1.0);
+}
 vec3 lut(vec3 c) {
   float n = uSize;
   vec3 s = clamp(c, 0.0, 1.0) * (n - 1.0);
@@ -376,6 +393,7 @@ vec3 lut(vec3 c) {
 void main() {
   vec4 t = texture2D(uSrc, vUv);
   vec3 c = clamp(t.rgb * uMul + uAdd, 0.0, 1.0);
+  if (uCC > 0.5) c = cc(c);
   if (uAmt > 0.0) c = mix(c, lut(c), uAmt);
   gl_FragColor = vec4(c * t.a, t.a);
 }`;
@@ -408,14 +426,15 @@ void main() {
       if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
       const u = n => gl.getUniformLocation(p, n);
       GR = { canvas, gl, p, texSrc: tex(), texLut: tex(), lutKey: null, maxSize: gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096,
-        u: { src: u('uSrc'), lut: u('uLut'), mul: u('uMul'), add: u('uAdd'), amt: u('uAmt'), size: u('uSize') } };
+        u: { src: u('uSrc'), lut: u('uLut'), mul: u('uMul'), add: u('uAdd'), amt: u('uAmt'), size: u('uSize'),
+          cc: u('uCC'), exp: u('uExp'), wb: u('uWB'), con: u('uCon'), sh: u('uSh'), hi: u('uHi'), lift: u('uLift'), gamma: u('uGamma'), gain: u('uGain'), sat: u('uSat'), vib: u('uVib') } };
       return GR;
     } catch (e) {
       if (root.console) root.console.warn('調色著色器無法使用，改用 CPU：', e && e.message);
       grDisabled = true; return null;
     }
   }
-  // o = { rp: { mul, add } | null, lut: { size, data } | null, lutAmt 0~1 }；回傳畫好的畫布（和來源同大），失敗回 null
+  // o = { rp: { mul, add } | null, cc: ccParams 的結果 | null（4.70）, lut: { size, data } | null, lutAmt 0~1 }；回傳畫好的畫布（和來源同大），失敗回 null
   function grade(source, w, h, o) {
     const g = gradeInit();
     if (!g) return null;
@@ -448,6 +467,14 @@ void main() {
       gl.uniform3f(g.u.mul, rp ? rp.mul[0] : 1, rp ? rp.mul[1] : 1, rp ? rp.mul[2] : 1);
       gl.uniform3f(g.u.add, rp ? rp.add[0] : 0, rp ? rp.add[1] : 0, rp ? rp.add[2] : 0);
       gl.uniform1f(g.u.amt, amt);
+      const P = o && o.cc;
+      gl.uniform1f(g.u.cc, P ? 1 : 0);
+      if (P) {
+        gl.uniform1f(g.u.exp, P.exp); gl.uniform3f(g.u.wb, P.wb[0], P.wb[1], P.wb[2]); gl.uniform1f(g.u.con, P.con);
+        gl.uniform1f(g.u.sh, P.sh); gl.uniform1f(g.u.hi, P.hi);
+        gl.uniform3f(g.u.lift, P.lift[0], P.lift[1], P.lift[2]); gl.uniform3f(g.u.gamma, P.gamma[0], P.gamma[1], P.gamma[2]); gl.uniform3f(g.u.gain, P.gain[0], P.gain[1], P.gain[2]);
+        gl.uniform1f(g.u.sat, P.sat); gl.uniform1f(g.u.vib, P.vib);
+      }
       gl.uniform1f(g.u.size, amt > 0 ? lut.size : 2);
       gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);

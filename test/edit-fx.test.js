@@ -909,3 +909,47 @@ test('gradePixels：LUT 強度、色彩還原都套在像素上', () => {
   fx.gradePixels(px3, { mul: [2, 1, 1], add: [0, 0.1, 0] }, null, 0);
   assert.deepEqual([...px3.slice(0, 3)], [200, 126, 100], '色彩還原 mul／add');
 });
+
+// ---- 4.70 調色（video.cc）-------------------------------------------------------------
+test('ccParams：沒設定、全部歸零、略過 → null（不調）', () => {
+  assert.equal(fx.ccParams(null), null);
+  assert.equal(fx.ccParams({}), null);
+  assert.equal(fx.ccParams({ exposure: 0, contrast: 0, lift: { x: 0, y: 0 } }), null);
+  assert.equal(fx.ccParams({ exposure: 1, off: true }), null);
+  assert.ok(fx.ccParams({ exposure: 1 }));
+});
+test('ccPixel：曝光、對比、白平衡、飽和度的方向與大小', () => {
+  const px = (cc, r, g, b) => fx.ccPixel(r, g, b, fx.ccParams(cc));
+  const e = px({ exposure: 1 }, 0.25, 0.25, 0.25);
+  e.forEach(v => near(v, 0.5, 1e-9));                                     // +1 EV＝兩倍
+  const c = px({ contrast: 100 }, 0.75, 0.75, 0.75);
+  c.forEach(v => near(v, 1, 1e-9));                                       // 對比 +100：0.75 → 0.5+0.25×2
+  const w = px({ temp: 100 }, 0.5, 0.5, 0.5);
+  assert.ok(w[0] > 0.5 && w[2] < 0.5, '色溫 + 偏暖：紅升藍降');
+  const t = px({ tint: 100 }, 0.5, 0.5, 0.5);
+  assert.ok(t[1] < t[0] && t[1] < t[2], '色調 + 偏洋紅：綠最少');
+  const gray = px({ sat: -100 }, 0.8, 0.2, 0.1);
+  near(gray[0], gray[1], 1e-9); near(gray[1], gray[2], 1e-9);             // 飽和度 -100＝黑白
+  near(gray[0], 0.2126 * 0.8 + 0.7152 * 0.2 + 0.0722 * 0.1, 1e-9);        // 亮度不變（Rec.709）
+  const sh = px({ shadows: 100 }, 0.1, 0.1, 0.1), hi = px({ shadows: 100 }, 0.9, 0.9, 0.9);
+  assert.ok(sh[0] - 0.1 > hi[0] - 0.9, '暗部：提亮暗的比亮的多');
+  for (const v of px({ exposure: 3, contrast: 100 }, 1, 1, 1)) assert.ok(v <= 1 && v >= 0, '結果夾在 0～1');
+});
+test('ccPixel：色輪只在對應的亮度範圍偏色，色偏三色加總為 0', () => {
+  const P = fx.ccParams({ gain: { x: 1, y: 0 } });                         // 亮部往紅
+  const dark = fx.ccPixel(0.05, 0.05, 0.05, P), bright = fx.ccPixel(0.9, 0.9, 0.9, P);
+  assert.ok(bright[0] - bright[2] > dark[0] - dark[2] + 0.05, '亮部偏紅比暗部多');
+  const L = fx.ccParams({ gamma: { x: 0, y: 1 } });                        // 中間調往 90°（黃綠～綠之間）
+  const m = fx.ccPixel(0.5, 0.5, 0.5, L);
+  assert.ok(m[1] > m[2], '90° 偏綠多於藍');
+  const sum = fx.ccParams({ lift: { x: 0.3, y: -0.4 } }).lift;
+  near(sum[0] + sum[1] + sum[2], 0, 1e-9);
+});
+test('gradePixels：調色在色彩還原之後、LUT 之前', () => {
+  const d = new Uint8ClampedArray([64, 64, 64, 255]);
+  fx.gradePixels(d, null, null, 0, fx.ccParams({ exposure: 1 }));
+  assert.deepEqual([...d], [128, 128, 128, 255]);
+  const d2 = new Uint8ClampedArray([64, 64, 64, 255]);
+  fx.gradePixels(d2, { mul: [2, 2, 2], add: [0, 0, 0] }, null, 0, fx.ccParams({ exposure: 1 }));
+  assert.deepEqual([...d2], [255, 255, 255, 255], '先還原（×2）再曝光（×2）');
+});

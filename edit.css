@@ -799,3 +799,11 @@ html[data-ed-theme="dark"] .ed-uimode { background: rgba(255, 255, 255, 0.08); }
   background: var(--field-bg); border: 1px solid var(--accent); border-radius: 4px; padding: 1px 4px; }
 /* 歷史紀錄選單（4.60）：步驟多時捲動 */
 .ed-menu.ed-hist-menu { max-height: min(70vh, 560px); overflow-y: auto; min-width: 240px; }
+
+/* ---- 4.70：示波器、預覽品質 ---- */
+.ed-scope { position: absolute; right: 8px; bottom: 8px; width: 256px; height: 150px; max-width: calc(100% - 16px); border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.18); pointer-events: none; z-index: 3; }
+.ed-scope[hidden] { display: none; }
+.ed-pqtag { font-size: 11px; font-weight: 600; color: #222; background: #eab308; border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+.ed-pqtag[hidden] { display: none; }
+/* 4.70 方案 2：色彩分頁裡的示波器（B） */
+.ed-scope-insp { display: block; width: 100%; max-width: 360px; aspect-ratio: 256 / 150; height: auto; border-radius: 8px; border: 1px solid var(--ed-line); background: #080a10; margin: 2px auto 0; }
