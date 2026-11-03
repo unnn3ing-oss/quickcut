@@ -30,6 +30,22 @@
     return { el: s, head: h, body: b, id, title };
   }
 
+  function buildScopeSection(body) {
+    const row = el('div', 'ed-fx-row');
+    const lab = el('label', 'ed-fx-lab', '顯示'); lab.htmlFor = 'edScopeColor';
+    const sel = el('select'); sel.id = 'edScopeColor';
+    sel.title = '調色時看亮度與色彩分佈；這裡打開時，預覽右下角的示波器會先收起來';
+    for (const [v, t] of [['hist', '直方圖'], ['wave', '波形'], ['vector', '向量'], ['off', '關閉']]) { const o = el('option', null, t); o.value = v; sel.appendChild(o); }
+    sel.value = UI.scopeBMode ? UI.scopeBMode() : 'hist';
+    sel.addEventListener('change', () => { UI.lsSet(UI.SCOPE_B_KEY, sel.value); if (UI.applyScope) UI.applyScope(); });
+    const ctl = el('div', 'ed-fx-ctl'); ctl.append(sel);
+    row.append(lab, ctl);
+    const cv = el('canvas', 'ed-scope-insp'); cv.id = 'edScopeColorCanvas'; cv.width = 256; cv.height = 150; cv.setAttribute('aria-hidden', 'true');
+    UI.colorScopeCanvas = cv;
+    body.append(row, cv, el('div', 'ed-fx-hint', '分析的是預覽畫面（含其他軌、字幕）。這裡打開時，預覽右下角的示波器會先收起來，離開色彩分頁再出現。'));
+    insp.scopeSel = sel;
+  }
+
   // 數值欄位：標籤可左右拖曳（Shift 加速、Alt 微調）、雙擊標籤重設；外觀沿用 fx 詳細內容（.ed-fx-*）
   function numRow(parent, label, o) {
     const row = el('div', 'ed-fx-row');
@@ -233,6 +249,16 @@
     buildProjectSection(insp.project.body);
     insp.info = mkSection('info', '片段資訊');
     buildInfoSection(insp.info.body);
+    // 4.70：色彩分頁最上面的示波器（B）。讀像素、更新都由 edit-ui-viewer.js 的 applyScope／updateScope 管；這裡只建介面
+    insp.scope = mkSection('scope', '示波器');
+    buildScopeSection(insp.scope.body);
+    insp.scope.head.addEventListener('click', () => { if (UI.applyScope) UI.applyScope(); });   // 收合／展開後重新判斷 A／B
+    // 詳細內容捲動時也要重新判斷（B 被捲出畫面就讓 A 回來）；用 rAF 合併，捲動中最多每格一次
+    let scopeRaf = 0;
+    insp.body.addEventListener('scroll', () => {
+      if (scopeRaf) return;
+      scopeRaf = root.requestAnimationFrame(() => { scopeRaf = 0; if (UI.applyScope) UI.applyScope(); });
+    }, { passive: true });
     // fx 提供的區段（變形／裁切／字幕／轉場）
     for (const s of (F.inspector && F.inspector.sections) || []) insp.fxSecs.push({ def: s, ui: mkSection('fx-' + s.id, s.title, { closed: s.id === 'crop' }) });
     insp.audio = mkSection('audio', '音訊');
@@ -520,7 +546,8 @@
         ['xform', '變形', fx('transform', 'crop')], ['info', '資訊', [insp.info]]] };
     }
     const kind = c.video ? c.type : 'audio';
-    return { kind, pages: [['xform', '變形', fx('transform')], ['color', '色彩', fx('color')], ['crop', '裁切', fx('crop')], ['audio', '音訊', [audio]], ['speed', '速度', [speed]], ['info', '資訊', [insp.info]]] };
+    const color = fx('color');
+    return { kind, pages: [['xform', '變形', fx('transform')], ['color', '色彩', color[0] ? [insp.scope, ...color] : []], ['crop', '裁切', fx('crop')], ['audio', '音訊', [audio]], ['speed', '速度', [speed]], ['info', '資訊', [insp.info]]] };
   }
   function loadTabOf() {
     if (!insp.tabOf) { insp.tabOf = {}; try { insp.tabOf = JSON.parse(root.localStorage.getItem('qc-itab')) || {}; } catch (_) { /* 讀不到就用預設 */ } }
@@ -533,16 +560,21 @@
   }
 
   // ---- 總更新 ----------------------------------------------------------------------
+  // 每次重畫詳細內容後，讓示波器重新判斷要顯示在色彩分頁（B）還是預覽右下角（A）
   function renderInspector() {
+    renderInspectorPage();
+    if (UI.applyScope) UI.applyScope();
+  }
+  function renderInspectorPage() {
     if (!insp.body) return;
     const p = state.project;
     const tr = state.selTransition && p.transitions[state.selTransition];
     const ids = selIds(), c = primaryClip();
     const show = (sec, on) => { sec.el.hidden = !on; };
-    show(insp.project, false); show(insp.info, false); show(insp.audio, false); show(insp.speed, false); show(insp.subs, false);
+    show(insp.project, false); show(insp.info, false); show(insp.audio, false); show(insp.speed, false); show(insp.subs, false); show(insp.scope, false);
     insp.delTrans.hidden = true;
     for (const f of insp.fxSecs) show(f.ui, false);
-    for (const s of [insp.info, insp.audio, insp.speed, insp.subs, ...insp.fxSecs.map(f => f.ui)]) s.el.classList.remove('solo');
+    for (const s of [insp.info, insp.audio, insp.speed, insp.subs, insp.scope, ...insp.fxSecs.map(f => f.ui)]) s.el.classList.remove('solo');
     insp.tabs.hidden = true;
     $('edInspHead').textContent = '詳細內容';
     if (UI.renderQuick && UI.renderQuick(insp)) return;     // 簡易模式：影片／圖片／音訊片段、字幕片段改顯示「快速調整」
@@ -579,6 +611,7 @@
       else if (s === insp.audio) updateAudioSection();
       else if (s === insp.speed) updateSpeedSection(speedClip());
       else if (s === insp.subs) updateSubsSection();
+      else if (s === insp.scope && insp.scopeSel && UI.scopeBMode) insp.scopeSel.value = UI.scopeBMode();
     }
   }
 

@@ -66,6 +66,7 @@
   function createPlayer() {
     if (UI.player) return;
     UI.player = R.createPlayer({ canvas: $('edCanvas'), getProject: viewProject, maxSize: 1280 });
+    if (UI.applyQuality) UI.applyQuality();      // 4.70：套用記住的預覽品質
     UI.player.on('frame', onPlayerFrame);
     UI.player.on('state', updatePlayButton);
     // 打拍子模式在停止播放時結束（顯示打了幾拍）

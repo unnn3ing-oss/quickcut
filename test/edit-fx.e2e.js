@@ -185,7 +185,10 @@ body{margin:0;padding:16px;font-family:system-ui,"Noto Sans TC",sans-serif;backg
       return x.getImageData(0, 0, 160, 90).data;
     };
     const glOk = !!Q.fxgl.grade(src, 160, 90, { rp: null, lut: null, lutAmt: 0 });
-    const cases = [{ lut: a.id, lutAmt: 100 }, { restore: 100 }, { restore: 60, lut: a.id, lutAmt: 50 }];
+    const cases = [{ lut: a.id, lutAmt: 100 }, { restore: 100 }, { restore: 60, lut: a.id, lutAmt: 50 },
+      // 4.70 調色：單獨、和還原＋LUT 疊在一起
+      { cc: { exposure: 0.6, contrast: 35, highlights: -40, shadows: 30, temp: 45, tint: -20, sat: 25, vib: 40, lift: { x: -0.4, y: 0.3 }, gamma: { x: 0.2, y: -0.1 }, gain: { x: 0.5, y: 0.25 } } },
+      { restore: 50, lut: a.id, lutAmt: 70, cc: { exposure: -0.5, sat: -60, gain: { x: -0.3, y: -0.6 } } }];
     let glCalls = 0; const real = Q.fxgl.grade; Q.fxgl.grade = (...x) => { const r = real(...x); if (r) glCalls++; return r; };
     const gl = cases.map(run);
     Q.fxgl.grade = real;
@@ -197,11 +200,15 @@ body{margin:0;padding:16px;font-family:system-ui,"Noto Sans TC",sans-serif;backg
     const px = (d, X, Y) => Array.from(d.slice((Y * 160 + X) * 4, (Y * 160 + X) * 4 + 4));
     const orig = run({});
     const spread = d => { let lo = 255, hi = 0; for (let i = 0; i < d.length; i += 4) { lo = Math.min(lo, d[i]); hi = Math.max(hi, d[i]); } return hi - lo; };
-    return { glOk, glCalls, diffs: gl.map((d, i) => diff(d, cpu[i])), red: px(gl[0], 40, 40), origRed: px(orig, 40, 40), spreadIn: spread(orig), spreadOut: spread(gl[1]),
+    const offPx = run({ cc: { exposure: 2, off: true } }), ccOff = diff(offPx, orig);
+    const warm = [px(orig, 100, 75), px(gl[3], 100, 75)];
+    return { ccOff, warm, glOk, glCalls, diffs: gl.map((d, i) => diff(d, cpu[i])), red: px(gl[0], 40, 40), origRed: px(orig, 40, 40), spreadIn: spread(orig), spreadOut: spread(gl[1]),
       blueBias: [px(orig, 150, 80), px(gl[1], 150, 80)] };
   });
-  ok(cg.glOk && cg.glCalls === 3, 'WebGL 調色可用，三種情況都走 WebGL ' + cg.glCalls);
+  ok(cg.glOk && cg.glCalls === 5, 'WebGL 調色可用，五種情況（含 4.70 調色）都走 WebGL ' + cg.glCalls);
   ok(cg.diffs.every(d => d <= 3), 'WebGL 和 CPU 的結果一致（每個像素差 ≤ 3） ' + cg.diffs);
+  ok(cg.ccOff === 0, '調色勾「略過」：和原圖完全一樣 ' + cg.ccOff);
+  ok(cg.warm[1][0] - cg.warm[1][2] > cg.warm[0][0] - cg.warm[0][2] + 20 && cg.warm[1][1] > cg.warm[0][1], '調色（曝光＋偏暖）：變亮、紅藍差變大 ' + JSON.stringify(cg.warm));
   ok(cg.red[0] < 90 && cg.red[2] > 170, 'LUT（R←G、B←R）：紅色方塊變藍 ' + cg.red + ' 原本 ' + cg.origRed);
   ok(cg.spreadOut > cg.spreadIn + 40, `色彩還原：R 色版的範圍拉開（${cg.spreadIn} → ${cg.spreadOut}）`);
   ok(cg.blueBias[1][2] - cg.blueBias[1][0] < cg.blueBias[0][2] - cg.blueBias[0][0], '色彩還原：偏藍減少 ' + JSON.stringify(cg.blueBias));

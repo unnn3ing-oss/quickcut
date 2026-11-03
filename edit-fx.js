@@ -394,12 +394,63 @@
       return restoreFromStats(hist, sum.map(v => (n ? v / n : 0)), n, amt);
     } catch (_) { return null; }       // 讀不到像素（跨來源等）就不調
   }
-  // CPU 版（沒有 WebGL 時）：直接改像素。lut＝{ size, data }、la＝LUT 強度 0～1、rp＝restoreParams 的結果
-  function gradePixels(d, rp, lut, la) {
+  // ---------------------------------------------------------------------------------
+  // 調色（4.70，video.cc）：在色彩還原之後、LUT 之前。順序：
+  //   曝光（×2^EV）→ 白平衡（色溫、色調：各色版乘數）→ 對比（以 0.5 為軸，×2^(對比/100)）
+  //   → 暗部／亮部（依亮度加權加減）→ 三個色輪（暗部／中間調／亮部各加一個色偏）→ 飽和度＋自然飽和度 → 夾 0～1
+  //   亮度一律用 Rec.709（0.2126, 0.7152, 0.0722）。GPU（edit-fx-gl.js 的 GRADE_FRAG）和 CPU（ccPixel）是同一套算式。
+  // ---------------------------------------------------------------------------------
+  const CC_KEYS = ['exposure', 'contrast', 'highlights', 'shadows', 'temp', 'tint', 'sat', 'vib'];
+  const CC_WHEEL_KEYS = ['lift', 'gamma', 'gain'];
+  // 色輪 (x, y)（x 往右＝紅、逆時針 120° 綠、240° 藍）→ 加到 RGB 的色偏（三個加起來是 0：RGB 平均不變）
+  const wheelRGB = w => {
+    const x = num(w && w.x, 0), y = num(w && w.y, 0), k = 0.2;
+    return [k * x, k * (-0.5 * x + 0.8660254 * y), k * (-0.5 * x - 0.8660254 * y)];
+  };
+  // 把 video.cc 換成算式要用的參數；全部是預設值或略過（off）回 null（不用調）
+  function ccParams(cc) {
+    if (!cc || typeof cc !== 'object' || cc.off) return null;
+    const v = k => clamp(num(cc[k], 0), k === 'exposure' ? -3 : -100, k === 'exposure' ? 3 : 100);
+    const wheels = CC_WHEEL_KEYS.map(k => wheelRGB(cc[k]));
+    if (CC_KEYS.every(k => v(k) === 0) && wheels.every(w => w.every(x => x === 0))) return null;
+    const t = v('temp') / 100, m = v('tint') / 100;
+    return {
+      exp: Math.pow(2, v('exposure')),
+      wb: [1 + 0.2 * t + 0.1 * m, 1 - 0.2 * m, 1 - 0.2 * t + 0.1 * m],
+      con: Math.pow(2, v('contrast') / 100),
+      sh: v('shadows') / 100 * 0.4, hi: v('highlights') / 100 * 0.4,
+      lift: wheels[0], gamma: wheels[1], gain: wheels[2],
+      sat: 1 + v('sat') / 100, vib: v('vib') / 100,
+    };
+  }
+  // 一個像素（0～1）套用 ccParams 的結果；out 是長度 3 的陣列（省配置）
+  function ccPixel(r, g, b, P, out) {
+    out = out || [0, 0, 0];
+    r *= P.exp * P.wb[0]; g *= P.exp * P.wb[1]; b *= P.exp * P.wb[2];
+    r = (r - 0.5) * P.con + 0.5; g = (g - 0.5) * P.con + 0.5; b = (b - 0.5) * P.con + 0.5;
+    let L = clamp(0.2126 * r + 0.7152 * g + 0.0722 * b, 0, 1);
+    const d = P.sh * (1 - L) * (1 - L) + P.hi * L * L;
+    r += d; g += d; b += d;
+    L = clamp(0.2126 * r + 0.7152 * g + 0.0722 * b, 0, 1);
+    const wS = (1 - L) * (1 - L), wH = L * L, wM = Math.max(0, 1 - wS - wH);
+    r += wS * P.lift[0] + wM * P.gamma[0] + wH * P.gain[0];
+    g += wS * P.lift[1] + wM * P.gamma[1] + wH * P.gain[1];
+    b += wS * P.lift[2] + wM * P.gamma[2] + wH * P.gain[2];
+    L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const chroma = clamp(Math.max(r, g, b) - Math.min(r, g, b), 0, 1);
+    const f = Math.max(0, P.sat * (1 + P.vib * (1 - chroma)));
+    out[0] = clamp(L + (r - L) * f, 0, 1); out[1] = clamp(L + (g - L) * f, 0, 1); out[2] = clamp(L + (b - L) * f, 0, 1);
+    return out;
+  }
+
+  // CPU 版（沒有 WebGL 時）：直接改像素。lut＝{ size, data }、la＝LUT 強度 0～1、rp＝restoreParams 的結果、cp＝ccParams 的結果
+  function gradePixels(d, rp, lut, la, cp) {
     const C = root.QPTEdit && root.QPTEdit.core;
+    const o = [0, 0, 0];
     for (let i = 0; i < d.length; i += 4) {
       let r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
       if (rp) { r = clamp(r * rp.mul[0] + rp.add[0], 0, 1); g = clamp(g * rp.mul[1] + rp.add[1], 0, 1); b = clamp(b * rp.mul[2] + rp.add[2], 0, 1); }
+      if (cp) { ccPixel(r, g, b, cp, o); r = o[0]; g = o[1]; b = o[2]; }
       if (lut && la > 0 && C) {
         const v = C.lutLookup(lut.data, lut.size, r, g, b);
         r += (v[0] - r) * la; g += (v[1] - g) * la; b += (v[2] - b) * la;
@@ -415,17 +466,18 @@
     const lut = v.lut && C && C.lutData ? C.lutData(project, v.lut) : null;
     const la = lut ? clamp(num(v.lutAmt, 100), 0, 100) / 100 : 0;
     const ra = clamp(num(v.restore, 0), 0, 100) / 100;
-    if (!(la > 0) && !(ra > 0)) return source;
+    const cp = ccParams(v.cc);
+    if (!(la > 0) && !(ra > 0) && !cp) return source;
     const rp = ra > 0 ? restoreParams(source, srcW, srcH, ra) : null;
-    if (!rp && !(la > 0)) return source;
+    if (!rp && !(la > 0) && !cp) return source;
     const G = root.QPTEdit && root.QPTEdit.fxgl;
-    const out = G && G.grade ? G.grade(source, srcW, srcH, { rp, lut: la > 0 ? lut : null, lutAmt: la }) : null;
+    const out = G && G.grade ? G.grade(source, srcW, srcH, { rp, cc: cp, lut: la > 0 ? lut : null, lutAmt: la }) : null;
     if (out) return out;
     try {                                      // 沒有 WebGL：CPU 慢慢算（大畫面會比較慢，但結果一樣）
       const s = scratch('grade', srcW, srcH), c = s.ctx;
       c.drawImage(source, 0, 0, srcW, srcH);
       const img = c.getImageData(0, 0, Math.round(srcW), Math.round(srcH));
-      gradePixels(img.data, rp, la > 0 ? lut : null, la);
+      gradePixels(img.data, rp, la > 0 ? lut : null, la, cp);
       c.putImageData(img, 0, 0);
       return s.canvas;
     } catch (_) { return source; }
@@ -1784,6 +1836,17 @@
     st.id = 'ed-fx-style';
     st.textContent = `
 .ed-fx{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--ed-text,var(--text,inherit))}
+.ed-fx-wheels{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.ed-fx-wheel{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0}
+.ed-fx-wheel .ed-fx-lab{text-align:center}
+.ed-fx-wpad{position:relative;width:100%;max-width:96px;aspect-ratio:1;border-radius:50%;cursor:crosshair;touch-action:none;
+  background:radial-gradient(circle,rgba(128,128,128,1) 0%,rgba(128,128,128,0) 72%),conic-gradient(from 90deg,#f33,#f3f,#33f,#3ff,#3f3,#ff3,#f33);
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.35)}
+.ed-fx-wpad::after{content:'';position:absolute;left:50%;top:50%;width:5px;height:5px;margin:-2.5px 0 0 -2.5px;border-radius:50%;background:rgba(0,0,0,.45)}
+.ed-fx-wpad:focus-visible{outline:2px solid var(--ed-accent,var(--accent,#004aad));outline-offset:2px}
+.ed-fx-wdot{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#fff;border:2px solid #111;box-shadow:0 0 0 1px #fff;pointer-events:none;z-index:1}
+.ed-fx-wval{font-size:11px;color:var(--ed-muted,var(--muted,#6b7890));font-variant-numeric:tabular-nums;min-height:14px}
+.ed-fx-wrst{font:inherit;font-size:11px;padding:1px 8px;min-height:24px;border-radius:6px;border:1px solid var(--ed-line,var(--border,#ccc));background:transparent;color:inherit;cursor:pointer}
 .ed-fx,.ed-fx *{box-sizing:border-box}
 .ed-fx[hidden],.ed-fx [hidden]{display:none!important}
 .ed-fx-row{display:grid;grid-template-columns:78px minmax(0,1fr);align-items:center;gap:8px;min-height:26px}
@@ -2070,6 +2133,60 @@
         };
         root.addEventListener('pointermove', move); root.addEventListener('pointerup', up); root.addEventListener('pointercancel', up);
       });
+    } else if (def.type === 'wheels') {
+      // 4.70 色輪：def.wheels＝[{ key, label }]，def.get(c) → { key: { x, y } }；拖圓盤內的點設色偏（拖曳中即時預覽、放開一筆復原），
+      //   雙擊（或按下面的 0）回中心。方向鍵也能微調（Shift 大步）。x 往右＝紅，逆時針 120° 綠、240° 藍（和 wheelRGB 一致）
+      row.style.gridTemplateColumns = '1fr';
+      const wrap = el('div', 'ed-fx-wheels');
+      const parts = def.wheels.map(w => {
+        const box = el('div', 'ed-fx-wheel');
+        const pad = el('div', 'ed-fx-wpad'); pad.tabIndex = 0; pad.setAttribute('role', 'slider');
+        pad.setAttribute('aria-label', w.label + '色輪（方向鍵微調，Enter 歸零）');
+        const dot = el('span', 'ed-fx-wdot');
+        pad.append(dot);
+        const val = el('span', 'ed-fx-wval');
+        const rst = el('button', 'ed-fx-wrst', '歸零'); rst.type = 'button'; rst.title = w.label + '色輪回到中心';
+        box.append(el('span', 'ed-fx-lab', w.label), pad, val, rst);
+        wrap.append(box);
+        const cur = () => { const a = def.get(st.subject) || {}; const o = a[w.key] || {}; return { x: num(o.x, 0), y: num(o.y, 0) }; };
+        const show = p => {
+          dot.style.left = (50 + p.x * 50) + '%'; dot.style.top = (50 - p.y * 50) + '%';
+          const r = Math.hypot(p.x, p.y);
+          val.textContent = r < 0.005 ? '—' : `${Math.round(((Math.atan2(p.y, p.x) * 180 / Math.PI) + 360) % 360)}°・${Math.round(r * 100)}%`;
+          pad.setAttribute('aria-valuetext', val.textContent);
+        };
+        const fix = p => { const r = Math.hypot(p.x, p.y); return r > 1 ? { x: p.x / r, y: p.y / r } : { x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 }; };
+        const send = (p, live) => emit(def.patch(w.key, fix(p), st.subject), live);
+        let dragging = false;
+        const at = e => { const r = pad.getBoundingClientRect(); return fix({ x: ((e.clientX - r.left) / r.width - 0.5) * 2, y: -((e.clientY - r.top) / r.height - 0.5) * 2 }); };
+        pad.addEventListener('pointerdown', e => {
+          if (e.button !== 0) return;
+          e.preventDefault(); pad.focus();
+          dragging = true;
+          let last = at(e); show(last); send(last, true);
+          const move = ev => { last = at(ev); show(last); send(last, true); };
+          const up = () => {
+            root.removeEventListener('pointermove', move); root.removeEventListener('pointerup', up); root.removeEventListener('pointercancel', up);
+            dragging = false; send(last, false);
+          };
+          root.addEventListener('pointermove', move); root.addEventListener('pointerup', up); root.addEventListener('pointercancel', up);
+        });
+        const zero = () => { show({ x: 0, y: 0 }); send({ x: 0, y: 0 }, false); };
+        pad.addEventListener('dblclick', zero);
+        rst.addEventListener('click', zero);
+        pad.addEventListener('keydown', e => {
+          const k = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[e.key];
+          if (e.key === 'Enter') { e.preventDefault(); zero(); return; }
+          if (!k) return;
+          e.preventDefault(); e.stopPropagation();
+          const s = e.shiftKey ? 0.1 : 0.02, p = cur();
+          const n = fix({ x: p.x + k[0] * s, y: p.y + k[1] * s });
+          show(n); send(n, false);
+        });
+        return { refresh: () => { if (!dragging) show(cur()); } };
+      });
+      refresh = () => parts.forEach(p => p.refresh());
+      row.append(wrap);
     } else if (def.type === 'text') {
       row.style.gridTemplateColumns = '1fr';
       const wrap = el('div');
@@ -2171,7 +2288,28 @@
       render(host, clip, commit, ctx) {
         const luts = (ctx && ctx.luts) || {};
         const opts = [['', '無'], ...Object.entries(luts).map(([id, r]) => [id, `${r.name}（${r.size} 點）`])];
+        const cv = (c, k) => num(c.video && c.video.cc && c.video.cc[k], 0);
+        const ccPatch = o => ({ video: { cc: o } });
+        const ccNum = (label, k, o = {}) => Object.assign({ type: 'num', label, get: c => cv(c, k), def: 0, min: -100, max: 100, dpp: 0.5, dec: 0, slider: [-100, 100], sliderStep: 1, patch: v => ccPatch({ [k]: v }) }, o);
         buildSection(host, 'color:' + clip.id + ':' + Object.keys(luts).join(','), clip, commit, [
+          // 4.70 調色：在色彩還原之後、LUT 之前（見 ccPixel）
+          { type: 'head', label: '調色' },
+          ccNum('曝光', 'exposure', { def: 0, min: -3, max: 3, dpp: 0.01, dec: 2, unit: 'EV', slider: [-3, 3], sliderStep: 0.05 }),
+          ccNum('對比', 'contrast'),
+          ccNum('亮部', 'highlights'),
+          ccNum('暗部', 'shadows'),
+          ccNum('色溫', 'temp'),
+          ccNum('色調', 'tint'),
+          ccNum('飽和度', 'sat'),
+          ccNum('自然飽和', 'vib'),
+          { type: 'hint', label: '色溫往右偏暖（黃）、往左偏冷（藍）；色調往右偏洋紅、往左偏綠。自然飽和只加強原本較淡的顏色，膚色比較不會過頭。雙擊標籤或拉桿歸零。' },
+          { type: 'head', label: '色輪' },
+          { type: 'wheels', wheels: [{ key: 'lift', label: '暗部' }, { key: 'gamma', label: '中間調' }, { key: 'gain', label: '亮部' }],
+            get: c => (c.video && c.video.cc) || {}, patch: (k, p) => ccPatch({ [k]: p }) },
+          { type: 'hint', label: '把點往某個顏色拖，那個亮度範圍就偏向那個顏色（例：暗部偏青、亮部偏橘＝電影感）。雙擊色輪或按「歸零」回中心。' },
+          { type: 'check', label: '略過調色（比對原圖）', get: c => !!(c.video && c.video.cc && c.video.cc.off), patch: v => ccPatch({ off: v }) },
+          { type: 'btn', label: '重設調色', patch: () => ({ video: { cc: null } }) },
+          { type: 'head', label: '色彩還原與 LUT' },
           { type: 'num', label: '色彩還原', get: c => num(c.video && c.video.restore, 0), def: 0, min: 0, max: 100, dpp: 0.5, dec: 0, unit: '%', slider: [0, 100], sliderStep: 1, patch: v => ({ video: { restore: v } }) },
           { type: 'hint', label: '色彩還原：自動拉開色階、校正偏色（白平衡），適合手機或舊影片顏色灰灰、偏黃偏藍的畫面。' },
           { type: 'select', label: 'LUT', options: opts, get: c => (c.video && c.video.lut && luts[c.video.lut] ? c.video.lut : ''), patch: v => ({ video: { lut: v || null } }) },
@@ -2315,7 +2453,7 @@
   const api = {
     DEFAULT_TRANSFORM, DEFAULT_CROP, defaultTransform, defaultCrop, defaultVideo,
     fitRect, clipMatrix, applyMatrix, cropRect, getParam, FIT_OPTIONS, BG_BLUR_DEFAULT,
-    drawClipVisual, drawSolid, drawTitle, titleBounds, clipQuad, LOOKS, LOOK_OPTIONS, restoreFromStats, gradePixels, gradeSource,
+    drawClipVisual, drawSolid, drawTitle, titleBounds, clipQuad, LOOKS, LOOK_OPTIONS, restoreFromStats, gradePixels, gradeSource, ccParams, ccPixel, CC_KEYS, CC_WHEEL_KEYS,
     TRANSITIONS, ease, TITLE_PRESETS, TITLE_STYLES, TITLE_STYLE_GROUPS, SHAPES, GRADIENTS, TEXT_FX, TEXT_LOOP, TEXT_OUT, BG_TAILS, STICKER_FX, STICKER_OPTIONS, stickerState, textOutState,
     fxPlan, fxAt, makeTitle, normTitle, parseAccent, buildAccent, parseSrt, formatSrt, fitCues, planSubtitleMark, wrapText, parseColor, formatColor,
     ready, get fontLoaded() { return defaultFontLoaded(); }, FONTS, loadFont, onFontLoad, fontIsLoaded,

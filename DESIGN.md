@@ -510,3 +510,28 @@
 ### 測試
 - 單元：`test/edit-core.test.js` 的 copyClips／pasteClips（連結、覆蓋／插入、快照、轉場、標記 id、各種失敗）、duplicateClips、pasteAttributes、history.list、parseTimecode。
 - 瀏覽器：`test/edit-ui.e2e.js` 的 `runClipboardTests`（Ctrl+C／V／Shift+V／D／X、Alt 拖曳與一般拖曳、右鍵選單、貼上屬性對話框、Shift＋↑↓、時間碼輸入、歷史紀錄、軌道高度與重新整理後保留）；原本「Alt 不吸附」的時間尺測試改成 Shift，工具列最右側改成「復原／重做／歷史紀錄」三顆。［程式碼］
+
+## 14. 4.70：調色、示波器、預覽品質（代理檔暫不做）
+
+### 調色（`video.cc`）
+- 資料：`video.cc = { exposure(-3～3 EV), contrast, highlights, shadows, temp, tint, sat, vib(-100～100), lift／gamma／gain: { x, y }（單位圓內）, off }`，可以只存部分欄位；沒有或全部歸零就不調。core `sanitize` 夾範圍、色輪超出圓就拉回圓周；`cc: null`＝重設。屬於「影像效果」，所以 4.60 的貼上屬性（`effects`）自動帶得過去。不做關鍵影格（之後要做再加 `KF_PATHS`）。［程式碼］
+- 位置：`gradeSource` 裡「色彩還原 → 調色 → LUT」，之後才是濾鏡（`lookSource`）。調色放在 LUT 前：使用者多半先修正、再用 LUT 做風格；拍 Log 要先轉換的人，目前要把轉換 LUT 搭配色彩還原或之後的節點順序（未做）。［推論］
+- 算式（`fx.ccPixel`＝CPU、`GRADE_FRAG` 的 `cc()`＝GPU，**改一邊要改另一邊**）：曝光 ×2^EV → 白平衡（色溫 t、色調 m：R×(1+0.2t+0.1m)、G×(1−0.2m)、B×(1−0.2t+0.1m)）→ 對比（以 0.5 為軸 ×2^(c/100)）→ 暗部／亮部（加 `0.4·s·(1−L)²`、`0.4·h·L²`）→ 色輪（權重 `(1−L)²`／`2L(1−L)`／`L²`，色偏 `0.2·(x, −0.5x+0.866y, −0.5x−0.866y)`，三色和為 0）→ 飽和度×(1＋自然飽和×(1−彩度)) → 夾 0～1。L 用 Rec.709。中間不夾值，只在最後夾。［程式碼］
+- `fx.ccParams(cc)` 先把設定換成乘數／色偏（全中性或 `off` 回 null，整段跳過，不多一次 GPU 往返）；GPU 著色器改成 `highp`（轉場著色器本來就是 highp）。e2e 比對 GPU／CPU 每像素差（目前 0）。［程式碼］
+- 介面：`edit-fx.js` 的「色彩」區段多了 `head` 分區與新控制項 `wheels`（三個圓盤：CSS conic-gradient 色相環，紅在右、逆時針綠、藍，和算式的角度一致；拖曳中 live、放開一筆復原；雙擊／「歸零」；方向鍵微調）。樣式放在 `ensureStyle`（和其他詳細內容控制項一起），沒有動 `edit.css`。［程式碼］
+
+### 示波器（`edit-scope.js`，子代理 Sonnet 5.5 做）
+- `QPTEdit.scope`：純函式 `scopeHistogram`（R／G／B／亮度各 256 格）、`scopeWaveform(d, w, h, cols, rows)`、`scopeVector(d, size)`（Rec.709 Cb／Cr）有單元測試；`drawScope` 畫圖、`createScope(source, target)` 讀像素。［程式碼］
+- 取樣：把 `#edCanvas` 縮到 256×144 的小畫布（`willReadFrequently`）再讀，讀不到就畫「無法讀取畫面」。密度都用平方根縮放，暗部才看得到；直方圖 RGB 用 `lighter` 疊、亮度白線；波形綠色、0／50／100% 參考線；向量圖有圓框、膚色線（約 123°）、六個色彩目標點。底色 96% 不透明（太透明時預覽會透出來，看不清楚）。［程式碼］
+- 介面：檢視器工具列「示波器」下拉（`qc-scope`），面板 `#edScopePanel` 疊在 `#edStage` 右下角，`pointer-events:none` 不擋控制框。更新：`onPlayerFrame` 與 core bus 的 change 都呼叫 `UI.updateScope()`，播放中約每 100ms 一次，暫停／跳格延 40ms 等玩家畫完；關閉時不建面板、不讀像素。［程式碼］
+- **兩個位置（使用者選方案 2）**：A＝預覽右下角（`qc-scope`）、B＝詳細內容「色彩」分頁最上面的 `insp.scope` 區段（`qc-scope-color`，預設直方圖）。`edit-scope.js` 多了 `createSampler`（讀一次）＋`paint`（畫到任一畫布），所以兩個都更新時只讀一次像素。B「看得到」＝色彩分頁開著、區段沒收合、沒選關閉，**而且畫布至少一半在 `.ed-insp-body` 的捲動範圍內**；B 看得到時 A 收起來。判斷時機：`renderInspector` 每次結束、B 區段標頭收合／展開、詳細內容捲動（rAF 合併）、兩個選單改變。［程式碼］［推論：只看「分頁開著」的話，捲到色輪時兩個都看不到，所以加了捲動判斷］
+- 示波器分析的是**預覽畫布**（含預覽品質縮小、字幕、黑邊），不是單一片段；要看單一片段的顏色就把其他軌關掉。［推論：和 DaVinci 看 timeline 輸出一致］
+
+### 預覽品質
+- 玩家 `setQuality(q)`（1、0.5、0.25，`qc-pq`）：`sizeCanvas` 的縮放＝`min(1, maxSize／長邊) × q`，改了 `refresh()`。只動預覽畫布，`compose`／匯出不受影響；`stageRect` 用專案尺寸＋畫布 CSS 矩形換算，控制框座標不受畫布像素數影響。非完整時顯示 `#edPQTag`。［程式碼］
+- 已知限制：調色（`gradeSource`）仍以素材原尺寸計算，所以 4K＋重度調色時降預覽品質幫助有限；要改善得在 `drawClipVisual` 依實際輸出大小先縮來源再調色（預覽和匯出結果會有些微差異，要另外評估）。代理檔依使用者要求這版不做。［推論］
+
+### 測試
+- 單元：`test/edit-fx.test.js`（ccParams 中性、ccPixel 各參數方向與大小、色輪只影響對應亮度、gradePixels 順序）、`test/edit-core.test.js`（cc 夾範圍、色輪拉回、null 重設、貼上屬性）、`test/edit-scope.test.js`。
+- 瀏覽器：`test/edit-fx.e2e.js` 的 GPU／CPU 比對多兩種調色情況＋略過＝原圖；`test/edit-ui.e2e.js` 色彩分頁（分區、曝光改預覽亮度、色溫、拖色輪、雙擊歸零、略過、重設與復原、B 開著時 A 收起來、捲走／離開分頁／B 關閉時 A 回來、兩個選擇分開記住）與 `runScopeTests`（三種示波器、關閉、記住、預覽 1/2 畫布減半、標籤）。［程式碼］
+

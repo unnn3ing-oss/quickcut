@@ -785,6 +785,7 @@
     const voices = new Map();     // clipId → 已排程的預覽聲音
     let frame = 0, pos = 0, rate = 0, raf = 0, disposed = false;
     let dirty = true, dirtySince = 0, drewOnce = false;
+    let quality = 1;                // 預覽品質（4.70）：只縮預覽畫布的像素數，匯出不受影響
     let ac = null, master = null, clockKind = '', anchorClock = 0, anchorFrame = 0;
 
     const emit = (type, v) => subs[type].forEach(fn => { try { fn(v); } catch (e) { console.error(e); } });
@@ -947,7 +948,7 @@
     }
 
     function sizeCanvas(p) {
-      const k = Math.min(1, maxSize / Math.max(p.width, p.height));
+      const k = Math.min(1, maxSize / Math.max(p.width, p.height)) * quality;
       const w = Math.max(2, Math.round(p.width * k)), h = Math.max(2, Math.round(p.height * k));
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; drewOnce = false; }
     }
@@ -1057,6 +1058,7 @@
       seek,
       stepFrames(n) { if (rate) setRate(0); seek(frame + (Math.round(n) || 0)); },
       refresh,
+      setQuality(q) { const v = q === 0.5 || q === 0.25 ? q : 1; if (v === quality) return; quality = v; refresh(); },
       get frame() { return frame; },
       get playing() { return rate !== 0; },
       get rate() { return rate; },

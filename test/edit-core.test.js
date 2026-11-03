@@ -2426,3 +2426,19 @@ test('parseTimecode：時間碼、純數字、單位、相對位移', () => {
   assert.strictEqual(P('０１：００'), 30);
   for (const bad of ['', 'abc', '+', '1:2:3:4:5', '1a']) assert.strictEqual(P(bad), null, bad);
 });
+
+test('4.70 調色 video.cc：範圍夾住、色輪超出圓就拉回、重設為 null、貼上屬性帶得過去', () => {
+  const p = setup();
+  const [v] = put(p, 'mv', 0, 0, 1, [V(p)]);
+  const [w] = put(p, 'mv', 60, 0, 1, [V(p)]);
+  assert.ok(core.setClipProps(p, v, { video: { cc: { exposure: 9, contrast: -500, gain: { x: 1, y: 1 }, off: 1 } } }).ok);
+  const cc = C(p, v).video.cc;
+  assert.equal(cc.exposure, 3); assert.equal(cc.contrast, -100); assert.equal(cc.off, true);
+  near(Math.hypot(cc.gain.x, cc.gain.y), 1, '色輪半徑最多 1');
+  unchanged(p, () => core.setClipProps(p, v, { video: { cc: { exposure: 'abc' } } }), /數值/);
+  assert.ok(core.pasteAttributes(p, core.copyClips(p, [v]), [w], ['effects']).ok);
+  assert.equal(C(p, w).video.cc.exposure, 3);
+  assert.ok(core.setClipProps(p, v, { video: { cc: null } }).ok);
+  assert.equal(C(p, v).video.cc, null);
+  assertInvariants(p);
+});

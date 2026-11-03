@@ -59,6 +59,7 @@
   const IMAGE_DEFAULT_SEC = 5;            // 圖片放上時間軸的預設長度
   const DEFAULT_FREEZE_SEC = 2;           // 定格對話框的預設長度（UI 用）
   const SPEED_MIN = 0.01, SPEED_MAX = 100;
+  const CC_WHEELS = ['lift', 'gamma', 'gain'];   // 4.70 色輪：暗部、中間調、亮部
   const EPS = 1e-6;                       // 來源秒數比較的容許誤差
   const END_EPS = 1e-3;                   // sourceTimeAt 夾在媒體結尾前一點點，seek 才拿得到最後一格
   const BIG = 1e7;                        // 拖曳量是 Infinity 時的替代值
@@ -2163,6 +2164,21 @@
       num(c.video, 'restore', 0, 100);
       if (c.video.sticker != null && !STICKERS.includes(c.video.sticker)) bail('貼圖動態只能是無、抖動、彈跳、呼吸、左右擺或進場彈出');
       num(c.video, 'stickerAmt', 0, 100);
+      // 4.70 調色（video.cc）：曝光（EV）、對比、亮部、暗部、色溫、色調、飽和度、自然飽和度、三個色輪（x、y 在 -1～1 的圓內）、略過
+      if (c.video.cc != null) {
+        const cc = c.video.cc;
+        if (!isObj(cc)) bail('調色設定不正確');
+        num(cc, 'exposure', -3, 3);
+        for (const k of ['contrast', 'highlights', 'shadows', 'temp', 'tint', 'sat', 'vib']) num(cc, k, -100, 100);
+        for (const k of CC_WHEELS) {
+          if (cc[k] == null) continue;
+          if (!isObj(cc[k])) bail('色輪設定不正確');
+          num(cc[k], 'x', -1, 1); num(cc[k], 'y', -1, 1);
+          const r = Math.hypot(cc[k].x || 0, cc[k].y || 0);
+          if (r > 1) { cc[k].x /= r; cc[k].y /= r; }
+        }
+        if (cc.off !== undefined) cc.off = !!cc.off;
+      }
     }
     if (c.audio) {
       const a = c.audio;
@@ -2488,7 +2504,7 @@
 
   const api = {
     // 常數、預設值
-    FPS_CHOICES, ASPECTS, FIT_MODES, LOOKS, STICKERS, LETTERBOXES, MARKER_COLORS, TRANSITION_TYPES, TRANSITION_COLORS, transitionColor, EDIT_MODES, IMAGE_DEFAULT_SEC, DEFAULT_FREEZE_SEC, SPEED_MIN, SPEED_MAX,
+    CC_WHEELS, FPS_CHOICES, ASPECTS, FIT_MODES, LOOKS, STICKERS, LETTERBOXES, MARKER_COLORS, TRANSITION_TYPES, TRANSITION_COLORS, transitionColor, EDIT_MODES, IMAGE_DEFAULT_SEC, DEFAULT_FREEZE_SEC, SPEED_MIN, SPEED_MAX,
     defaultVideo, defaultAudio, defaultTitle, defaultTransform, defaultEq, snapFps,
     // 專案、軌道、媒體
     createProject, clone, serialize, deserialize,
