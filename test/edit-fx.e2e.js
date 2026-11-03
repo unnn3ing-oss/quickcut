@@ -338,9 +338,9 @@ body{margin:0;padding:16px;font-family:system-ui,"Noto Sans TC",sans-serif;backg
   ok(stable, '同一對象再次 render 只更新值');
   // 打字輸入
   await page.evaluate(() => { __log.length = 0; });
-  await page.fill('#sec-transform .ed-fx-row:has-text("旋轉") input', '45');
-  await page.press('#sec-transform .ed-fx-row:has-text("旋轉") input', 'Enter');
-  await page.locator('#sec-transform .ed-fx-row:has-text("旋轉") input').blur();
+  await page.fill('#sec-transform .ed-fx-row:has-text("旋轉") input.ed-fx-numbox', '45');
+  await page.press('#sec-transform .ed-fx-row:has-text("旋轉") input.ed-fx-numbox', 'Enter');
+  await page.locator('#sec-transform .ed-fx-row:has-text("旋轉") input.ed-fx-numbox').blur();
   const typed = await page.evaluate(() => __log);
   ok(typed.length === 1 && !typed[0].live && typed[0].p.video.transform.rotation === 45, '輸入 45 → commit rotation:45 ' + JSON.stringify(typed));
   // 雙擊標籤重設

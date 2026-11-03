@@ -2442,3 +2442,55 @@ test('4.70 調色 video.cc：範圍夾住、色輪超出圓就拉回、重設為
   assert.equal(C(p, v).video.cc, null);
   assertInvariants(p);
 });
+
+test('copyGrade／applyGrade／gradeTargets（4.80）：整組取代、LUT 跨專案、鎖定軌略過、一筆復原', () => {
+  const p = setup();
+  const [v] = put(p, 'mv', 0, 0, 2);
+  const [w] = put(p, 'mv', 100, 0, 1);
+  const [x] = put(p, 'mn', 200, 0, 1);
+  const lut = core.addLut(p, core.parseCube(cubeText(2, (r, g, b) => [g, b, r]), 'swap.cube'));
+  assert.ok(core.setClipProps(p, v, { video: { cc: { exposure: 1, sat: 30, lift: { x: 0.2, y: 0 } }, restore: 40, lut: lut.id, lutAmt: 60, look: LOOK(), lookAmt: 50, transform: { posX: 80 } } }).ok);
+  assert.ok(core.setClipProps(p, w, { video: { look: LOOK(), lookAmt: 20 } }).ok);
+  const cg = core.copyGrade(p, v);
+  assert.ok(cg.ok, cg.reason);
+  assert.strictEqual(cg.board.grade.cc.exposure, 1);
+  assert.ok(cg.board.luts[lut.id], 'LUT 本體一起帶');
+  // 目標
+  assert.deepStrictEqual(core.gradeTargets(p, v, 'media').sort(), [w].sort(), '同素材：不含自己、不含別的素材');
+  assert.deepStrictEqual(core.gradeTargets(p, v, 'all').sort(), [w, x].sort());
+  // 套用：變形不動、顏色整組
+  const before = core.serialize(p);
+  const r = core.applyGrade(p, cg.board, [w, x]);
+  assert.ok(r.ok, r.reason); assert.strictEqual(r.count, 2);
+  for (const id of [w, x]) {
+    const vd = C(p, id).video;
+    assert.strictEqual(vd.cc.exposure, 1); assert.strictEqual(vd.cc.sat, 30); assert.strictEqual(vd.restore, 40);
+    assert.strictEqual(vd.lut, lut.id); assert.strictEqual(vd.lutAmt, 60); assert.strictEqual(vd.lookAmt, 50);
+    assert.strictEqual(vd.transform.posX, 0, '變形不動');
+  }
+  // 來源沒有的欄位會被清掉
+  const plain = core.copyGrade(p, put(p, 'mv', 300, 0, 1)[0]);
+  assert.ok(core.applyGrade(p, plain.board, [w]).ok);
+  assert.ok(C(p, w).video.cc == null && C(p, w).video.lut == null && !C(p, w).video.restore, '整組取代：清掉');
+  // 跨專案：LUT 跟著過去
+  const q = setup();
+  const [y] = put(q, 'mv', 0, 0, 1);
+  assert.ok(core.applyGrade(q, cg.board, [y]).ok);
+  const lid = C(q, y).video.lut;
+  assert.ok(lid && q.luts[lid] && q.luts[lid].data === p.luts[lut.id].data);
+  // 鎖定軌略過（gradeTargets）／直接指定會失敗
+  const t2 = V(p, 1);
+  const [z] = put(p, 'mn', 400, 0, 1, { video: t2 });
+  assert.strictEqual(C(p, z).trackId, t2);
+  assert.ok(core.gradeTargets(p, v, 'all').includes(z));
+  assert.ok(core.setTrackProps(p, t2, { locked: true }).ok);
+  assert.ok(!core.gradeTargets(p, v, 'all').includes(z), '鎖定軌略過');
+  unchanged(p, () => core.applyGrade(p, cg.board, [z]), /鎖定/);
+  // 失敗情況
+  unchanged(p, () => core.applyGrade(p, null, [w]), /複製調色/);
+  const [, au] = put(p, 'mv', 600, 0, 1);
+  unchanged(p, () => core.applyGrade(p, cg.board, [au]), /影片或圖片/);
+  assert.ok(!core.copyGrade(p, au).ok);
+  assert.notStrictEqual(before, core.serialize(p));
+  assertInvariants(p);
+});

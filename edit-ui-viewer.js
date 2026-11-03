@@ -215,7 +215,7 @@
     const box = el('div', 'ed-form');
     box.id = 'edFitPop';
     box.append(el('div', 'ed-form-h', `有 ${mm.count} 段素材的比例和 ${ratio} 不同`));
-    box.append(el('div', 'ed-hint', '要怎麼放進新的畫面？會套用到時間軸上所有影片和圖片片段，之後也可以在「詳細內容 → 畫面符合」逐段調整。'));
+    box.append(el('div', 'ed-hint', '要怎麼放進新的畫面？（套用到所有影片、圖片，之後可逐段改）'));
     const list = el('div', 'ed-fitopts');
     for (const [fit, label, desc] of FIT_CHOICES) {
       const b = el('button', 'ed-fitopt' + (fit === 'blur' ? ' rec' : '')); b.type = 'button'; b.dataset.fit = fit;

@@ -1503,6 +1503,50 @@
     });
   });
 
+  // ---- 調色複製與批量套用（4.80）------------------------------------------------------
+  // 「調色」＝色彩分頁的全部設定：調色（cc）、色彩還原、LUT（＋強度）、濾鏡（＋強度）。變形、裁切、貼圖動態不算。
+  // copyGrade 回傳純資料 { grade, luts }（LUT 本體一起帶，跨專案也貼得過去）；applyGrade 把它套到 ids（一次 tx＝一筆復原），
+  // 來源沒有的欄位會被清掉（和貼上屬性一樣是「整組取代」），所以套用後顏色和來源完全一樣。
+  const GRADE_KEYS = ['cc', 'restore', 'lut', 'lutAmt', 'look', 'lookAmt'];
+  const isGradable = c => !!c && c.type === 'media' && !!c.video;
+  const copyGrade = guard((p, id) => {
+    const c = p.clips[id];
+    if (!isGradable(c)) return fail('只有影片或圖片片段可以複製調色');
+    const grade = {};
+    for (const k of GRADE_KEYS) if (c.video[k] != null) grade[k] = copy(c.video[k]);
+    const luts = {};
+    if (grade.lut && p.luts && p.luts[grade.lut]) luts[grade.lut] = copy(p.luts[grade.lut]);
+    else delete grade.lut;
+    return { ok: true, board: { grade, luts, from: id } };
+  });
+  // 批量套用的對象：scope＝'media'（同一個素材的所有片段）／'all'（時間軸上所有影片、圖片片段）。
+  // 不含來源片段本身、鎖定軌道上的片段。
+  function gradeTargets(p, srcId, scope) {
+    const src = p.clips[srcId];
+    return Object.values(p.clips).filter(c => {
+      if (!isGradable(c) || c.id === srcId) return false;
+      const t = getTrack(p, c.trackId);
+      if (t && t.locked) return false;
+      return scope === 'all' || (scope === 'media' && !!src && c.mediaId === src.mediaId);
+    }).map(c => c.id);
+  }
+  const applyGrade = guard((p, board, ids) => {
+    if (!board || !isObj(board.grade)) return fail('還沒有複製調色，先在色彩分頁按「複製調色」');
+    const clips = needClips(p, ids).filter(isGradable);
+    if (!clips.length) return fail('選取的片段裡沒有影片或圖片片段');
+    needUnlocked(p, clips);
+    return tx(p, q => {
+      for (const c0 of clips) {
+        const c = q.clips[c0.id];
+        for (const k of GRADE_KEYS) delete c.video[k];
+        Object.assign(c.video, copy(board.grade));
+        if (c.video.lut) { const lid = pasteLut(q, board, c.video.lut); if (lid) c.video.lut = lid; else { delete c.video.lut; delete c.video.lutAmt; } }
+        sanitize(c);
+      }
+      return { count: clips.length };
+    });
+  });
+
   // ---- 標記、旗標 ------------------------------------------------------------------
   function cleanMarker(m, base) {
     const out = Object.assign({}, base);
@@ -2518,7 +2562,7 @@
     // 編輯
     moveClips, trimEdge, blade, rippleTrim, rippleDelete, deleteGap, closeAllGaps, lift, roll, slip, slide,
     setInOut, clearInOut, editToTimeline, addClip, link, unlink,
-    copyClips, pasteClips, duplicateClips, pasteAttributes, ATTR_PARTS, parseTimecode,
+    copyClips, pasteClips, duplicateClips, pasteAttributes, ATTR_PARTS, parseTimecode, copyGrade, applyGrade, gradeTargets, GRADE_KEYS,
     addMarker, updateMarker, removeMarker, addClipMarker, updateClipMarker, removeClipMarker, setFlags,
     parseCube, lutLookup, lutData, addLut, removeLut, LUT_MAX_SIZE,
     autoEdit, AUTO_STYLES, setSpeed, setRetime, clearRetime, RETIME_PRESETS, retimeCurve, retimeFactor, srcOffset, freezeFrame, addTransition, updateTransition, removeTransition, setClipProps, setFitAll, aspectMismatch,

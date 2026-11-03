@@ -42,56 +42,20 @@
     row.append(lab, ctl);
     const cv = el('canvas', 'ed-scope-insp'); cv.id = 'edScopeColorCanvas'; cv.width = 256; cv.height = 150; cv.setAttribute('aria-hidden', 'true');
     UI.colorScopeCanvas = cv;
-    body.append(row, cv, el('div', 'ed-fx-hint', '分析的是預覽畫面（含其他軌、字幕）。這裡打開時，預覽右下角的示波器會先收起來，離開色彩分頁再出現。'));
+    body.append(row, cv);
     insp.scopeSel = sel;
   }
 
-  // 數值欄位：標籤可左右拖曳（Shift 加速、Alt 微調）、雙擊標籤重設；外觀沿用 fx 詳細內容（.ed-fx-*）
+  // 數值欄位：和 fx 詳細內容同一套控制項（F.numControl：標籤左右拖曳、拉桿可細調、數值框可輸入／上下拖曳）
   function numRow(parent, label, o) {
     const row = el('div', 'ed-fx-row');
-    const lab = el('span', 'ed-fx-lab ed-fx-drag', label); lab.title = `${label}：在標籤上左右拖曳調整（Shift 加速、Alt 微調），雙擊重設`;
+    const lab = el('span', 'ed-fx-lab', label);
     const ctl = el('div', 'ed-fx-ctl');
-    const inp = el('input'); inp.type = 'number'; inp.setAttribute('aria-label', label);
-    const scale = o.scale || 1, dec = o.dec == null ? 2 : o.dec;
-    inp.step = o.step || fmtNum(Math.pow(10, -dec), dec);
-    ctl.append(inp, el('span', 'ed-fx-unit', o.unit || ''));
+    const nc = F.numControl(Object.assign({}, o, { label, lab }));
+    ctl.append(...nc.parts);
     row.append(lab, ctl);
     parent.appendChild(row);
-    const lo = o.min == null ? -Infinity : o.min, hi = o.max == null ? Infinity : o.max;
-    const q = v => { const k = Math.pow(10, dec) * scale; return Math.round(clamp(v, lo, hi) * k) / k; };
-    const cur = () => { const v = Number(o.get()); return isFinite(v) ? v : (o.def || 0); };
-    const dpp = o.dpp || (isFinite(hi - lo) ? (hi - lo) / 400 : Math.pow(10, -dec));
-    const refresh = () => { if (doc.activeElement !== inp) inp.value = fmtNum(cur() * scale, dec); };
-    inp.addEventListener('change', () => {
-      const v = parseFloat(inp.value);
-      if (!isFinite(v)) { inp.value = fmtNum(cur() * scale, dec); return; }
-      const nv = q(v / scale);
-      inp.value = fmtNum(nv * scale, dec);
-      o.set(nv, false);
-    });
-    lab.addEventListener('pointerdown', e => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      const x0 = e.clientX, v0 = cur();
-      let moved = false, last = v0;
-      const move = ev => {
-        const dx = ev.clientX - x0;
-        if (!moved && Math.abs(dx) < 2) return;
-        moved = true;
-        last = q(v0 + dx * dpp * (ev.shiftKey ? 10 : ev.altKey ? 0.1 : 1));
-        inp.value = fmtNum(last * scale, dec);
-        o.set(last, true);
-      };
-      const up = () => {
-        root.removeEventListener('pointermove', move); root.removeEventListener('pointerup', up); root.removeEventListener('pointercancel', up);
-        doc.body.style.cursor = '';
-        if (moved) o.set(last, false);
-      };
-      doc.body.style.cursor = 'ew-resize';
-      root.addEventListener('pointermove', move); root.addEventListener('pointerup', up); root.addEventListener('pointercancel', up);
-    });
-    lab.addEventListener('dblclick', () => { if (o.def == null) return; inp.value = fmtNum(o.def * scale, dec); o.set(o.def, false); });
-    return { row, input: inp, refresh };
+    return { row, input: nc.input, range: nc.range, refresh: nc.refresh };
   }
   function checkRow(parent, label, o) {
     const row = el('div', 'ed-fx-row one');
@@ -182,6 +146,32 @@
   }
   UI.applyLutFile = applyLutFile;
 
+  // ---- 調色複製與批量套用（4.80）：剪貼簿是純資料（core.copyGrade），存在 state.gradeBoard，換專案也貼得過去 ----
+  const gradeIds = () => selIds().filter(id => { const k = clipOf(id); return k && k.type === 'media' && k.video; });
+  const gradeOps = {
+    has: () => !!state.gradeBoard,
+    copy(c) {
+      const r = C.copyGrade(state.project, c.id);
+      if (!r.ok) { say(r.reason, 'error'); return; }
+      state.gradeBoard = r.board;
+      say('已複製調色：選取其他片段後按「貼上調色到選取的片段」', 'ok');
+      renderInspector();
+    },
+    paste(c) {
+      const ids = gradeIds();
+      const list = ids.length ? ids : [c.id];
+      const r = op('貼上調色', p => C.applyGrade(p, state.gradeBoard, list));
+      if (r && r.ok) say(`已貼上調色（${r.count} 個片段）`, 'ok');
+    },
+    apply(c, scope) {
+      const cg = C.copyGrade(state.project, c.id);
+      if (!cg.ok) { say(cg.reason, 'error'); return; }
+      const ids = C.gradeTargets(state.project, c.id, scope);
+      if (!ids.length) { say(scope === 'media' ? '這個素材沒有其他片段可以套用（鎖定的軌道不算）' : '時間軸上沒有其他影片或圖片片段可以套用（鎖定的軌道不算）', 'error'); return; }
+      const r = op(scope === 'media' ? '套用調色到同一個素材' : '套用調色到所有片段', p => C.applyGrade(p, cg.board, ids));
+      if (r && r.ok) say(`已套用調色到 ${r.count} 個片段（可以復原）`, 'ok');
+    },
+  };
   function kfCtx(c) {
     const f = state.playhead - c.start;
     const inRange = state.mode === 'timeline' && f >= 0 && f < c.duration;
@@ -191,6 +181,7 @@
       f, inRange,
       luts: state.project.luts || {},
       loadLut, removeLut,
+      grade: gradeOps,
       kf: {
         // ◇：這格有關鍵影格就刪掉，沒有就用目前看到的值新增
         toggle(paths, clip) {
@@ -242,7 +233,8 @@
     host.append(head, insp.tabs, insp.body);
     // 在數值標籤上按下去拖曳時，先讓輸入框失焦：不然焦點還停在輸入框裡，Ctrl+Z 會變成輸入框自己的文字復原
     host.addEventListener('pointerdown', e => {
-      if (e.target.closest && e.target.closest('.ed-fx-lab') && doc.activeElement && doc.activeElement !== doc.body && host.contains(doc.activeElement) && isTextTarget(doc.activeElement)) doc.activeElement.blur();
+      const t = e.target.closest && e.target.closest('.ed-fx-lab, .ed-fx-numbox, .ed-fx-range');   // 4.80：數值框上下拖曳、拉桿也一樣
+      if (t && t !== doc.activeElement && doc.activeElement && doc.activeElement !== doc.body && host.contains(doc.activeElement) && isTextTarget(doc.activeElement)) doc.activeElement.blur();
     }, true);
 
     insp.project = mkSection('project', '專案');
@@ -295,7 +287,7 @@
     lbD.appendChild(lb); dl.append(lbT, lbD);
     insp.letterbox = lb;
     const tip = el('div', 'ed-hint');
-    tip.innerHTML = '點選時間軸上的片段，這裡會出現它的資訊、變形、音訊與速度。<br>在媒體庫雙擊素材可在檢視器預覽，並設定來源的 In／Out。';
+    tip.textContent = '點選時間軸上的片段來調整。';
     body.append(dl, tip);
   }
   function updateProjectSection() {
@@ -331,7 +323,7 @@
   }
   function updateInfoSection(c, n) {
     const p = state.project, r = insp.infoRows, t = trackOf(c.trackId), m = c.mediaId && mediaOf(c.mediaId);
-    insp.infoMulti.textContent = n > 1 ? `已選取 ${n} 個片段（以下顯示最後選取的；數值修改會套用到全部適用的片段）` : '';
+    insp.infoMulti.textContent = n > 1 ? `已選取 ${n} 個片段（修改會套用到全部）` : '';
     insp.infoMulti.hidden = n <= 1;
     if (doc.activeElement !== insp.nameInput) insp.nameInput.value = c.name || '';
     insp.nameInput.placeholder = clipTitle(c);
@@ -357,14 +349,14 @@
   function buildAudioSection(body) {
     const A_ = insp.audioRows = [];
     const add = r => { A_.push(r); return r; };
-    add(numRow(body, '增益', { unit: 'dB', min: -60, max: 24, dec: 1, dpp: 0.2, def: 0, get: aget('gainDb', 0), set: (v, live) => audioPatch({ gainDb: v }, live) }));
+    add(numRow(body, '增益', { unit: 'dB', min: -60, max: 24, dec: 1, dpp: 0.2, def: 0, slider: [-30, 12], sliderStep: 0.5, get: aget('gainDb', 0), set: (v, live) => audioPatch({ gainDb: v }, live) }));
     add(numRow(body, 'Pan', { unit: '', min: -1, max: 1, scale: 100, dec: 0, dpp: 0.005, def: 0, get: aget('pan', 0), set: (v, live) => audioPatch({ pan: v }, live) }));
     const fl = el('div', 'ed-fx-head', '淡入／淡出'); body.appendChild(fl);
-    add(numRow(body, '淡入長度', { unit: '格', min: 0, max: 3000, dec: 0, dpp: 0.5, def: 0, get: aget('fadeIn', 0), set: (v, live) => audioPatch({ fadeIn: Math.round(v) }, live) }));
+    add(numRow(body, '淡入長度', { unit: '格', min: 0, max: 3000, dec: 0, dpp: 0.5, def: 0, slider: [0, 300], sliderStep: 1, get: aget('fadeIn', 0), set: (v, live) => audioPatch({ fadeIn: Math.round(v) }, live) }));
     add(numRow(body, '淡入曲線', { unit: '%', min: -1, max: 1, scale: 100, dec: 0, dpp: 0.005, def: 0, get: aget('fadeInCurve', 0), set: (v, live) => audioPatch({ fadeInCurve: v }, live) }));
-    add(numRow(body, '淡出長度', { unit: '格', min: 0, max: 3000, dec: 0, dpp: 0.5, def: 0, get: aget('fadeOut', 0), set: (v, live) => audioPatch({ fadeOut: Math.round(v) }, live) }));
+    add(numRow(body, '淡出長度', { unit: '格', min: 0, max: 3000, dec: 0, dpp: 0.5, def: 0, slider: [0, 300], sliderStep: 1, get: aget('fadeOut', 0), set: (v, live) => audioPatch({ fadeOut: Math.round(v) }, live) }));
     add(numRow(body, '淡出曲線', { unit: '%', min: -1, max: 1, scale: 100, dec: 0, dpp: 0.005, def: 0, get: aget('fadeOutCurve', 0), set: (v, live) => audioPatch({ fadeOutCurve: v }, live) }));
-    body.appendChild(el('div', 'ed-hint', '曲線：正值＝一開始變化快，負值＝一開始變化慢。也可以直接在時間軸上拖曳音訊片段上緣兩端的圓點。'));
+    body.appendChild(el('div', 'ed-hint', '曲線：正值先快後慢，負值先慢後快。'));
 
     // EQ
     body.appendChild(el('div', 'ed-fx-head', '等化器（EQ）'));
@@ -381,19 +373,18 @@
       const on = el('input'); on.type = 'checkbox'; on.title = `第 ${i + 1} 段`; on.setAttribute('aria-label', `第 ${i + 1} 段 EQ 開關`);
       const ty = el('select'); ty.setAttribute('aria-label', `第 ${i + 1} 段類型`);
       for (const [v, t] of EQ_TYPES) { const o = el('option', null, t); o.value = v; ty.appendChild(o); }
-      const mkn = (label, min, max, step) => { const n = el('input'); n.type = 'number'; n.min = min; n.max = max; n.step = step; n.setAttribute('aria-label', `第 ${i + 1} 段${label}`); return n; };
-      const fr = mkn('頻率', 10, 24000, 10), ga = mkn('增益', -30, 30, 0.5), qq = mkn('Q', 0.05, 30, 0.1);
+      const bandPatch = o => { const bands = []; bands[i] = o; return { eq: { bands } }; };
+      const band = () => { const c = audioClip(); const eq = (c && c.audio.eq) || C.defaultEq(); return eq.bands[i] || {}; };
+      // 數值框和其他數值一樣：可輸入、按住上下拖曳、↑↓ 鍵加減（這裡沒有拉桿，格子太窄）
+      const mkn = (label, key, min, max, dec, dpp, step) => F.numControl({ label: `第 ${i + 1} 段${label}`, slider: false, min, max, dec, dpp, sliderStep: step,
+        get: () => band()[key], set: (v, live) => audioPatch(bandPatch({ [key]: v }), live) }).input;
+      const fr = mkn('頻率', 'freq', 10, 24000, 0, 10, 10), ga = mkn('增益', 'gain', -30, 30, 1, 0.1, 0.5), qq = mkn('Q', 'q', 0.05, 30, 2, 0.02, 0.1);
       row.append(on, ty, fr, ga, qq);
       body.appendChild(row);
-      const bandPatch = o => { const bands = []; bands[i] = o; return { eq: { bands } }; };
       on.addEventListener('change', () => audioPatch(bandPatch({ on: on.checked }), false));
       ty.addEventListener('change', () => audioPatch(bandPatch({ type: ty.value }), false));
-      for (const [inp, key, lo, hi] of [[fr, 'freq', 10, 24000], [ga, 'gain', -30, 30], [qq, 'q', 0.05, 30]]) {
-        inp.addEventListener('change', () => { const v = parseFloat(inp.value); if (!isFinite(v)) { updateAudioSection(); return; } audioPatch(bandPatch({ [key]: clamp(v, lo, hi) }), false); });
-      }
       insp.eqBands.push({ on, ty, fr, ga, qq });
     }
-    body.appendChild(el('div', 'ed-hint', '頻率響應圖就是目前的 EQ 設定（預覽與匯出都套用同一組濾波器）。'));
     const rst = el('button', 'ed-btn small', '重設 EQ'); rst.type = 'button'; rst.id = 'edEqReset';
     rst.addEventListener('click', () => audioPatch({ eq: C.defaultEq() }, false));
     body.appendChild(rst);
@@ -455,7 +446,7 @@
   function buildSpeedSection(body) {
     insp.speedRows = [];
     const add = r => { insp.speedRows.push(r); return r; };
-    add(numRow(body, '速度', { unit: '%', min: 1, max: 10000, scale: 100, dec: 1, dpp: 0.01, def: 1, get: () => { const c = speedClip(); return c ? c.speed : 1; }, set: (v, live_) => speedCommit({ speed: v }, live_) }));
+    add(numRow(body, '速度', { unit: '%', min: 1, max: 10000, scale: 100, dec: 1, dpp: 0.01, def: 1, slider: [10, 400], sliderStep: 1, get: () => { const c = speedClip(); return c ? c.speed : 1; }, set: (v, live_) => speedCommit({ speed: v }, live_) }));
     add(checkRow(body, '倒播', { get: () => { const c = speedClip(); return !!(c && c.reverse); }, set: v => speedCommit({ reverse: v }, false) }));
     add(checkRow(body, '波紋（片段長度跟著變，後面的片段一起推拉）', { get: () => state.rippleSpeed, set: v => { state.rippleSpeed = v; } }));
     insp.speedNote = el('div', 'ed-hint'); body.appendChild(insp.speedNote);
@@ -468,15 +459,15 @@
     for (const r of insp.speedRows) r.input.disabled = frozen;
     insp.speedRows[1].input.disabled = frozen || ramp;           // 曲線變速不能倒播
     insp.speedNote.textContent = frozen ? '這是定格片段，不能變速。'
-      : ramp ? `曲線變速中（「速度」是整段的平均，改它會讓整條曲線一起變快變慢）。按 ${MOD}R 換曲線或取消。`
-      : '按 ' + MOD + 'R 開啟變速對話框，也可以套用平滑的曲線變速（慢動作、子彈時間）。';
+      : ramp ? `曲線變速中（速度＝整段平均）；${MOD}R 修改。`
+      : MOD + 'R：曲線變速（慢動作、子彈時間）。';
   }
 
   // ---- 字幕清單：每段字幕一行（時間＋文字框）----------------------------------------------
   function buildSubsSection(body) {
     insp.subHead = el('div', 'ed-hint');
     insp.subList = el('div', 'ed-sublist');
-    const foot = el('div', 'ed-hint', '按時間跳到那一段；Enter 跳到下一行，Shift＋Enter 換行。播放時按 V 可以再加一段。');
+    const foot = el('div', 'ed-hint', 'Enter 下一行，Shift＋Enter 換行；播放時按 V 加一段。');
     const ex = el('button', 'ed-btn'); ex.type = 'button'; ex.id = 'edSubsExport'; ex.textContent = '匯出 SRT';
     ex.addEventListener('click', () => exportSrt());
     body.append(insp.subHead, insp.subList, foot, ex);
@@ -545,9 +536,12 @@
       return { kind: 'title', pages: [['text', '文字', fx('title')], ['look', '外觀', fx('titleLook')], ['anim', '動畫', fx('titleAnim')],
         ['xform', '變形', fx('transform', 'crop')], ['info', '資訊', [insp.info]]] };
     }
+    // 4.80：影片／圖片／音訊片段分成四頁：影片（變形、裁切、速度）、色彩（濾鏡、調色、LUT、示波器）、音訊、資訊。
+    // 純音訊片段沒有影片頁，速度放在音訊頁。
     const kind = c.video ? c.type : 'audio';
     const color = fx('color');
-    return { kind, pages: [['xform', '變形', fx('transform')], ['color', '色彩', color[0] ? [insp.scope, ...color] : []], ['crop', '裁切', fx('crop')], ['audio', '音訊', [audio]], ['speed', '速度', [speed]], ['info', '資訊', [insp.info]]] };
+    return { kind, pages: [['video', '影片', [...fx('transform', 'crop'), c.video ? speed : null]], ['color', '色彩', color[0] ? [insp.scope, ...color] : []],
+      ['audio', '音訊', [audio, c.video ? null : speed]], ['info', '資訊', [insp.info]]] };
   }
   function loadTabOf() {
     if (!insp.tabOf) { insp.tabOf = {}; try { insp.tabOf = JSON.parse(root.localStorage.getItem('qc-itab')) || {}; } catch (_) { /* 讀不到就用預設 */ } }

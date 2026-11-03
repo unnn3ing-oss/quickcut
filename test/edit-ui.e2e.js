@@ -682,7 +682,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   console.log('字幕樣式、字體特效');
   const heads = () => page.evaluate(() => [...document.querySelectorAll('.ed-panel:not([hidden]) .ed-ghead')].map(h => h.textContent));
   eq(await page.textContent('.ed-tab[data-tab="trans"]'), '特效', '分頁「轉場」改名為「特效」');
-  eq(await heads(), ['字幕清單', '字幕過場', '字幕樣式'], '字幕分頁分成「字幕清單」「字幕過場」「字幕樣式」');
+  eq(await heads(), ['字幕清單', '字幕過場', '字幕樣式', '進場動畫', '持續動畫', '出場動畫'], '字幕分頁：所有字幕相關都在這裡（清單、過場、樣式、進場／持續／出場動畫）');
   eq(await page.evaluate(() => document.querySelectorAll('#edTStyleList .ed-gitem').length), 21, '列出 21 種字幕樣式（基本 5＋綜藝 6＋社群 10）');
   const [tA, tB] = on(await clips(page), 'V2');
   const tOf = id => proj(page, (p, Q, id) => p.clips[id].title, id);
@@ -711,9 +711,10 @@ async function runViewport(browser, base, fix, [W, H]) {
   const clipsBefore = await proj(page, p => JSON.stringify(p.clips));
   await dragOnto('#edTStyleList .ed-gitem[data-tstyle="purple3d"]', on(await clips(page), 'V1')[0].id);
   eq(await proj(page, p => JSON.stringify(p.clips)), clipsBefore, '拖樣式到影片片段：不改任何東西');
-  // 字體特效（在「特效」分頁）
+  // 字體特效（4.80 起在「字幕」分頁的「進場動畫」）
   await page.click('.ed-tab[data-tab="trans"]');
-  eq(await heads(), ['轉場特效', '字體特效'], '特效分頁分成「轉場特效」「字體特效」');
+  eq(await heads(), ['轉場特效', '濾鏡', '貼圖動態'], '特效分頁只放畫面相關：轉場特效、濾鏡、貼圖動態');
+  await page.click('.ed-tab[data-tab="title"]');
   eq(await page.evaluate(() => [...document.querySelectorAll('#edTextFxList .ed-gitem')].map(i => i.dataset.textfx)), ['none', 'pop', 'popLine', 'popChar', 'jump', 'jumpLine', 'jumpChar', 'impact', 'typeCursor', 'slideLeft', 'slideRight', 'slideBottom', 'fade', 'fadeLine', 'fadeChar', 'blurIn', 'echo', 'smear'], '字體特效（進場）：原本 7 種＋衝擊放大／打字機＋游標／左右下滑入＋淡入／逐行淡入／逐字淡入／模糊浮現／殘影／拖影上衝（波浪移到持續特效）');
   await selClip(tA.id);
   await page.click('#edTextFxList .ed-gitem[data-textfx="jumpChar"]');
@@ -723,6 +724,35 @@ async function runViewport(browser, base, fix, [W, H]) {
   ok((await page.textContent('#edUndoLab')).includes('字體特效'), '套用字體特效記一筆復原');
   await dragOnto('#edTextFxList .ed-gitem[data-textfx="pop"]', tB.id);
   eq((await tOf(tB.id)).textFx, 'pop', '把「彈出」拖到字幕片段上');
+  // 4.80：持續動畫、出場動畫也在字幕分頁（按鈕套用、拖曳套用）
+  const loopKeys = await page.evaluate(() => [...document.querySelectorAll('#edTextLoopList .ed-gitem')].map(i => i.dataset.fxKey));
+  eq(loopKeys, await page.evaluate(() => Object.keys(QPTEdit.fx.TEXT_LOOP).filter(k => !QPTEdit.fx.TEXT_LOOP[k].hidden)), '持續動畫：列出全部 TEXT_LOOP');
+  await selClip(tA.id);
+  await page.click('#edTextLoopList .ed-gitem[data-fx-key="wave"]');
+  await page.click('[data-fx-apply="tloop"]'); await settle(page);
+  eq((await tOf(tA.id)).textLoop, 'wave', '按鈕套用持續動畫「波浪」');
+  ok((await page.textContent('#edUndoLab')).includes('持續動畫'), '套用持續動畫記一筆復原');
+  await dragOnto('#edTextOutList .ed-gitem[data-fx-key="slideUp"]', tB.id);
+  eq((await tOf(tB.id)).textOut, 'slideUp', '把出場動畫「往上飄走」拖到字幕片段上');
+  const cb4 = await proj(page, p => JSON.stringify(p.clips));
+  await dragOnto('#edTextOutList .ed-gitem[data-fx-key="fade"]', on(await clips(page), 'V1')[0].id);
+  eq(await proj(page, p => JSON.stringify(p.clips)), cb4, '出場動畫拖到影片片段：不改任何東西');
+  // 4.80：濾鏡、貼圖動態在特效分頁（拖到影片片段、按鈕套用；拖到字幕上不行）
+  await page.click('.ed-tab[data-tab="trans"]');
+  const v1c = on(await clips(page), 'V1')[0];
+  await dragOnto('#edLookList .ed-gitem[data-fx-key="mono"]', v1c.id);
+  eq(await proj(page, (p, Q, id) => p.clips[id].video.look, v1c.id), 'mono', '把濾鏡「黑白」拖到影片片段上');
+  const cb5 = await proj(page, p => JSON.stringify(p.clips));
+  await dragOnto('#edLookList .ed-gitem[data-fx-key="warm"]', tA.id);
+  eq(await proj(page, p => JSON.stringify(p.clips)), cb5, '濾鏡拖到字幕片段：不改任何東西');
+  await page.evaluate(id => QPTEdit.ui.selectClips([id]), v1c.id); await settle(page);
+  await page.click('#edStickerList .ed-gitem[data-fx-key="bounce"]');
+  await page.click('[data-fx-apply="sticker"]'); await settle(page);
+  eq(await proj(page, (p, Q, id) => p.clips[id].video.sticker, v1c.id), 'bounce', '按鈕套用貼圖動態「彈跳」');
+  // 復原這四步（持續、出場、濾鏡、貼圖動態），後面的測試照原本的狀態
+  await page.evaluate(() => { for (let i = 0; i < 4; i++) QPTEdit.uiParts.state.history.undo(); }); await settle(page);
+  eq([(await tOf(tA.id)).textLoop, (await tOf(tB.id)).textOut, await proj(page, (p, Q, id) => [p.clips[id].video.look || 'none', p.clips[id].video.sticker || 'none'].join(), v1c.id)], ['none', 'none', 'none,none'], '復原四步：回到原本');
+  await page.click('.ed-tab[data-tab="title"]');
   // 詳細內容：選字幕 → 文字／外觀／動畫／變形／資訊 分頁
   await selClip(tA.id);
   eq(await page.evaluate(() => [...document.querySelectorAll('#edInspTabs .ed-itab')].map(b => b.textContent)), ['文字', '外觀', '動畫', '變形', '資訊'], '選取字幕：詳細內容分頁＝文字／外觀／動畫／變形／資訊');
@@ -897,11 +927,11 @@ async function runViewport(browser, base, fix, [W, H]) {
   await settle(page);
   if (!(await page.isVisible('.ed-sec[data-sec="fx-transform"]'))) console.log('       DEBUG', JSON.stringify(await page.evaluate(() => ({ sel: [...QPTEdit.ui.state.selection], prim: QPTEdit.ui.state.primary, tr: QPTEdit.ui.state.selTransition, secs: [...document.querySelectorAll('.ed-sec')].map(s => s.dataset.sec + ':' + s.hidden), head: document.getElementById('edInspHead').textContent }))), JSON.stringify(cb));
   ok(await page.isVisible('.ed-sec[data-sec="fx-transform"]'), '選取影片片段：檢查器出現「變形」區段');
-  eq(await page.evaluate(() => [...document.querySelectorAll('#edInspTabs .ed-itab')].map(b => b.textContent)), ['變形', '色彩', '裁切', '音訊', '速度', '資訊'], '選取影片片段：詳細內容分頁＝變形／色彩／裁切／音訊／速度／資訊');
+  eq(await page.evaluate(() => [...document.querySelectorAll('#edInspTabs .ed-itab')].map(b => b.textContent)), ['影片', '色彩', '音訊', '資訊'], '選取影片片段：詳細內容分頁＝影片（變形、裁切、速度）／色彩／音訊／資訊');
   ok(!(await page.isVisible('.ed-sec[data-sec="info"]')) && !(await page.isVisible('.ed-sec[data-sec="audio"]')), '一次只顯示一個分頁的內容');
   await page.click('.ed-itab[data-itab="info"]');
   ok(await page.isVisible('.ed-sec[data-sec="info"]') && !(await page.isVisible('.ed-sec[data-sec="fx-transform"]')), '檢查器：切到「資訊」分頁看片段資訊');
-  await page.click('.ed-itab[data-itab="xform"]');
+  await page.click('.ed-itab[data-itab="video"]');
   const zl = page.locator('.ed-sec[data-sec="fx-transform"] .ed-fx-lab:text-is("縮放 X")');
   await zl.scrollIntoViewIfNeeded();
   const zb = await zl.boundingBox();
@@ -1211,6 +1241,62 @@ async function runViewport(browser, base, fix, [W, H]) {
     eq(await proj(page, (p, Q, id) => p.clips[id].video.cc.temp, v1c), 60, 'Ctrl+Z：重設前的調色回來');
     await page.locator(`${sec} button.ed-fx-btn`, { hasText: '重設調色' }).click(); await settle(page);
 
+    // 4.80：濾鏡搬到色彩分頁；調色複製／貼上／批量套用
+    ok(heads[0] === '濾鏡' && heads.includes('複製與批量套用'), '色彩分頁最上面是「濾鏡」、最後是「複製與批量套用」');
+    ok(!(await page.isVisible('.ed-sec[data-sec="fx-transform"] .ed-fx-lab:text-is("濾鏡")')), '變形區段不再有濾鏡');
+    const gv = await proj(page, (p, Q, id) => Object.values(p.clips).filter(c => c.type === 'media' && c.video && c.id !== id).map(c => c.id), v1c);
+    ok(gv.length >= 1, '有其他影片片段可以套用（' + gv.length + '）');
+    await page.evaluate(id => QPTEdit.uiParts.op('調色', p => QPTEdit.core.setClipProps(p, id, { video: { cc: { temp: 40, sat: -20 }, look: 'cool', lookAmt: 60 } })), v1c); await settle(page);
+    ok(!(await page.isVisible(`${sec} [data-act="paste"]`)), '還沒複製：看不到「貼上調色」');
+    await page.click(`${sec} [data-act="copy"]`); await settle(page);
+    await page.evaluate(id => QPTEdit.ui.selectClips([id]), gv[0]); await settle(page);
+    ok(await page.isVisible(`${sec} [data-act="paste"]`), '複製後選別的片段：色彩分頁出現「貼上調色」');
+    await page.click(`${sec} [data-act="paste"]`); await settle(page);
+    const gp = await proj(page, (p, Q, id) => { const v = p.clips[id].video; return [v.cc && v.cc.temp, v.cc && v.cc.sat, v.look, v.lookAmt]; }, gv[0]);
+    eq(gp, [40, -20, 'cool', 60], '貼上調色：色溫、飽和度、濾鏡、強度都過去了');
+    ok((await page.textContent('#edUndoLab')).includes('貼上調色'), '貼上調色記一筆復原');
+    await page.keyboard.press('Control+z'); await settle(page);
+    eq(await proj(page, (p, Q, id) => p.clips[id].video.cc || null, gv[0]), null, '復原貼上調色');
+    await page.evaluate(id => QPTEdit.ui.selectClips([id]), v1c); await settle(page);
+    await page.click(`${sec} [data-act="all"]`); await settle(page);
+    const ga = await proj(page, (p, Q, ids) => ids.map(id => p.clips[id].video.cc && p.clips[id].video.cc.temp), gv);
+    ok(ga.every(t => t === 40), '套用到所有影片／圖片：每個片段色溫都是 40 ' + JSON.stringify(ga));
+    ok(await page.evaluate(() => document.body.innerText.includes('已套用調色到')), '顯示套用了幾個片段');
+    await page.keyboard.press('Control+z'); await settle(page);
+    ok((await proj(page, (p, Q, ids) => ids.every(id => !p.clips[id].video.cc), gv)), '一次復原：所有片段回到原本');
+    await page.evaluate(id => QPTEdit.uiParts.op('重設', p => QPTEdit.core.setClipProps(p, id, { video: { cc: null, look: 'none' } })), v1c); await settle(page);
+
+    // 4.80：數值控制項：每個數值都有拉桿＋最後方數值框；拉桿可細調、數值框可上下拖曳、↑↓ 鍵
+    const allNumRows = await page.evaluate(() => [...document.querySelectorAll('.ed-sec:not([hidden]) .ed-fx-row')].filter(r => r.querySelector('input.ed-fx-numbox') && !r.closest('.ed-eqband')).map(r => !!r.querySelector('.ed-fx-range') && r.querySelector('.ed-fx-ctl').lastElementChild.previousElementSibling === r.querySelector('input.ed-fx-numbox')));
+    ok(allNumRows.length > 5 && allNumRows.every(Boolean), `色彩分頁每個數值：拉桿＋數值框在最後（單位前）（${allNumRows.length} 個）`);
+    const conRng = page.locator(`${sec} .ed-fx-row`).filter({ has: page.locator('.ed-fx-lab', { hasText: /^對比$/ }) }).locator('.ed-fx-range');
+    await conRng.scrollIntoViewIfNeeded();
+    const rb = await conRng.boundingBox();
+    const cx = rb.x + rb.width / 2, cy = rb.y + rb.height / 2;
+    const conV = () => proj(page, (p, Q, id) => (p.clips[id].video.cc && p.clips[id].video.cc.contrast) || 0, v1c);
+    await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx + 40, cy, { steps: 5 }); await page.mouse.up(); await settle(page);
+    const coarse = await conV();
+    await page.mouse.move(cx, cy); await page.mouse.down(); await page.keyboard.down('Shift'); await page.mouse.move(cx + 40, cy, { steps: 5 }); await page.keyboard.up('Shift'); await page.mouse.up(); await settle(page);
+    const fine = await conV();
+    ok(coarse > 10 && fine > 0 && fine - 0 < coarse, `拉桿：一般拖 40px＝${coarse}；按住 Shift 拖同樣距離只動約 1/10（${fine}）`);
+    const conInp = page.locator(`${sec} .ed-fx-row`).filter({ has: page.locator('.ed-fx-lab', { hasText: /^對比$/ }) }).locator('input.ed-fx-numbox');
+    const ib = await conInp.boundingBox();
+    const v0 = await conV();
+    await page.mouse.move(ib.x + ib.width / 2, ib.y + ib.height / 2); await page.mouse.down();
+    await page.mouse.move(ib.x + ib.width / 2, ib.y + ib.height / 2 - 40, { steps: 6 }); await page.mouse.up(); await settle(page);
+    const v1 = await conV();
+    ok(v1 > v0 + 10, `數值框按住往上拖：數值變大（${v0} → ${v1}）`);
+    ok(!(await page.evaluate(() => document.activeElement && document.activeElement.classList.contains('ed-fx-numbox'))), '拖曳後數值框沒有進入輸入狀態');
+    await conInp.click(); await settle(page);
+    ok(await page.evaluate(() => document.activeElement && document.activeElement.classList.contains('ed-fx-numbox')), '只點一下（沒拖動）：進入輸入');
+    await page.keyboard.press('ArrowUp'); await settle(page);
+    eq(await conV(), v1 + 1, '數值框 ↑ 鍵：加一格');
+    await page.keyboard.press('Shift+ArrowDown'); await settle(page);
+    eq(await conV(), v1 - 9, 'Shift＋↓：減十格');
+    await page.keyboard.press('Escape'); await page.evaluate(() => document.activeElement && document.activeElement.blur());
+    await page.dblclick(`${sec} .ed-fx-row:has(.ed-fx-lab:text-is("對比")) .ed-fx-range`); await settle(page);
+    eq(await conV(), 0, '雙擊拉桿：歸零');
+
     // 4.70 方案 2：色彩分頁有自己的示波器（B）；B 顯示時預覽右下角（A）收起來，離開色彩分頁 A 再出現
     const vis = s => page.evaluate(s => { const n = document.querySelector(s); return !!n && !n.hidden && n.offsetParent !== null; }, s);
     const drawn = s => page.evaluate(s => { const n = document.querySelector(s); return n ? n.dataset.drawn || '' : ''; }, s);
@@ -1228,7 +1314,7 @@ async function runViewport(browser, base, fix, [W, H]) {
     else ok(true, '（這個視窗高度下 B 捲不出去，略過）');
     await page.evaluate(() => { document.querySelector('.ed-insp-body').scrollTop = 0; }); await sleep(250); await settle(page);
     ok(!(await vis('#edScopePanel')), '捲回上面看到 B：A 又收起來');
-    await page.click('#edInspTabs [data-itab="xform"]'); await settle(page); await sleep(200); await settle(page);
+    await page.click('#edInspTabs [data-itab="video"]'); await settle(page); await sleep(200); await settle(page);
     ok(await vis('#edScopePanel'), '離開色彩分頁：A 再出現');
     eq(await drawn('#edScopePanel'), 'wave', 'A 畫的是自己的波形');
     await page.click('#edInspTabs [data-itab="color"]'); await settle(page);
@@ -1237,7 +1323,7 @@ async function runViewport(browser, base, fix, [W, H]) {
     ok(await vis('#edScopePanel'), 'B 選「關閉」：色彩分頁開著 A 也照常顯示');
     eq(await page.evaluate(() => [localStorage.getItem('qc-scope'), localStorage.getItem('qc-scope-color')]), ['wave', 'off'], 'A、B 的選擇分開記住');
     await page.selectOption('#edScopeColor', 'hist'); await page.selectOption('#edScope', 'off'); await settle(page);
-    await page.click('#edInspTabs [data-itab="xform"]'); await settle(page);
+    await page.click('#edInspTabs [data-itab="video"]'); await settle(page);
   }
   // 旗標
   cl = await clips(page);
@@ -1635,7 +1721,7 @@ async function runViewport(browser, base, fix, [W, H]) {
   cb = await clipBox(page, lastV.id);
   await page.mouse.click(cb.x + cb.w / 2, cb.y + cb.h - 8);
   await settle(page);
-  await page.click('.ed-itab[data-itab="speed"]');
+  await page.click('.ed-itab[data-itab="video"]');
   ok(await page.isVisible('.ed-sec[data-sec="speed"]'), '選取影片片段：檢查器有「速度」分頁');
   await page.locator('.ed-sec[data-sec="speed"]').getByLabel('倒播').check();
   await settle(page);
@@ -2230,7 +2316,7 @@ async function runAnimBeatTests(browser, base, fix, [W, H]) {
   // ---- 關鍵影格
   await page.evaluate(id => { QPTEdit.ui.selectClips([id]); QPTEdit.ui.seekTimeline(10); }, ids[0]);
   await settle(page);
-  await page.evaluate(() => { const b = document.querySelector('.ed-itab[data-itab="xform"]'); if (b) b.click(); });
+  await page.evaluate(() => { const b = document.querySelector('.ed-itab[data-itab="video"]'); if (b) b.click(); });
   await settle(page);
   const kfRow = label => page.locator('.ed-fx-row', { has: page.locator('.ed-fx-lab', { hasText: new RegExp('^' + label + '$') }) });
   const kfCls = label => kfRow(label).locator('.ed-kf').getAttribute('class');
@@ -2362,7 +2448,7 @@ async function runRetimeTests(browser, base, fix, [W, H]) {
   const seekOk = await page.evaluate(([id, f]) => { const C = QPTEdit.core, p = QPTEdit.ui.state.project; const t = C.sourceTimeAt(p, p.clips[id], f); return t > 1.0 && t < 2.0; }, [vid, mid]);
   ok(seekOk, '中間那一格看到的是來源中段的畫面');
   // 檢查器：速度區塊有說明、倒播不能勾
-  await page.evaluate(() => { const b = document.querySelector('.ed-itab[data-itab="speed"]'); if (b) b.click(); }); await settle(page);
+  await page.evaluate(() => { const b = document.querySelector('.ed-itab[data-itab="video"]'); if (b) b.click(); }); await settle(page);
   ok((await page.textContent('#edInspector')).includes('曲線變速中'), '檢查器速度分頁：顯示曲線變速中');
   ok(await page.locator('#edInspector .ed-fx-chk', { hasText: '倒播' }).locator('input').isDisabled(), '檢查器：曲線變速時倒播不能勾');
   // 再開視窗：記得目前的曲線與強度；換成強度 50%

@@ -198,7 +198,7 @@
       lab.append(cb, el('span', null, ATTR_LABEL[k]));
       box.appendChild(lab);
     }
-    box.appendChild(el('div', 'ed-hint', '只會套到種類相同的片段（例如聲音只套到有聲音的片段）。一次 Ctrl＋Z 就能還原。'));
+    box.appendChild(el('div', 'ed-hint', '只套到種類相同的片段。'));
     const act = el('div', 'ed-form-act');
     const ok = el('button', 'ed-btn small primary', '貼上'); ok.type = 'button'; ok.id = 'edPasteAttrsOk';
     ok.addEventListener('click', () => {
@@ -584,7 +584,7 @@
     const inp = el('input'); inp.type = 'number'; inp.id = 'edFreezeSec'; inp.min = 0.1; inp.step = 0.5; inp.value = String(C.DEFAULT_FREEZE_SEC);
     inp.setAttribute('aria-label', '定格長度（秒）');
     row.append(el('span', null, '長度'), inp, el('span', 'ed-unit', '秒'));
-    const hint = el('div', 'ed-hint', '「插入定格」會在播放頭切開並插入一段定格畫面，後面的片段往後推；「整段變定格」則把這個片段全部變成這一格。');
+    const hint = el('div', 'ed-hint', '插入定格：在播放頭插入一段定格；整段變定格：整段停在這一格。');
     const act = el('div', 'ed-form-act');
     const whole = el('button', 'ed-btn small', '整段變定格'); whole.type = 'button'; whole.id = 'edFreezeWhole';
     whole.addEventListener('click', () => { const r = op('定格', p => C.freezeFrame(p, id, f), '已把片段變成定格'); if (r && r.ok) closePop(); });
@@ -781,6 +781,36 @@
     const d = F.TEXT_FX && F.TEXT_FX[kind];
     if (!d) return null;
     return applyTitlePatch('字體特效', { textFx: kind }, ids, kind === 'none' ? '已移除字體特效' : `已套用字體特效「${d.name}」`);
+  }
+  // 4.80：持續動畫、出場動畫也能從媒體庫「字幕」分頁套用
+  function applyTextLoop(kind, ids) {
+    const d = F.TEXT_LOOP && F.TEXT_LOOP[kind];
+    if (!d) return null;
+    return applyTitlePatch('持續動畫', { textLoop: kind }, ids, kind === 'none' ? '已移除持續動畫' : `已套用持續動畫「${d.name}」`);
+  }
+  function applyTextOut(kind, ids) {
+    const d = F.TEXT_OUT && F.TEXT_OUT[kind];
+    if (!d) return null;
+    return applyTitlePatch('出場動畫', { textOut: kind }, ids, kind === 'none' ? '已移除出場動畫' : `已套用出場動畫「${d.name}」`);
+  }
+  // 4.80：畫面效果（媒體庫「特效」分頁）：濾鏡只給影片／圖片片段，貼圖動態給所有有畫面的片段
+  function applyVideoPatch(label, patch, ids, accepts, none, okMsg) {
+    const list = (ids || selIds()).filter(id => { const c = clipOf(id); return c && accepts(c); });
+    if (!list.length) { say(none, 'error'); return null; }
+    const r = op(label, p => C.setClipProps(p, list, { video: patch }));
+    if (r && r.ok) { if (UI.player && !UI.player.playing) UI.player.refresh(); say(list.length > 1 ? `${okMsg}（${list.length} 個片段）` : okMsg, 'ok'); }
+    return r;
+  }
+  const isGradable = c => c.type === 'media' && !!c.video;
+  function applyLook(kind, ids) {
+    const o = (F.LOOK_OPTIONS || []).find(x => x[0] === kind);
+    if (!o) return null;
+    return applyVideoPatch('濾鏡', { look: kind }, ids, isGradable, '請先在時間軸選取影片或圖片片段（或把濾鏡拖到片段上）', kind === 'none' ? '已移除濾鏡' : `已套用濾鏡「${o[1]}」`);
+  }
+  function applySticker(kind, ids) {
+    const d = F.STICKER_FX && F.STICKER_FX[kind];
+    if (!d) return null;
+    return applyVideoPatch('貼圖動態', { sticker: kind }, ids, c => !!c.video, '請先在時間軸選取有畫面的片段（或把貼圖動態拖到片段上）', kind === 'none' ? '已移除貼圖動態' : `已套用貼圖動態「${d.name}」`);
   }
 
   // ---- 開關、復原 ------------------------------------------------------------------
@@ -1014,7 +1044,7 @@
   }
 
   Object.assign(UI, {
-    MOD, TRANS_SIDE_TEXT, addMarkerHere, copySelection, duplicateSelection, jumpMarker, openPasteAttrsPop, pasteClipboard, openBeatPop, addTitle, addTransitionAt, addTransitionToSelection, applyTextFx,
+    MOD, TRANS_SIDE_TEXT, addMarkerHere, copySelection, duplicateSelection, jumpMarker, openPasteAttrsPop, pasteClipboard, openBeatPop, addTitle, addTransitionAt, addTransitionToSelection, applyTextFx, applyTextLoop, applyTextOut, applyLook, applySticker,
     applyTitleProps, applyTitleStyle, bladeAtPlayhead, buildToolbar, clearInOut, clickSelect, closeGaps, deleteSelection, doEdit, exportSrt,
     flushPop, importSrt, isSrtFile, linkSelection, markClipRange, markIn, markOut, markSubtitle, onKeyDown, onKeyUp,
     op, openFlagPop, openFreezePop, openMarkerPop, openSpeedPop, redo, sanitizeSelection, selectClips,
