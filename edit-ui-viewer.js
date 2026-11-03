@@ -19,6 +19,56 @@
   const viewProject = () => (state.mode === 'source' && UI.srcProject ? UI.srcProject : state.project);
   const viewDuration = () => C.projectDuration(viewProject());
 
+  // ---- 示波器與預覽品質（4.70）-----------------------------------------------------
+  const SCOPE_KEY = 'qc-scope', PQ_KEY = 'qc-pq';
+  const scopeMode = () => { const v = UI.lsGet(SCOPE_KEY); return Q.scope && Q.scope.MODES.includes(v) ? v : 'off'; };
+  const pqValue = () => { const v = Number(UI.lsGet(PQ_KEY)); return v === 0.5 || v === 0.25 ? v : 1; };
+  let scope = null, scopePanel = null, scopeTimer = 0, scopeLast = 0, scopeBusEl = null;
+  function applyQuality() {
+    const q = pqValue(), tag = $('edPQTag'), sel = $('edPQ');
+    if (sel) sel.value = String(q);
+    if (tag) { tag.hidden = q === 1; tag.textContent = q === 1 ? '' : `預覽 ${q === 0.5 ? '1/2' : '1/4'}`; }
+    if (UI.player && UI.player.setQuality) UI.player.setQuality(q);
+  }
+  function applyScope() {
+    const mode = scopeMode(), st = $('edStage'), sel = $('edScope');
+    if (sel) sel.value = mode;
+    if (mode === 'off') {
+      if (scopeTimer) { root.clearTimeout(scopeTimer); scopeTimer = 0; }
+      if (scopePanel) scopePanel.hidden = true;
+      return;
+    }
+    if (!st || !Q.scope) return;
+    if (!scopePanel) {
+      scopePanel = doc.createElement('canvas'); scopePanel.id = 'edScopePanel'; scopePanel.className = 'ed-scope';
+      scopePanel.width = Q.scope.SCOPE_W; scopePanel.height = Q.scope.SCOPE_H; scopePanel.setAttribute('aria-hidden', 'true');
+      st.appendChild(scopePanel);
+      scope = Q.scope.createScope($('edCanvas'), scopePanel);
+    }
+    scopePanel.hidden = false;
+    scopePanel.dataset.mode = mode;
+    // 專案內容改了（不經過播放器的 frame 事件）也要更新
+    if (!scopeBusEl && Q.core && Q.core.bus && Q.core.bus.addEventListener) { scopeBusEl = Q.core.bus; scopeBusEl.addEventListener('change', () => UI.updateScope()); }
+    UI.updateScope(true);
+  }
+  // 播放中每 ~100ms 最多畫一次；暫停／跳格時稍等一下（讓玩家先把這格畫好）再畫。關閉時不讀任何像素
+  function updateScope(now) {
+    if (scopeMode() === 'off' || !scopePanel) return;
+    if (scopeTimer) return;
+    const playing = UI.player && UI.player.playing;
+    const wait = now ? 0 : playing ? Math.max(0, 100 - (Date.now() - scopeLast)) : 40;
+    scopeTimer = root.setTimeout(() => {
+      scopeTimer = 0;
+      root.requestAnimationFrame(() => {
+        const mode = scopeMode();
+        if (mode === 'off' || !scope) return;
+        scopeLast = Date.now();
+        scope.update(mode);
+        if (scopePanel) scopePanel.dataset.drawn = mode;
+      });
+    }, wait);
+  }
+
   function buildViewer() {
     const bar = $('edVBar');
     bar.textContent = '';
@@ -53,11 +103,28 @@
     sb.title = '顯示 Reels／短影音介面會蓋住的範圍（灰色區域），只在預覽顯示、不會匯出'; sb.setAttribute('aria-pressed', 'false');
     sb.append(el('span', 'ed-bl', '安全框'));
     sb.addEventListener('click', () => { state.safePref = !state.safePref; lsSet(SAFE_KEY, state.safePref ? '1' : '0'); scheduleStage(); });
+    // 4.70：示波器（關閉／直方圖／波形／向量）與預覽品質（完整／1/2／1/4）
+    const scLab = el('label', 'ed-aspect'); scLab.htmlFor = 'edScope';
+    scLab.append(el('span', null, '示波器'));
+    const scSel = el('select'); scSel.id = 'edScope'; scSel.title = '在預覽右下角疊一個示波器，看亮度與色彩分佈（只在預覽顯示、不會匯出）';
+    for (const [v, t] of [['off', '關閉'], ['hist', '直方圖'], ['wave', '波形'], ['vector', '向量']]) { const o = el('option', null, t); o.value = v; scSel.appendChild(o); }
+    scSel.value = scopeMode();
+    scSel.addEventListener('change', () => { lsSet(SCOPE_KEY, scSel.value); applyScope(); });
+    scLab.appendChild(scSel);
+    const pqLab = el('label', 'ed-aspect'); pqLab.htmlFor = 'edPQ';
+    pqLab.append(el('span', null, '預覽品質'));
+    const pqSel = el('select'); pqSel.id = 'edPQ'; pqSel.title = '降低預覽畫布的解析度讓播放更順（只影響預覽，不影響匯出）';
+    for (const [v, t] of [['1', '完整'], ['0.5', '1/2'], ['0.25', '1/4']]) { const o = el('option', null, t); o.value = v; pqSel.appendChild(o); }
+    pqSel.value = String(pqValue());
+    pqSel.addEventListener('change', () => { lsSet(PQ_KEY, pqSel.value); applyQuality(); });
+    pqLab.appendChild(pqSel);
+    const pqTag = el('span', 'ed-pqtag'); pqTag.id = 'edPQTag'; pqTag.hidden = true;
     const dims = el('span', 'ed-vdims'); dims.id = 'edVDims';
     // 「匯出影片」按鈕在頁首（index.html 的 #edExportBtn，「儲存專案」右邊），這裡只接上點擊
     const ex = $('edExportBtn');
     if (ex) ex.addEventListener('click', openExport);
-    bar.append(seg, name, sp, aspLab, vb, sb, dims);
+    bar.append(seg, name, sp, aspLab, scLab, pqLab, vb, sb, pqTag, dims);
+    applyQuality(); applyScope();
     wireStage();
 
     // 拖曳條
@@ -607,6 +674,7 @@
     updateTransportTime();
     if (state.mode === 'timeline') UI.updatePlayheadPos(UI.player && UI.player.playing);
     scheduleStage();
+    updateScope();
     // 詳細內容的數值、◇ 狀態跟著播放頭：停下來時一律更新；播放中只有選取的片段有關鍵影格才更新
     if (state.mode === 'timeline' && UI.primaryClip) {
       const c = UI.primaryClip();
@@ -675,7 +743,7 @@
 
   Object.assign(UI, {
     applyTheme, applyVertical, buildViewer, clearSourceIO, editTimecode, closeSource, fitVertical, jumpEdit, onPlayerFrame,
-    openSource, renderViewerChrome, scheduleStage, seekTimeline, seekView, setMode, setSourceIO, shuttle, step,
-    syncAspect, syncThemeBtn, themeRepaint, togglePlay, updatePlayButton, viewDuration, viewProject, wireColSplitters,
+    openSource, updateScope, renderViewerChrome, scheduleStage, seekTimeline, seekView, setMode, setSourceIO, shuttle, step,
+    applyQuality, pqValue, syncAspect, syncThemeBtn, themeRepaint, togglePlay, updatePlayButton, viewDuration, viewProject, wireColSplitters,
   });
 })(typeof window !== 'undefined' ? window : globalThis);

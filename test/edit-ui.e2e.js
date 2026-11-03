@@ -2508,6 +2508,72 @@ async function runClipboardTests(browser, base, fix, [W, H]) {
   return problems;
 }
 
+async function runScopeTests(browser, base, fix, [W, H]) {
+  console.log(`\n==== 4.70 示波器與預覽品質 ${W}x${H} ====`);
+  const problems = [];
+  const ctx = await browser.newContext({ viewport: { width: W, height: H } });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => problems.push('pageerror: ' + e.message));
+  page.on('console', m => { if (m.type() === 'error') problems.push('console.error: ' + m.text()); });
+  await page.goto(base);
+  await settle(page);
+  await page.setInputFiles('#edFile', [{ name: FILES.land, mimeType: 'video/webm', buffer: fs.readFileSync(path.join(fix, FILES.land)) }]);
+  await page.waitForFunction(() => QPTEdit.render.media.list().length === 1 && QPTEdit.render.media.list()[0].duration > 0, null, { timeout: 30000 });
+  await settle(page);
+  await page.evaluate(() => {
+    const Q = QPTEdit, U = Q.uiParts, C = Q.core, p = Q.ui.state.project;
+    const v = Q.render.media.list()[0];
+    const V = C.tracksOf(p, 'video')[0].id, A = C.tracksOf(p, 'audio')[0].id;
+    U.op('放', q => C.editToTimeline(q, { mode: 'overwrite', mediaId: v.id, frame: 0, srcIn: 0, srcOut: 2, trackIds: { video: V, audio: A } }));
+    Q.ui.seekTimeline(10);
+  });
+  await settle(page);
+  const panel = () => page.evaluate(() => {
+    const c = document.getElementById('edScopePanel');
+    if (!c || c.hidden || !c.offsetWidth) return null;
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let bright = 0; for (let i = 0; i < d.length; i += 4) if (d[i] > 100 || d[i + 1] > 100 || d[i + 2] > 100) bright++;
+    return { w: c.offsetWidth, h: c.offsetHeight, bright, drawn: c.dataset.drawn };
+  });
+  eq(await panel(), null, '預設：示波器關閉、沒有面板');
+  for (const [v, name] of [['hist', '直方圖'], ['wave', '波形'], ['vector', '向量']]) {
+    await page.selectOption('#edScope', v);
+    await page.waitForFunction(m => { const c = document.getElementById('edScopePanel'); return c && !c.hidden && c.dataset.drawn === m; }, v, { timeout: 5000 });
+    const r = await panel();
+    ok(r && Math.abs(r.w - 256) <= 2 && Math.abs(r.h - 150) <= 2, `${name}：面板出現（約 256×150，實際 ${r && r.w}×${r && r.h}）`);
+    ok(r && r.bright > 50, `${name}：面板畫布有內容（亮點 ${r && r.bright}）`);
+    await shot(page, '470-' + name);
+  }
+  // 選擇記在 localStorage，重新整理後還在
+  await page.reload(); await settle(page);
+  await page.waitForFunction(() => QPTEdit.ui && document.getElementById('edScope'), null, { timeout: 15000 });
+  eq(await page.inputValue('#edScope'), 'vector', '重新整理後示波器選擇還記得');
+  await page.selectOption('#edScope', 'off'); await settle(page);
+  eq(await panel(), null, '關閉後面板消失');
+  // 預覽品質
+  const cw = () => page.evaluate(() => document.getElementById('edCanvas').width);
+  const tagShown = () => page.evaluate(() => { const t = document.getElementById('edPQTag'); return t && !t.hidden && t.offsetWidth > 0 ? t.textContent : ''; });
+  const full = await cw();
+  eq(await tagShown(), '', '預覽品質完整：沒有標籤');
+  await page.selectOption('#edPQ', '0.5'); await settle(page);
+  await page.waitForFunction(f => document.getElementById('edCanvas').width < f * 0.6, full, { timeout: 5000 });
+  const half = await cw();
+  ok(Math.abs(half - full / 2) <= 2, `預覽品質 1/2：畫布寬 ${half}（完整 ${full}）`);
+  ok((await tagShown()).includes('1/2'), '1/2：顯示「預覽 1/2」標籤');
+  await shot(page, '470-預覽1_2');
+  const dim = await page.evaluate(() => [QPTEdit.ui.state.project.width, QPTEdit.ui.state.project.height]);
+  ok(dim[0] >= half, '預覽降畫質：專案輸出尺寸不變（' + dim.join('×') + '）');
+  await page.reload(); await settle(page);
+  await page.waitForFunction(() => document.getElementById('edPQ'), null, { timeout: 15000 });
+  eq(await page.inputValue('#edPQ'), '0.5', '重新整理後預覽品質還記得');
+  await page.selectOption('#edPQ', '1'); await settle(page);
+  await page.waitForFunction(f => document.getElementById('edCanvas').width >= f - 1, full, { timeout: 5000 });
+  ok(await cw() >= full - 1, '切回完整：畫布寬度恢復');
+  eq(await tagShown(), '', '切回完整：標籤消失');
+  await ctx.close();
+  return problems;
+}
+
 (async () => {
   const fix = fixturesDir();
   const { server, base } = await serve();
@@ -2519,6 +2585,7 @@ async function runClipboardTests(browser, base, fix, [W, H]) {
     all = all.concat(await runAnimBeatTests(browser, base, fix, VIEWPORTS[0]));
     all = all.concat(await runRetimeTests(browser, base, fix, VIEWPORTS[0]));
     all = all.concat(await runClipboardTests(browser, base, fix, VIEWPORTS[0]));
+    all = all.concat(await runScopeTests(browser, base, fix, VIEWPORTS[0]));
     for (const vp of VIEWPORTS) all = all.concat(await runViewport(browser, base, fix, vp));
   } catch (e) { failed++; console.log('  FAIL 測試中斷：', e && e.stack || e); }
   ok(all.length === 0, '整段流程沒有 console error／頁面例外／CSP 違規' + (all.length ? '：' + all.join(' | ') : ''));
