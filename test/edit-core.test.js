@@ -2494,3 +2494,83 @@ test('copyGrade／applyGrade／gradeTargets（4.80）：整組取代、LUT 跨�
   assert.notStrictEqual(before, core.serialize(p));
   assertInvariants(p);
 });
+
+// =====================================================================================
+// AI 剪輯：照腳本排（5.00）
+// =====================================================================================
+const SCRIPT = () => ({
+  qcScript: 1, media: { C01: '訪問', C02: '空景', C03: '照片', M1: '音樂' }, output: { aspect: '9:16' },
+  music: { ref: 'M1', in: 1, fadeOut: 1 }, grade: { look: 'warm', lookAmt: 30, cc: { contrast: 8 } }, fadeIn: 0.3, fadeOut: 0.3,
+  shots: [
+    { ref: 'C01', in: 2, dur: { beats: 4 }, reframe: { x: 0.8 }, motion: 'zoomIn' },
+    { ref: 'C03', dur: { sec: 1.5 }, trans: { type: 'crossDissolve', sec: 0.4 }, grade: { look: 'cool', cc: { sat: -10 } } },
+    { ref: 'C01', in: 6, dur: { beats: 2 }, speed: 0.5, reframe: { from: 0.2, to: 0.6 } },
+    { ref: 'C02', in: 0.5, dur: { beats: 2 } },
+  ],
+  titles: [{ text: '花蓮', atShot: 0, sec: 1 }],
+});
+const BEATS = () => { const b = []; for (let s = 0.5; s < 8; s += 0.5) b.push(s); return b; };   // 120 BPM
+
+t('applyScript：對拍、來源起點、裁切構圖、變速、分段調色、轉場、字幕、音樂，整批一筆復原', () => {
+  let p = setup({ v: 1, a: 1 });
+  const fps = p.fps, before = core.serialize(p);
+  const h = core.createHistory(() => p, q => { p = q; });
+  const r = h.run('AI 剪輯', q => core.applyScript(q, SCRIPT(), { beats: BEATS() }));
+  assert.ok(r.ok, r.reason + JSON.stringify(r.errors || ''));
+  assert.strictEqual(p.aspect, '9:16');
+  const vs = r.ids.map(id => C(p, id));
+  assert.deepStrictEqual(vs.map(c => c.mediaId), ['mv', 'mi', 'mv', 'mn']);
+  for (let i = 1; i < vs.length; i++) assert.strictEqual(vs[i].start, vs[i - 1].start + vs[i - 1].duration, '首尾相接');
+  // 音樂從 1 秒開始放：4 拍＝2 秒
+  assert.strictEqual(vs[0].duration, 2 * fps); near(vs[0].srcIn, 2);
+  assert.strictEqual(vs[1].duration, Math.round(1.5 * fps));
+  assert.strictEqual(vs[2].speed, 0.5); near(vs[2].srcIn, 6);
+  assert.ok((vs[2].start + vs[2].duration - 0) % Math.round(fps / 2) === 0, '第 3 段結尾回到拍點上');
+  // 16:9 放進 9:16：填滿＋x=0.8 → 畫面往左移（posX 為負），不露黑邊
+  assert.strictEqual(vs[0].video.fit, 'fill');
+  const sc = 1920 / 720, maxX = (1280 * sc - 1080) / 2;
+  near(vs[0].video.transform.posX, Math.max(-maxX, (0.5 - 0.8) * 1280 * sc));
+  assert.ok(vs[0].keyframes['video.transform.zoomX'], '動態');
+  const kf = vs[2].keyframes['video.transform.posX'];
+  assert.strictEqual(kf.length, 2); assert.ok(kf[0].v > kf[1].v, 'from 0.2 → to 0.6：畫面由右往左移');
+  assert.strictEqual(vs[3].video.fit, 'fit', '比例相同不用裁');
+  // 調色：整支＋分段覆寫
+  assert.strictEqual(vs[0].video.look, 'warm'); assert.strictEqual(vs[0].video.lookAmt, 30); assert.strictEqual(vs[0].video.cc.contrast, 8);
+  assert.strictEqual(vs[1].video.look, 'cool'); assert.deepStrictEqual(vs[1].video.cc, { contrast: 8, sat: -10 });
+  // 轉場：1→2 疊化，頭尾淡入淡出
+  const trs = Object.values(p.transitions);
+  assert.ok(trs.some(x => x.leftClipId === vs[0].id && x.rightClipId === vs[1].id && x.type === 'crossDissolve'));
+  assert.ok(trs.some(x => !x.leftClipId && x.rightClipId === vs[0].id) && trs.some(x => x.leftClipId === vs[3].id && !x.rightClipId));
+  // 音樂在第二條音訊軌、從 1 秒開始、淡出；原聲不放
+  const mc = C(p, r.musicId);
+  assert.strictEqual(mc.trackId, A(p, 1)); near(mc.srcIn, 1); assert.strictEqual(mc.audio.fadeOut, fps);
+  assert.strictEqual(core.clipsOnTrack(p, A(p, 0)).length, 0);
+  // 字幕在第二條影片軌
+  const tc = C(p, r.titleIds[0]);
+  assert.strictEqual(tc.trackId, V(p, 1)); assert.strictEqual(tc.title.text, '花蓮'); assert.strictEqual(tc.duration, fps);
+  assertInvariants(p);
+  h.undo();
+  assert.strictEqual(core.serialize(p), before, '一步復原');
+});
+
+t('applyScript：看不懂就整份拒絕並列出全部原因；素材不夠長只警告並遞補；接在結尾；LUT', () => {
+  const p = setup();
+  const bad = SCRIPT();
+  bad.shots[0].trans = { type: 'sparkle' }; bad.shots[1].ref = 'C09'; bad.shots[2].motion = 'orbit'; bad.grade.look = 'teal'; bad.shots[3].in = 99;
+  const r = unchanged(p, () => core.applyScript(p, bad, { beats: BEATS() }), /腳本有 5 個問題/);
+  assert.strictEqual(r.errors.length, 5);
+  unchanged(p, () => core.applyScript(p, { shots: [] }), /qcScript/);
+  unchanged(p, () => core.applyScript(p, { qcScript: 1, shots: [{ ref: '照片', dur: { sec: 1 }, speed: 2 }] }), /照片，不能變速/);
+  // 沒有 media 對照表：直接用檔名或 refs
+  put(p, 'mv', 0, 0, 1);
+  const lut = core.addLut(p, { name: 'x', size: 2, data: new Uint8Array(24) });
+  const r2 = core.applyScript(p, { qcScript: 1, shots: [{ ref: '空景', in: 2, dur: { sec: 5 } }, { ref: 'C7', dur: { beats: 2 } }] }, { refs: { C7: 'mi' }, lutByMedia: { mn: lut.id } });
+  assert.ok(r2.ok, r2.reason);
+  assert.strictEqual(r2.start, p.fps, '接在目前內容後面');
+  assert.strictEqual(C(p, r2.ids[0]).duration, p.fps, '只剩 1 秒可用');
+  assert.strictEqual(C(p, r2.ids[0]).video.lut, lut.id);
+  assert.strictEqual(C(p, r2.ids[1]).duration, p.fps, '沒有拍點：每拍 0.5 秒');
+  assert.strictEqual(r2.warnings.length, 2);
+  lock(p, V(p));
+  unchanged(p, () => core.applyScript(p, { qcScript: 1, shots: [{ ref: '照片', dur: { sec: 1 } }] }), /鎖定/);
+});

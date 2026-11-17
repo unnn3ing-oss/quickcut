@@ -60,3 +60,6 @@ jobs:
 
       - name: 一鍵成片（edit-auto.e2e）
         run: node test/edit-auto.e2e.js
+
+      - name: AI 剪輯（edit-ai.e2e）
+        run: node test/edit-ai.e2e.js
