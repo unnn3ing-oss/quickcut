@@ -123,6 +123,7 @@
     buildMediaPanel(); buildViewer(); buildToolbar(); buildTimeline(); buildInspector();
     UI.initSimple();                     // 簡易／專業切換、大按鈕工具列、開始畫面（edit-ui-simple.js）
     UI.initAuto();                       // 一鍵成片（edit-ui-auto.js）
+    UI.initAi();                         // AI 剪輯（edit-ui-ai.js）
     wireFileDrop(); wireSplitter(); wireColSplitters();
     readColors(); syncThemeBtn();
     const tbtn = $('edThemeBtn');

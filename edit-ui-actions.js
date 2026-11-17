@@ -890,6 +890,8 @@
       btn('edSpeed', '變速', MOD + 'R', '變速：速度百分比、倒播、波紋', b => { b.dataset.pop = '1'; openSpeedPop(b); }),
       btn('edFreeze', '定格', '⇧R', '定格：在播放頭插入定格畫面，或把整個片段變成定格', b => { b.dataset.pop = '1'; openFreezePop(b); }));
 
+    grp('ai', btn('edAiBtn', 'AI 剪輯', '', 'AI 剪輯：把素材整理成摘要包交給 Claude，再照它寫的剪輯腳本自動排好', () => UI.openAi()));
+
     grp('hist',
       btn('edUndo', '復原', MOD + 'Z', '復原', undo),
       btn('edRedo', '重做', MOD + '⇧Z', '重做', redo),
